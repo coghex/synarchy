@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Regenerate the z11-z13 tag fixtures and the z17 placement fixture (#2894).
+
+Run from the repository root with the worktree built (`cabal build all`):
+
+  python3 issue-2894-make-z11-z13-z17.py.txt
+
+z11 held cell and occurrence tag assignments that no seed-42 page ever
+held (cells at z 8-12 where the page's terrain stops at about z -36;
+occurrences 123456789 and 4611686018427387905 that no chunk generates, the
+second with no planting edit behind it), so every load discarded them and
+the tracked summaries described tags the engine correctly drops. The new
+targets were chosen against the page the fixture regenerates:
+
+  * cells: chunk (0, 0)'s columns (3, 4) and (5, 1) store solid terrain at
+    z -57..-54 and z -52..-49, so z -54 and z -56 (two elevations of one
+    column) and z -50 are stored non-air cells;
+  * the generated occurrence is the scots_pine chunk (-2, -2) generates at
+    its local tile (6, 12), canonical tile (-26, -20), id
+    2035870205241177074 (inside the initial load radius, so a load admits
+    that chunk and really reconciles it);
+  * the planted occurrence is a tomato_plant placed by a planting edit at
+    (6, 3) with the first planted id, 4611686018427387905.
+
+Each of z11, z12 and z13 is derived with `seed-tags --only`, which takes
+just the components its seed touches from the re-encode and keeps every
+other component of the input fixture, bytes and version, verbatim:
+world-edits (written in its frozen v5 shape) for z11, core-session for
+z12, units for z13. That keeps z11-z13 the corpus's historical world-edits
+v5 payloads with cell and occurrence assignments, which a whole-session
+re-encode (world-edits v6) would not.
+
+z17 is rebuilt by the Scenario.Placement group's `retained save-compat
+fixture` example (docs/pr-proofs/issue-2712-make-z17.py.txt): its page
+snapshot now carries the page's own calendar date instead of the blank
+snapshot's 0-0-0, which lies outside the calendar and which the loader
+normalizes to 1-1-1. The current build writes the rest of the session at
+its current versions, so z17 now carries world-activity v7 and the optional
+relation-causes component; after this script, z17's declared `components`
+in docs/save_compat/manifest.json (world-activity 7, relation-causes v1
+optional) and its row in tools/test_save_compat_audit_codec.py's
+_EXPECTED_DESCRIPTORS are updated to match, which the audit
+(`python3 tools/save_compat_audit.py`) checks against the real bytes.
+
+Every target is checked, whoever seeded it, by the `save migrations`
+group's "tracked fixtures' tag targets survive admission (#2894)" examples
+(`cabal test synarchy-test-headless --test-options='--match "save
+migrations"'`), which reconstruct each target's owning chunk from the page
+the fixture holds. A flora or worldgen change that moves a target makes
+those examples fail; re-pick the targets (read the chunk's columns and
+generated occurrences) and re-run this script.
+"""
+import json, os, subprocess, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, "tools")
+import save_compat_audit_codec as codec
+
+ROOT = Path.cwd()
+DATA = ROOT / "test-headless/data/save-compat"
+PAGE = "generated_page"
+GENERATED = 2035870205241177074     # scots_pine, chunk (-2, -2), local tile (6, 12)
+PLANTED = 4611686018427387905       # first planted id (cursor 1)
+
+Z11 = {
+    "tiles": [
+        {"page": PAGE, "x": 3, "y": 4, "z": -54, "tags": ["quarry", "shared"]},
+        {"page": PAGE, "x": 3, "y": 4, "z": -56, "tags": ["deep"]},
+        {"page": PAGE, "x": 5, "y": 1, "z": -50, "tags": ["shared"]},
+    ],
+    "plants": [
+        {"page": PAGE, "x": -26, "y": -20, "id": GENERATED, "tags": ["landmark_tree", "shared"]},
+        {"page": PAGE, "x": 6, "y": 3, "id": PLANTED, "tags": ["sown"]},
+    ],
+    "plantings": [
+        {"page": PAGE, "x": 6, "y": 3, "species": "tomato_plant", "id": PLANTED,
+         "plantedDay": 0, "baseWidth": 12},
+    ],
+}
+Z12 = {"items": [
+    {"id": 2, "ref": "ration-a"}, {"id": 7, "ref": "comms.radio"},
+    {"id": 15, "ref": "second.unit.ration"},
+    {"id": 21, "ref": "units[1].equipment.main_hand"}]}
+Z13 = {"units": [
+    {"page": PAGE, "id": 1, "ref": "scout"}, {"page": PAGE, "id": 2, "ref": "units[1]"}]}
+
+RECIPE = "docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt"
+SHAPE = ("Its canonical summary was derived directly from the real decoded SessionSnapshot "
+         "(dump_canonical_summary), not hand-transcribed.")
+
+
+def seed(src, dst, spec, only):
+    with tempfile.NamedTemporaryFile("w", suffix=".json", dir=ROOT, delete=False) as f:
+        json.dump(spec, f)
+        spec_path = Path(f.name)
+    try:
+        ok, tail = codec.seed_fixture_tags(DATA / f"{src}.bin", spec_path, DATA / f"{dst}.bin", only=only)
+    finally:
+        spec_path.unlink()
+    assert ok, tail
+
+
+def summarize_and_register(fid, provenance, validate):
+    out = DATA / f"{fid}.bin"
+    summary = DATA / f"{fid}.expected.json"
+    ok, tail = codec.dump_canonical_summary(out, summary)
+    assert ok, tail
+    cmd = ["python3", "tools/save_compat_audit.py", "--add-baseline", "--force",
+           "--baseline-id", fid, "--fixture-id", fid,
+           "--path", f"test-headless/data/save-compat/{fid}.bin",
+           "--kind", "complete-session",
+           "--summary", f"test-headless/data/save-compat/{fid}.expected.json",
+           "--provenance", provenance]
+    if not validate:
+        cmd.append("--skip-validation")
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    print(fid, r.returncode, (r.stdout + r.stderr)[-600:])
+    assert r.returncode == 0
+
+
+def derived(parent, parent_note, spec, effect, only, kept):
+    return (f"Derived from the tracked {parent} fixture ({parent_note}) by synarchy-save-codec "
+            f"seed-tags --only {only} (#2894), which decoded the whole session through the real "
+            f"decoder, {effect} {json.dumps(spec, separators=(',', ':'))}, re-encoded it through the "
+            f"same encoder an ordinary save uses and took just {kept} from that re-encode, keeping "
+            f"every other component of {parent} verbatim, bytes and version (the metadata timestamp "
+            f"was already normalized). {SHAPE} Recipe: {RECIPE}.")
+
+
+seed("z10-item-tags", "z11-tile-flora-tags", Z11, "world-edits@5")
+seed("z11-tile-flora-tags", "z12-item-scenario-refs", Z12, "core-session")
+seed("z12-item-scenario-refs", "z13-unit-scenario-refs", Z13, "units")
+
+z11_note = ("itself derived from z9-gameplay-tags, generated through the real headless engine and "
+            "engine.saveWorld; see their provenance")
+summarize_and_register(
+    "z11-tile-flora-tags",
+    derived("z10-item-tags", z11_note, Z11,
+            "set the page's terrain-cell and flora-occurrence gameplay-tag assignments, and the "
+            "planting edit that places the planted occurrence, named by the spec",
+            "world-edits@5", "world-edits, written in its frozen v5 shape (downgradeWorldEditsV5),")
+    + " Every target exists in the page it is seeded on: each cell is a stored non-air cell of its "
+      "seed-42 column, the generated occurrence is the scots_pine chunk (-2, -2) generates at "
+      "canonical tile (-26, -20), and the planted one is the tomato_plant a planting edit places at "
+      "(6, 3); the 'save migrations' group's tag-target examples reconstruct each owning chunk and "
+      "fail if any assignment would be dropped by its admission.",
+    validate=False)
+summarize_and_register(
+    "z12-item-scenario-refs",
+    derived("z11-tile-flora-tags", "itself derived from z11 and z9, generated through the real headless "
+            "engine and engine.saveWorld; see their provenance", Z12,
+            "set the item scenario references", "core-session", "core-session (v3)"),
+    validate=False)
+summarize_and_register(
+    "z13-unit-scenario-refs",
+    derived("z12-item-scenario-refs", "itself derived from z11 and z9, generated through the real headless "
+            "engine and engine.saveWorld; see their provenance", Z13,
+            "set the unit scenario references", "units", "units (v6)"),
+    validate=False)
+
+# z17: rebuilt by the live headless example, then normalized like every fixture.
+z17 = DATA / "z17-scenario-placement.bin"
+env = dict(os.environ, SYNARCHY_WRITE_PLACEMENT_FIXTURE=str(z17))
+r = subprocess.run(["cabal", "test", "synarchy-test-headless",
+                    "--test-options=--match \"Scenario.Placement/retained save-compat fixture\""],
+                   cwd=ROOT, env=env, capture_output=True, text=True)
+assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+ok, tail = codec.normalize_fixture_timestamp(z17)
+assert ok, tail
+manifest = json.load(open(ROOT / "docs/save_compat/manifest.json"))
+z17_prov = [f for b in manifest["baselines"] if b["id"] == "z17-scenario-placement"
+            for f in b["fixtures"]][0]["provenance"]
+note = (" Rebuilt for #2894: the snapshot now carries the page's own calendar date (1-1-1) instead of "
+        "the blank snapshot's 0-0-0, which lies outside the calendar and which the loader normalizes.")
+if "#2894" not in z17_prov:
+    z17_prov = z17_prov.replace(" Its canonical summary", note + " Its canonical summary", 1)
+summarize_and_register("z17-scenario-placement", z17_prov, validate=True)

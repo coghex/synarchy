@@ -630,7 +630,19 @@ does not remove the plot, and no new plot removal rule was invented.
   failure before publication leaves the old session's stores intact.
 - **Tooling.** The codec summary lists each page's `tiles`, `plants`
   (with recorded tile) and `plots`. `seed-tags` accepts the same three
-  kinds.
+  kinds. It checks no target (a save holds no chunk, and a negative
+  probe needs to seed a dangling one), so a TRACKED fixture's cell and
+  occurrence targets are checked separately, against the page the fixture
+  regenerates (see the gates below). `seed-tags --only COMPONENT[@VERSION],...`
+  takes just those components from the re-encode and keeps every other one
+  of the input fixture, bytes and version, verbatim, because the
+  whole-session re-encode writes every component at the current version.
+  `world-edits@5` writes that component in its frozen v5 shape.
+  To choose targets for a fixture, stage its base through the real load
+  and read the centre chunk: a cell must be a stored non-air cell of a
+  column, an occurrence must stand in that chunk (a generated id comes from
+  the shipped flora catalog; a planted id needs a `plantings` entry for the
+  same id).
 
 ### Cell and plant gates
 
@@ -649,7 +661,14 @@ does not remove the plot, and no new plot removal rule was invented.
     pre-publication failure, the dangling plot, and v4 migration.
 - `--match "save migrations"`: the tracked `z11-tile-flora-tags`
   fixture (nonempty cells and both occurrence namespaces, `world-edits`
-  v5) and every older fixture's empty default.
+  v5; z12 and z13 inherit them) and every older fixture's empty default.
+  Every manifest-declared fixture's cell and occurrence assignments must
+  also survive the real load staging unchanged, with the chunk owning each
+  target resident (reconciliation leaves an absent chunk's assignments
+  alone, so an unbuilt chunk would pass vacuously), so a codec-seeded
+  fixture cannot ship tags admission discards (#2894). The v5 payload the
+  corpus keeps is written by `downgradeWorldEditsV5`, which the same group
+  pins as the inverse of the v5 migration.
 - `tools/gameplay_tag_persistence_probe.py`'s place leg: real cells, a
   wild occurrence and a wheat plot through a fresh-process save made
   while their chunk is absent, readmission, real digging and an
