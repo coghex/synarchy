@@ -70,6 +70,8 @@ module World.Save.Component.PageEdits
     , migrateWorldEditsV3
     , migrateWorldEditsV4
     , migrateWorldEditsV5
+    , downgradeWorldEditsV5
+    , downgradeWorldEditDTOv4
     ) where
 
 import UPrelude
@@ -575,6 +577,53 @@ migrateWorldEditsV5 (WorldEditsDTOv5 slices) = WorldEditsDTO
         , pedPlotTags = ped5PlotTags s
         }
     | s ← slices ]
+
+-- | The inverse of 'migrateWorldEditDTOv4': the current edit sum written
+--   as the frozen v4\/v5 one. Total except for the one constructor no
+--   v4\/v5 payload can carry ('WeSetFloraStateD', appended by #2711),
+--   which answers 'Nothing' rather than dropping an edit.
+--
+--   Fixture support only (@synarchy-save-codec seed-tags --only
+--   world-edits\@5@): it lets the compatibility corpus keep a
+--   historical v5 payload that carries newly seeded content, because
+--   the encoder an ordinary save uses writes the current version. No
+--   load or save path calls it.
+downgradeWorldEditDTOv4 ∷ WorldEditDTO → Maybe WorldEditDTOv4
+downgradeWorldEditDTOv4 e = case e of
+    WeDeleteTileD a b            → Just (WeDeleteTileDv4 a b)
+    WeSetFluidTileD a b f        → Just (WeSetFluidTileDv4 a b f)
+    WeAddTileD a b m             → Just (WeAddTileDv4 a b m)
+    WeSetSlopeD a b c w          → Just (WeSetSlopeDv4 a b c w)
+    WeSetCellD a b c m           → Just (WeSetCellDv4 a b c m)
+    WeSetStructureD a b w c d f  → Just (WeSetStructureDv4 a b w c d f)
+    WeClearStructureD a b w      → Just (WeClearStructureDv4 a b w)
+    WeSetVegD a b c w            → Just (WeSetVegDv4 a b c w)
+    WePlaceFloraD a b fl d fx    → Just (WePlaceFloraDv4 a b fl d fx)
+    WeSetFluidSnapshotD a b f z  → Just (WeSetFluidSnapshotDv4 a b f z)
+    WeClearFluidSnapshotD a b    → Just (WeClearFluidSnapshotDv4 a b)
+    WePlaceFloraWithIdD a b fl d fx i →
+        Just (WePlaceFloraWithIdDv4 a b fl d fx i)
+    WePlaceFloraRefD a b ref d fx i →
+        Just (WePlaceFloraRefDv4 a b ref d fx i)
+    WeSetFloraStateD {}          → Nothing
+
+-- | The inverse of 'migrateWorldEditsV5': the current payload written as
+--   the frozen v5 one, or 'Nothing' when an edit in it (see
+--   'downgradeWorldEditDTOv4') has no v5 spelling.
+downgradeWorldEditsV5 ∷ WorldEditsDTO → Maybe WorldEditsDTOv5
+downgradeWorldEditsV5 (WorldEditsDTO slices) = WorldEditsDTOv5 ⊚ traverse page slices
+  where
+    page s = do
+        edits ← traverse (traverse downgradeWorldEditDTOv4) (pedEdits s)
+        pure PageEditsDTOv5
+            { ped5PageId = pedPageId s
+            , ped5Edits  = edits
+            , ped5PlantedFloraCursor = pedPlantedFloraCursor s
+            , ped5TileTags = pedTileTags s
+            , ped5OccurrenceTags = pedOccurrenceTags s
+            , ped5OccurrenceTiles = pedOccurrenceTiles s
+            , ped5PlotTags = pedPlotTags s
+            }
 
 -- | Component-local invariant (#1854 requirement 5): a page's
 --   planted-flora allocator cursor must be strictly above every planted

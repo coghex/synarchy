@@ -450,8 +450,8 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'buildings:4:R container-knowledge:2:o core-session:3:R '
         'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
         'lua.unit_ai:10:R metadata:3:R portable-knowledge:1:o '
-        'power-nodes:2:R texture-palette:1:R '
-        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
+        'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:7:R '
         'world-edits:6:R world-pages:16:R',
     # #2548: the first fixture carrying the fourth optional component,
     # relation-causes, at the CURRENT lua.unit_ai (v11).
@@ -624,6 +624,106 @@ def test_normalizing_a_tracked_fixture_reproduces_its_tracked_bytes() -> None:
            "expected the TRACKED fixture itself to be untouched (this member "
            "normalizes a copy; writing through to the corpus would be the "
            "quiet failure the copy exists to prevent)")
+
+
+def _envelope_components(path: Path) -> dict[str, tuple[int, bytes]]:
+    """Component id -> (schema version, payload bytes), read straight off
+    the envelope framing (`World.Save.Envelope.Codec`: magic | envelope
+    version | manifest length, the cereal manifest, its checksum, then the
+    payloads at their declared offsets) rather than through the codec the
+    case under test belongs to."""
+    import struct
+    raw = path.read_bytes()
+    _, _, manifest_len = struct.unpack(">4sIQ", raw[:16])
+    manifest = raw[16:16 + manifest_len]
+    payloads = raw[16 + manifest_len + 8:]
+    count, = struct.unpack(">q", manifest[:8])
+    pos, out = 8, {}
+    for _ in range(count):
+        name_len, = struct.unpack(">q", manifest[pos:pos + 8])
+        pos += 8
+        name = manifest[pos:pos + name_len].decode()
+        pos += name_len
+        version, = struct.unpack(">I", manifest[pos:pos + 4])
+        pos += 5  # the version, then the required flag
+        offset, length, _checksum = struct.unpack(">QQQ", manifest[pos:pos + 24])
+        pos += 24
+        out[name] = (version, payloads[offset:offset + length])
+    return out
+
+
+#: A tile target and an item target, so a seed touches BOTH a component
+#: whose current version is newer than the fixture's (core-session) and
+#: the one the corpus keeps in a frozen older shape (world-edits).
+_SPLICE_SEED = (
+    '{"items":[{"id":2,"tags":["food"]}],'
+    '"tiles":[{"page":"generated_page","x":3,"y":4,"z":10,"tags":["quarry"]}]}')
+
+
+def test_seed_tags_only_replaces_the_named_components() -> None:
+    print("issue #2894: `seed-tags --only` takes just the named components from "
+          "the re-encode and keeps every other component of the input fixture "
+          "-- bytes AND version -- verbatim, so a regenerated fixture differs "
+          "from its predecessor in exactly the components its seed touched; "
+          "`world-edits@5` writes that component in its frozen v5 shape, and "
+          "anything it cannot honour is refused")
+    source = common.FIXTURE_DATA_DIR / "z9-gameplay-tags.bin"
+    if not source.exists():
+        expect(False, f"expected the tracked fixture to exist at {source}")
+        return
+    before = _envelope_components(source)
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        spec = tmp / "seed.json"
+        spec.write_text(_SPLICE_SEED, encoding="utf-8")
+
+        def seed(only: str) -> tuple[bool, str, Path]:
+            out = tmp / (only.replace("@", "_").replace(",", "+") + ".bin")
+            ok, tail = codec.seed_fixture_tags(source, spec, out, only=only)
+            return ok, tail, out
+
+        for only, taken in (("core-session", {"core-session"}),
+                            ("world-edits@5", {"world-edits"}),
+                            ("core-session,world-edits@5",
+                             {"core-session", "world-edits"})):
+            ok, tail, out = seed(only)
+            expect(ok and out.exists(), f"expected --only {only} to succeed, got: {tail}")
+            if not (ok and out.exists()):
+                continue
+            after = _envelope_components(out)
+            expect(set(after) == set(before),
+                   f"expected --only {only} to keep the fixture's component set, "
+                   f"got {sorted(set(after) ^ set(before))}")
+            kept = {c for c in before if after.get(c) == before[c]}
+            expect(kept == set(before) - taken,
+                   f"expected --only {only} to change exactly {sorted(taken)} and "
+                   f"keep every other component's bytes and version, got "
+                   f"{sorted(set(before) - kept)} changed")
+            if "world-edits" in taken:
+                expect(after["world-edits"][0] == 5,
+                       f"expected --only {only} to write world-edits at v5, got "
+                       f"v{after['world-edits'][0]}")
+                ok, tail = codec.dump_canonical_summary(out, tmp / "summary.json")
+                expect(ok, f"expected the v5 splice to decode, got: {tail}")
+                if ok:
+                    page = json.loads((tmp / "summary.json").read_text())["pages"][0]
+                    expect(page["gameplayTags"]["tiles"] ==
+                           [{"tags": ["quarry"], "x": 3, "y": 4, "z": 10}],
+                           f"expected the v5 splice to carry the seeded cell tag, got "
+                           f"{page['gameplayTags']['tiles']}")
+            else:
+                expect(after["world-edits"] == before["world-edits"],
+                       f"expected --only {only} to keep world-edits verbatim")
+
+        for only, why in (("metadata", "cannot replace the metadata"),
+                          ("no-such-component", "the fixture has no no-such-component"),
+                          ("world-edits@4", "cannot write world-edits at v4"),
+                          ("core-session@1", "cannot write core-session at v1"),
+                          ("world-edits@", "bad version")):
+            ok, tail, out = seed(only)
+            expect(not ok and why in tail and not out.exists(),
+                   f"expected --only {only} to be refused naming {why!r} and write "
+                   f"nothing, got ok={ok}, wrote={out.exists()}, {tail}")
 
 
 def _requested_complete_session_fixtures() -> list[Path]:
@@ -906,6 +1006,7 @@ def test_a_build_that_produces_no_helper_is_refused_not_retried() -> None:
 TESTS = [
     test_helper_summary_matches_every_generated_expectation,
     test_normalizing_a_tracked_fixture_reproduces_its_tracked_bytes,
+    test_seed_tags_only_replaces_the_named_components,
     test_descriptor_dump_matches_every_fixtures_exact_ordered_manifest,
     test_real_descriptors_back_the_manifests_declared_versions,
     test_summary_failure_names_the_fixture_and_the_codec_error,

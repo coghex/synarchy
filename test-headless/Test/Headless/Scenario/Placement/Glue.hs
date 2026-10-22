@@ -79,6 +79,7 @@ import World.Arena.Bounds (ArenaBounds)
 import World.Page.Types (WorldPageId)
 import World.Render.Camera.Types (WorldCamera(..))
 import World.State.Types
+import World.Time.Types (WorldDate(..))
 
 -- | What one materialization reports.
 data Materialized = Materialized
@@ -193,6 +194,10 @@ sessionSnapshotOf fx pid ws = do
     harvests ← readIORef (wsFloraHarvestsRef ws)
     pageTags ← readIORef (wsPageTagsRef ws)
     cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    -- the page's own calendar date, read where a save reads it
+    -- (World.Thread.Command.Save.WriteWorld): the blank snapshot's 0-0-0 is outside the
+    -- calendar, and the loader normalizes it to 1-1-1 (#2894)
+    WorldDate dateY dateMo dateD ← readIORef (wsDateRef ws)
     -- the page's own camera and the live one, as a save writes them
     WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
     cam ← readIORef (cameraRef env)
@@ -201,6 +206,7 @@ sessionSnapshotOf fx pid ws = do
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
             { pgsCameraX = wcx, pgsCameraY = wcy
+            , pgsDateYear = dateY, pgsDateMonth = dateMo, pgsDateDay = dateD
             , pgsEdits = namedEdits
             , pgsCropPlots = namedCrops
             , pgsFloraHarvests = harvests

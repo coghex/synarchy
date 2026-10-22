@@ -3393,9 +3393,9 @@
           "id": "z11-tile-flora-tags",
           "path": "test-headless/data/save-compat/z11-tile-flora-tags.bin",
           "kind": "complete-session",
-          "sha256": "67c070fe2c4a1ba65a6c8401f8458fe4acdeeb39d58b7743615fda7bb45b00ef",
-          "sizeBytes": 912644,
-          "provenance": "Derived from the tracked z10-item-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the page's terrain-cell and flora-occurrence gameplay-tag assignments {\"tiles\":[{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":10,\"tags\":[\"quarry\",\"shared\"]},{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":8,\"tags\":[\"deep\"]},{\"page\":\"generated_page\",\"x\":5,\"y\":1,\"z\":12,\"tags\":[\"shared\"]}], \"plants\":[{\"page\":\"generated_page\",\"x\":2,\"y\":2,\"id\":123456789,\"tags\":[\"landmark_tree\",\"shared\"]},{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"id\":4611686018427387905,\"tags\":[\"sown\"]}]} on page generated_page, and re-encoded it through the same encoder an ordinary save uses, writing world-edits v5; then the metadata timestamp was normalized. The cell coordinates and occurrence ids are structurally valid targets the codec does not check against terrain (no chunk is resident in a save); a load keeps them until the admission of the chunk that owns each one reconciles it. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "3b40a1c5f2f41c6f6fac908d36a93c7ac6930a065b3eb7fe473accda099a7afe",
+          "sizeBytes": 912702,
+          "provenance": "Derived from the tracked z10-item-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only world-edits@5 (#2894), which decoded the whole session through the real decoder, set the page's terrain-cell and flora-occurrence gameplay-tag assignments, and the planting edit that places the planted occurrence, named by the spec {\"tiles\":[{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":-54,\"tags\":[\"quarry\",\"shared\"]},{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":-56,\"tags\":[\"deep\"]},{\"page\":\"generated_page\",\"x\":5,\"y\":1,\"z\":-50,\"tags\":[\"shared\"]}],\"plants\":[{\"page\":\"generated_page\",\"x\":-26,\"y\":-20,\"id\":2035870205241177074,\"tags\":[\"landmark_tree\",\"shared\"]},{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"id\":4611686018427387905,\"tags\":[\"sown\"]}],\"plantings\":[{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"species\":\"tomato_plant\",\"id\":4611686018427387905,\"plantedDay\":0,\"baseWidth\":12}]}, re-encoded it through the same encoder an ordinary save uses and took just world-edits, written in its frozen v5 shape (downgradeWorldEditsV5), from that re-encode, keeping every other component of z10-item-tags verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt. Every target exists in the page it is seeded on: each cell is a stored non-air cell of its seed-42 column, the generated occurrence is the scots_pine chunk (-2, -2) generates at canonical tile (-26, -20), and the planted one is the tomato_plant a planting edit places at (6, 3); the 'save migrations' group's tag-target examples reconstruct each owning chunk and fail if any assignment would be dropped by its admission.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z11-tile-flora-tags.expected.json"
         }
       ]
@@ -3480,9 +3480,9 @@
           "id": "z12-item-scenario-refs",
           "path": "test-headless/data/save-compat/z12-item-scenario-refs.bin",
           "kind": "complete-session",
-          "sha256": "6186f32c4124e39bf72b744792892ee84877c2b40fc438ccc56629c54acfa6a7",
-          "sizeBytes": 912781,
-          "provenance": "Derived from the tracked z11-tile-flora-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the item scenario references {\"items\":[{\"id\":2,\"ref\":\"ration-a\"},{\"id\":7,\"ref\":\"comms.radio\"},{\"id\":15,\"ref\":\"second.unit.ration\"},{\"id\":21,\"ref\":\"units[1].equipment.main_hand\"}]} on the session, and re-encoded it through the same encoder an ordinary save uses, writing core-session v3; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "190692896d7bc447ea0d1367bf1aca70c9861291eb0d67798cb464d50da14c2d",
+          "sizeBytes": 912839,
+          "provenance": "Derived from the tracked z11-tile-flora-tags fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only core-session (#2894), which decoded the whole session through the real decoder, set the item scenario references {\"items\":[{\"id\":2,\"ref\":\"ration-a\"},{\"id\":7,\"ref\":\"comms.radio\"},{\"id\":15,\"ref\":\"second.unit.ration\"},{\"id\":21,\"ref\":\"units[1].equipment.main_hand\"}]}, re-encoded it through the same encoder an ordinary save uses and took just core-session (v3) from that re-encode, keeping every other component of z11-tile-flora-tags verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z12-item-scenario-refs.expected.json"
         }
       ]
@@ -3567,9 +3567,9 @@
           "id": "z13-unit-scenario-refs",
           "path": "test-headless/data/save-compat/z13-unit-scenario-refs.bin",
           "kind": "complete-session",
-          "sha256": "2cc15df05b0502093944c130ae4335a6a4c7764b94db9b3b36307e9bf285f419",
-          "sizeBytes": 912826,
-          "provenance": "Derived from the tracked z12-item-scenario-refs fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the unit scenario references {\"units\":[{\"page\":\"generated_page\",\"id\":1,\"ref\":\"scout\"},{\"page\":\"generated_page\",\"id\":2,\"ref\":\"units[1]\"}]} on the session, and re-encoded it through the same encoder an ordinary save uses, writing units v6; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "8c957d43852c7c43bdfa3911f4e4615601bc1f08c495d32f4b195e36aa29d69d",
+          "sizeBytes": 912884,
+          "provenance": "Derived from the tracked z12-item-scenario-refs fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only units (#2894), which decoded the whole session through the real decoder, set the unit scenario references {\"units\":[{\"page\":\"generated_page\",\"id\":1,\"ref\":\"scout\"},{\"page\":\"generated_page\",\"id\":2,\"ref\":\"units[1]\"}]}, re-encoded it through the same encoder an ordinary save uses and took just units (v6) from that re-encode, keeping every other component of z12-item-scenario-refs verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z13-unit-scenario-refs.expected.json"
         }
       ]
@@ -4042,6 +4042,11 @@
           "version": 2
         },
         {
+          "id": "relation-causes",
+          "required": false,
+          "version": 1
+        },
+        {
           "id": "texture-palette",
           "required": true,
           "version": 1
@@ -4064,7 +4069,7 @@
         {
           "id": "world-activity",
           "required": true,
-          "version": 6
+          "version": 7
         },
         {
           "id": "world-edits",
@@ -4082,9 +4087,9 @@
           "id": "z17-scenario-placement",
           "path": "test-headless/data/save-compat/z17-scenario-placement.bin",
           "kind": "complete-session",
-          "sha256": "59a063f0b736811b3b3984e52c813ff3e407c4bc11fc8402b9814697e4ad6431",
-          "sizeBytes": 3619,
-          "provenance": "Built by the Scenario.Placement hspec group's 'retained save-compat fixture' example on a live headless engine: a finite 20x10 arena page received the scenario through the real adapters (Scenario.Placement.*, Scenario.Items.*, the real building, location-instance, structure and item owners) and was snapshotted with the owners' own snapshot functions and encoded through the same encodeSessionSnapshot an ordinary save uses; the donor save z16-scenario-world supplied the session metadata and the Lua components the page does not own (retained as docs/pr-proofs/issue-2712-make-z17.py.txt). Then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "60159ba2be776e232f6f86c27e29e1f7bf18fede71d4571f36937f50256d6e9a",
+          "sizeBytes": 3687,
+          "provenance": "Built by the Scenario.Placement hspec group's 'retained save-compat fixture' example on a live headless engine: a finite 20x10 arena page received the scenario through the real adapters (Scenario.Placement.*, Scenario.Items.*, the real building, location-instance, structure and item owners) and was snapshotted with the owners' own snapshot functions and encoded through the same encodeSessionSnapshot an ordinary save uses; the donor save z16-scenario-world supplied the session metadata and the Lua components the page does not own (retained as docs/pr-proofs/issue-2712-make-z17.py.txt). Then the metadata timestamp was normalized. Rebuilt for #2894: the snapshot now carries the page's own calendar date (1-1-1) instead of the blank snapshot's 0-0-0, which lies outside the calendar and which the loader normalizes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z17-scenario-placement.expected.json"
         }
       ]

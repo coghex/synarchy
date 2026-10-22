@@ -136,6 +136,7 @@ import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
 import qualified Test.Headless.World.Save.Components as SaveComponents
 import qualified Test.Headless.World.Save.Compat as SaveCompat
+import qualified Test.Headless.World.Save.Compat.TagTargets as SaveCompatTagTargets
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
@@ -1087,6 +1088,11 @@ restLane = do
     describe "save envelope" SaveEnvelope.spec
     describe "save components" SaveComponents.spec
     describe "save migrations" SaveCompat.spec
+    -- #2894: every tracked fixture's tile and occurrence tags through the
+    -- real load staging, against the shipped materials and flora.
+    describe "save migrations" $
+        aroundAll SaveCompatTagTargets.withShippedContentEngine
+                  SaveCompatTagTargets.tagTargetsSpec
     describe "save migrations" SimExactFluid.saveSpec
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "persistence reference integrity" LuaSaveBridge.spec

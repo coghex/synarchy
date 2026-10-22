@@ -117,6 +117,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Aeson ((.:), (.:?), (.!=))
 import Control.Monad (foldM)
+import Data.Bifunctor (first)
 import Gameplay.Tags.Index (categoryForward, setCategoryTags)
 import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import Data.Int (Int64)
@@ -130,7 +131,8 @@ import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import World.Arena.Bounds (arenaHeight, arenaWidth)
 import World.Generate.Types (WorldGenParams(..))
 import World.Save.Envelope.Types (EnvelopeError(..))
-import World.Save.Component.Types (luaComponentPrefix)
+import World.Save.Component.Types (luaComponentPrefix, worldEditsComponentId, ComponentCodec(..))
+import World.Save.Component.PageEdits (worldEditsCodec, downgradeWorldEditsV5)
 
 -- | The live Lua persistent-component names @decodeSessionEnvelope@ is
 --   given as BOTH its known and its required set when deriving a
@@ -187,7 +189,8 @@ usageFailure args = do
               ⧺ "[--output PATH]"
         , "  " ⧺ prog ⧺ " descriptors --output PATH FIXTURE [FIXTURE ...]"
         , "  " ⧺ prog ⧺ " compare --output PATH FIXTURE FIXTURE [FIXTURE ...]"
-        , "  " ⧺ prog ⧺ " seed-tags --fixture PATH --spec PATH --output PATH"
+        , "  " ⧺ prog ⧺ " seed-tags --fixture PATH --spec PATH --output PATH "
+              ⧺ "[--only COMPONENT[@VERSION][,...]]"
         ]
     exitFailure
 
@@ -884,6 +887,14 @@ writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
 --
 --   @--spec@ is JSON:
 --
+--   @--only COMPONENT[\@VERSION][,...]@ keeps every OTHER component of
+--   the input fixture, bytes and version, and takes just the named ones
+--   from the re-encode (see 'spliceComponents'): the whole-session
+--   re-encode otherwise writes every component at the current version,
+--   which turns a fixture that is the historical counterpart of one
+--   into a current-version copy. @world-edits\@5@ writes that component
+--   in its frozen v5 shape (refused when an edit has no v5 spelling).
+--
 --   > {"units":     [{"page": "main_world", "id": 1, "tags": ["a", "b"]}],
 --   >  "buildings": [...], "locations": [...],
 --   >  "items":     [{"id": 42, "tags": ["c"]}]}
@@ -909,8 +920,10 @@ runSeedTags args = do
     (fixturePath, rest0) ← orUsageFailure (requireFlag "--fixture" args)
     (specPath, rest1)    ← orUsageFailure (requireFlag "--spec" rest0)
     (outputPath, rest2)  ← orUsageFailure (requireFlag "--output" rest1)
-    unless (null rest2) (orUsageFailure (Left ("unexpected arguments: "
-                                               ⧺ unwords rest2)))
+    (mOnly, rest3)       ← orUsageFailure (takeFlag "--only" rest2)
+    unless (null rest3) (orUsageFailure (Left ("unexpected arguments: "
+                                               ⧺ unwords rest3)))
+    only ← traverse (either (orUsageFailure ∘ Left) pure ∘ parseOnly) mOnly
     specBytes ← BSL.readFile specPath
     seed ← case Aeson.eitherDecode specBytes of
         Left e  → failWith "SEED_FAILED" specPath ("spec: " ⧺ e)
@@ -927,9 +940,89 @@ runSeedTags args = do
             case applyTagSeed seed snap of
                 Left e → failWith "SEED_FAILED" fixturePath e
                 Right snap' → do
-                    BS.writeFile outputPath
-                        (encodeSessionSnapshot meta snap' luaComponents)
+                    let fresh = encodeSessionSnapshot meta snap' luaComponents
+                    out ← case only of
+                        Nothing → pure fresh
+                        Just o  → either (failWith "SEED_FAILED" fixturePath)
+                                         pure (spliceComponents o bytes fresh)
+                    BS.writeFile outputPath out
                     putStrLn "SEED_OK"
+
+-- | One @--only@ entry: a component id and, optionally, the older
+--   version to write it at.
+type OnlyEntry = (ComponentId, Maybe Word32)
+
+-- | @COMPONENT[\@VERSION][,...]@. A version is only meaningful for a
+--   component 'downgradeComponent' knows how to write older.
+parseOnly ∷ String → Either String [OnlyEntry]
+parseOnly spec = do
+    entries ← mapM one (splitOn ',' spec)
+    when (null entries) (Left "--only names no component")
+    pure entries
+  where
+    one e = case break (≡ '@') e of
+        ("", _) → Left ("--only: empty component in " ⧺ show spec)
+        (c, "") → Right (ComponentId (T.pack c), Nothing)
+        (c, _ : v) → case reads v of
+            [(n, "")] → Right (ComponentId (T.pack c), Just n)
+            _ → Left ("--only: bad version in " ⧺ show e)
+    splitOn d xs = case break (≡ d) xs of
+        (a, [])       → [a]
+        (a, _ : rest) → a : splitOn d rest
+
+-- | Take ONLY the named components from a fresh re-encode of the seeded
+--   session and keep every other component of the original fixture —
+--   bytes and version — verbatim. Re-encoding the whole session writes
+--   every component at the CURRENT version, so a fixture that is the
+--   historical counterpart of one (a world-edits v5 payload, a
+--   core-session v2 one) would silently stop being it; this keeps a
+--   regenerated fixture differing from its predecessor in exactly the
+--   components its seed touched. The metadata component is never taken.
+spliceComponents ∷ [OnlyEntry] → BS.ByteString → BS.ByteString
+                 → Either String BS.ByteString
+spliceComponents only original fresh = do
+    orig ← structural original
+    new  ← structural fresh
+    forM_ only $ \(cid, _) → do
+        when (cid ≡ metadataComponentId)
+            (Left "--only cannot replace the metadata component")
+        when (isNothing (descriptorOf orig cid))
+            (Left ("--only: the fixture has no " ⧺ T.unpack (componentIdText cid)))
+        when (isNothing (descriptorOf new cid))
+            (Left ("--only: the re-encode has no " ⧺ T.unpack (componentIdText cid)))
+    specs ← forM (emComponents (deManifest orig)) $ \d →
+        case (lookup (cdId d) only, descriptorOf new (cdId d)) of
+            (Just wanted, Just nd) → do
+                (v, p) ← downgradeComponent (cdId d) (cdVersion nd)
+                                            (payloadOf new nd) wanted
+                Right (cdId d, v, cdRequired nd, p)
+            _ → Right (cdId d, cdVersion d, cdRequired d, payloadOf orig d)
+    first (\e → "encode: " ⧺ show e)
+          (encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion specs)
+  where
+    structural = first (\e → "decode: " ⧺ show e)
+               ∘ decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                                structuralKnownIds HS.empty
+    descriptorOf env cid = L.find ((≡ cid) ∘ cdId) (emComponents (deManifest env))
+    payloadOf env d = HM.lookupDefault BS.empty (cdId d) (dePayloads env)
+
+-- | Write a freshly encoded component at an older version when asked.
+--   Only the shapes the corpus needs are known: world-edits v5 (the
+--   frozen shape 'downgradeWorldEditsV5' writes, refused when an edit
+--   has no v5 spelling).
+downgradeComponent ∷ ComponentId → Word32 → BS.ByteString → Maybe Word32
+                   → Either String (Word32, BS.ByteString)
+downgradeComponent _ version payload Nothing = Right (version, payload)
+downgradeComponent cid version payload (Just wanted)
+    | wanted ≡ version = Right (version, payload)
+    | cid ≡ worldEditsComponentId ∧ wanted ≡ 5 ∧ version ≡ ccVersion worldEditsCodec = do
+        dto ← first (\e → "world-edits decode: " ⧺ e) (S.decode payload)
+        v5 ← maybe (Left "world-edits: an edit has no v5 spelling") Right
+                   (downgradeWorldEditsV5 dto)
+        Right (5, S.encode v5)
+    | otherwise = Left ("--only: cannot write " ⧺ T.unpack (componentIdText cid)
+                        ⧺ " at v" ⧺ show wanted ⧺ " (the re-encode is v"
+                        ⧺ show version ⧺ ")")
 
 -- | One target's complete tag set.
 data SeedEntry = SeedEntry
