@@ -191,7 +191,7 @@ This removes the intended at-a-glance distinction and also uploads three separat
 **Superseded direction (#1846).** The narrative above is the pre-epic reading and
 its "supply visually distinct category art" direction no longer describes where
 this is going. #1780 closed as superseded against epic
-[#1837](designation_tools_design.md) (design decision D-23), which
+[#1837](../designation_tools_design.md) (design decision D-23), which
 replaces the category-marker MECHANISM rather than repainting it: a planned
 target is drawn as the target's own art, so there is no category marker to make
 distinct.

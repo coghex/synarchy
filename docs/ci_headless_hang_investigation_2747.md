@@ -158,7 +158,7 @@ The hang did **not** recur in one rerun. Location: unknown (not reproduced).
   `withProgressFromEnv`, `hspec-core` added to the test-suite dependencies, the
   environment variable on the `Headless test suite` step, and a step that
   prints the record. The full diff against the base is
-  [`issue-2747-replay-instrumentation.diff.txt`](../pr-proofs/issue-2747-replay-instrumentation.diff.txt).
+  [`issue-2747-replay-instrumentation.diff.txt`](pr-proofs/issue-2747-replay-instrumentation.diff.txt).
 * **Method:** draft PR #2822 from `diag-2747-replay-1ccbedd9c` onto the base
   branch. A `pull_request` workflow tests the merge of the head into the base
   branch, which here is the historical tree plus the instrumentation; no push
