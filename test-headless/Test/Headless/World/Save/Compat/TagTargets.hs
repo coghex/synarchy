@@ -72,8 +72,14 @@ import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..))
+import World.Construct.Apply (applyConstructSlopes)
 import World.Edit.Apply (replayEdits)
-import World.Edit.Types (canonicalizeWorldEdits)
+import World.Edit.Types (WorldEdit(..), appendEdit, canonicalizeWorldEdits)
+import World.Generate.Arena (clipArenaChunk)
+import World.Generate.Types (WorldGenParams(..))
+import World.Mine.Apply (applyDigSlopes)
+import Gameplay.Tags.Tag (mkGameplayTag)
+import qualified Data.Set as Set
 import World.Material (MaterialRegistry)
 import World.Save.Types (renderMissingFloraRef, resolveFloraReferences)
 import World.Thread.ChunkLoading (generateDemandedChunks)
@@ -173,8 +179,11 @@ targetTiles pt = L.nub $
 --   generator ('generateDemandedChunks', which is also the arena's own
 --   authority), the page's flora references resolved against the shipped
 --   catalog and its edit log put in canonical frame and replayed
---   ('replayEdits'), and the restored assignments reconciled against the
---   result ('reconcileAdmittedChunks', the pure core of
+--   ('replayEdits'), the passes the load stage then applies to a replayed
+--   chunk (an arena's clip to its bounds, 'applyDigSlopes' and
+--   'applyConstructSlopes' over the page's designations — each can remove
+--   a cell or a rooted plant), and the restored assignments reconciled
+--   against the result ('reconcileAdmittedChunks', the pure core of
 --   'reconcileAdmittedPageTags'). Reconstructing them here, rather than
 --   reading whatever a particular load happens to make resident, is what
 --   puts a target in ANY chunk under test: a load builds the camera
@@ -187,7 +196,10 @@ admissionProblems registry catalog pid page = case resolved of
                   <> T.intercalate "; " (map renderMissingFloraRef errs) ]
     Right (edits, _, _, _) →
         let canon = canonicalChunkCoord params
-            admitted = [ replayEdits (canonicalizeWorldEdits canon edits) lc
+            admitted = [ applyConstructSlopes (pgsConstructDesignations page)
+                           ( applyDigSlopes (pgsMineDesignations page)
+                           ( clipArenaChunk (wgpArenaBounds params)
+                           ( replayEdits (canonicalizeWorldEdits canon edits) lc)))
                        | lc ← generated ]
             restored = rptPageTags (restorePageTags pid HM.empty want)
             (_, deadCells, deadOccs) = reconcileAdmittedChunks admitted restored
@@ -217,6 +229,46 @@ tagTargetsSpec = describe "tracked fixtures' tag targets survive admission (#289
         let pts = map pgsPageTags pages
         any (not . Map.null . ptsTiles) pts `shouldBe` True
         any (not . Map.null . ptsOccurrences) pts `shouldBe` True
+
+    -- The gate must be able to fail. Each case takes a TRACKED fixture's
+    -- page and seeds one target admission removes, the way a careless
+    -- codec seed would.
+    describe "refuses a fixture whose seeded target admission removes" $ do
+        let seeded name path mutate expected = it name $ \env → do
+                snap ← decodeFixture path
+                registry ← readIORef (materialRegistryRef env)
+                catalog ← readIORef (floraCatalogRef env)
+                (pid, page) ← case HM.toList (snapPages snap) of
+                    [(p, pg)] → pure (p, mutate pg)
+                    _ → fail (path <> ": expected exactly one page")
+                admissionProblems registry catalog pid page
+                    `shouldSatisfy` any (expected `T.isInfixOf`)
+            tagged = Set.fromList (maybe [] pure (mkGameplayTag "probe"))
+            withCell cell pg = pg { pgsPageTags = (pgsPageTags pg)
+                { ptsTiles = Map.insert cell tagged (ptsTiles (pgsPageTags pg)) } }
+            -- an occurrence tag, with a planting edit placing it when asked
+            withPlant planting fid tile pg =
+                let pt = pgsPageTags pg
+                    withTag = pg { pgsPageTags = pt
+                        { ptsOccurrences = Map.insert fid tagged (ptsOccurrences pt)
+                        , ptsOccurrenceTiles = Map.insert fid tile (ptsOccurrenceTiles pt) } }
+                in if planting
+                   then withTag { pgsEdits = appendEdit
+                            (fst (globalToChunk (fst tile) (snd tile)))
+                            (WePlaceFloraRef (fst tile) (snd tile) (FloraByName "tomato_plant")
+                                             0 12 fid)
+                            (pgsEdits withTag)
+                        , pgsPlantedFloraCursor = 100 }
+                   else withTag
+        seeded "a cell above the terrain" "test-headless/data/save-compat/z10-item-tags.bin"
+            (withCell (3, 4, 10)) "cell (3,4,10)"
+        seeded "an occurrence no chunk generates" "test-headless/data/save-compat/z10-item-tags.bin"
+            (withPlant False (plantedFloraInstanceId 99) (6, 3)) "occurrence"
+        -- (10, 0) lies outside z17's 20x10 arena but inside the chunk that
+        -- intersects it: replay places the plant, the load's arena clip
+        -- removes it
+        seeded "a planting outside an arena's bounds" "test-headless/data/save-compat/z17-scenario-placement.bin"
+            (withPlant True (plantedFloraInstanceId 99) (10, 0)) "occurrence"
 
     forM_ paths $ \path →
         it (path <> " keeps every cell and occurrence assignment it carries") $ \env → do
