@@ -37,6 +37,8 @@ module World.Save.Physiology
     , renderPhysiologyRejection
       -- * Deterministic normalization (S4, #2831)
     , PhysiologyNormalization(..)
+    , PhysiologyLoadDefinition(..)
+    , physiologyLoadDefinition
     , normalizeSavedPhysiology
     , physiologyLoadGate
       -- * The rebuilt caches (S4, #2831)
@@ -54,6 +56,9 @@ import Unit.Physiology
     (PhysioContext(..), resolveMode, engagementApplied, combatEngagedKey)
 import Unit.Physiology.Transition (KeyRepair(..), canonicalBlood, reconcileStoredKeys)
 import Unit.Physiology.Types
+import Unit.Thread.Command.Body (recomputeBodyDerivedStats, seedBodyComposition)
+import Unit.Types.Def (UnitDef(..))
+import Unit.Stats (standardStat)
 import Unit.Types (UnitId(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
@@ -99,15 +104,24 @@ data PhysiologyLoadRejection
         , plrReason ∷ !Text
         }
       -- ^ case (g): an input a required seed or the Nominal-nutrition
-      --   upkeep reads is zero, non-finite or missing with no declared
-      --   legacy rule. The load is refused, naming the unit, the key and
-      --   the input, before anything is published.
+      --   upkeep reads is zero, non-finite or missing after the declared
+      --   legacy body rule and cache rebuild. The load is refused, naming
+      --   the unit, the key and the input, before anything is published.
     | MalformedEngagementMarker
         { plrPage   ∷ !WorldPageId
         , plrUnit   ∷ !Word32
         , plrDef    ∷ !Text
         , plrValue  ∷ !Float
         }
+    | MalformedBodyInputs
+        { plrPage  ∷ !WorldPageId
+        , plrUnit  ∷ !Word32
+        , plrDef   ∷ !Text
+        , plrKeys  ∷ ![Text]
+        }
+      -- ^ a bodied definition has only part of the persisted body. The
+      --   recompute requires height, body_mass and lean_mass; partial body
+      --   state is not eligible for the legacy wholly-unbodied backfill.
       -- ^ case (h) for the SD-20 marker (#2834): a stored
       --   @combat_engaged@ that is not finite or not 1 (pending) or 2
       --   (applied). It is an input of the stamina resolver, so an
@@ -137,6 +151,9 @@ renderPhysiologyRejection r = case r of
         who <> " holds an invalid '" <> combatEngagedKey <> "' marker ("
         <> tshow (plrValue r) <> "): only 1 (pending) and 2 (applied) are \
         \values: malformed payload"
+    MalformedBodyInputs{} →
+        who <> " has a malformed body: missing "
+        <> T.intercalate ", " (plrKeys r)
   where
     who = "unit #" <> tshow (plrUnit r) <> " (" <> plrDef r
         <> ") on page '" <> unWorldPageId (plrPage r) <> "'"
@@ -153,7 +170,7 @@ renderPhysiologyRejection r = case r of
 --   bury that one.
 physiologyLoadRejections
     ∷ PhysiologyRegistry
-    → HM.HashMap Text UnitPhysiology         -- ^ loaded definitions' physiology
+    → HM.HashMap Text PhysiologyLoadDefinition -- ^ loaded definitions
     → [(WorldPageId, UnitSnapshot)]
     → [PhysiologyLoadRejection]
 physiologyLoadRejections registry defs pages = concatMap pageRejections pages
@@ -168,14 +185,15 @@ physiologyLoadRejections registry defs pages = concatMap pageRejections pages
 
     unitRejections pid uid u = case HM.lookup (uisDefName u) defs of
         Nothing → []
-        Just up →
+        Just def →
+          let up = pldPhysiology def
           -- the override map AS THE LOAD WILL SEE IT: a renamed system's
           -- override is remapped to its successor (and a retired one
           -- dropped) before the mode that decides whether a stored value is
           -- examined is resolved, so a recognized alias neither hides a
           -- non-finite value of what is Simulated after the remap nor
           -- rejects a value the remapped Nominal override would scrub
-          let resolved = fst (remapOverrides registry (uisPhysioOverrides u))
+              resolved = fst (remapOverrides registry (uisPhysioOverrides u))
           in
             [ UndeclaredOverrideSystem pid uid (uisDefName u) sid
             | sid ← sortOn id (HM.keys (uisPhysioOverrides u))
@@ -214,6 +232,26 @@ data PhysiologyNormalization = PhysiologyNormalization
     , pnNotes ∷ ![Text]
     } deriving (Show, Eq)
 
+-- | The loaded definition data the physiology gate needs. Keeping this
+--   projection small makes its content dependency explicit: mode resolution
+--   needs the physiology profile, while legacy body repair needs the authored
+--   body flag and the same templates used by standard spawn.
+data PhysiologyLoadDefinition = PhysiologyLoadDefinition
+    { pldPhysiology    ∷ !UnitPhysiology
+    , pldBodyAuthored  ∷ !Bool
+    , pldStatTemplates ∷ !(HM.HashMap Text (Float, Float))
+    , pldBodyTemplates ∷ !(HM.HashMap Text (Float, Float))
+    } deriving (Show, Eq)
+
+-- | Project a live loaded unit definition into the load gate's inputs.
+physiologyLoadDefinition ∷ UnitDef → PhysiologyLoadDefinition
+physiologyLoadDefinition def = PhysiologyLoadDefinition
+    { pldPhysiology = udPhysiology def
+    , pldBodyAuthored = upBodyAuthored (udPhysiology def)
+    , pldStatTemplates = udStatTemplates def
+    , pldBodyTemplates = udBodyTemplates def
+    }
+
 -- | Normalize every saved unit's physiology state, or reject.
 --   Deterministic and idempotent: the same save yields the same result
 --   every time, a second pass over its own output changes nothing, and a
@@ -230,6 +268,9 @@ data PhysiologyNormalization = PhysiologyNormalization
 --       registry-owned any more and stay ordinary stats.
 --     * (f) a Simulated override for a system the definition no longer
 --       supports rejects.
+--     * (#2893) a legacy unbodied unit of a bodied definition gets absent
+--       body and seed inputs from its standard species templates; a partial
+--       body rejects. The body caches are then rebuilt before any seed reads.
 --     * (j) a bodied unit with a height and body composition but no
 --       @frame_mass@ gets @frame_mass = 22·height²@, the bulk-1.0 spawn
 --       frame, which keeps its legacy viability floors exactly.
@@ -243,7 +284,7 @@ data PhysiologyNormalization = PhysiologyNormalization
 --   'physiologyLoadRejections'\'s and run first.
 normalizeSavedPhysiology
     ∷ PhysiologyRegistry
-    → HM.HashMap Text UnitPhysiology
+    → HM.HashMap Text PhysiologyLoadDefinition
     → Double                                   -- ^ the save's game time
     → [(WorldPageId, UnitSnapshot)]
     → Either [PhysiologyLoadRejection]
@@ -260,7 +301,7 @@ normalizeSavedPhysiology registry defs now pages
     rejections = concat [ rs | (_, _, rs, _) ← results ]
     notes      = [ ns | (_, _, _, ns) ← results ]
 
-normalizePage ∷ PhysiologyRegistry → HM.HashMap Text UnitPhysiology → Double
+normalizePage ∷ PhysiologyRegistry → HM.HashMap Text PhysiologyLoadDefinition → Double
               → WorldPageId → UnitSnapshot
               → (UnitSnapshot, [PhysiologyLoadRejection], [PhysiologyNormalization])
 normalizePage registry defs now pid us = (us { usnInstances = instances' }, rejs, ns)
@@ -273,13 +314,14 @@ normalizePage registry defs now pid us = (us { usnInstances = instances' }, rejs
     ns   = [ PhysiologyNormalization pid (unUnitId uid) (uisDefName u) notes
            | (uid, u, Right (_, notes)) ← perUnit, not (null notes) ]
 
-normalizeUnit ∷ PhysiologyRegistry → HM.HashMap Text UnitPhysiology → Double
+normalizeUnit ∷ PhysiologyRegistry → HM.HashMap Text PhysiologyLoadDefinition → Double
               → WorldPageId → Word32 → UnitInstanceSnapshot
               → Either [PhysiologyLoadRejection] (UnitInstanceSnapshot, [Text])
 normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs of
     Nothing → Right (u, [])      -- the missing-definition check owns this
-    Just up → do
-        let (overrides, overrideNotes) = remapOverrides registry (uisPhysioOverrides u)
+    Just def → do
+        let up = pldPhysiology def
+            (overrides, overrideNotes) = remapOverrides registry (uisPhysioOverrides u)
             unsupportedSim =
                 [ SimulatedOverrideUnsupported pid uid (uisDefName u) (psId sys)
                 | sys ← prSystems registry
@@ -287,15 +329,17 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
                 , resolveMode sys up (engagementApplied (uisStats u))
                     (Just PhysioSimulated) ≡ ModeUnsupported ]
         unless' (null unsupportedSim) (Left unsupportedSim)
-        let (statsJ, frameNote) = reconstructFrame up (uisStats u)
+        (statsA, bodyNotes) ← prepareBody def pid uid u
+        let (statsJ, frameNote) = reconstructFrame up statsA
+            (statsK, cacheNotes, promotionNotes) = rebuildBodyCaches def statsJ
             ctx = PhysioContext
                 { pcRegistry = registry, pcPhysiology = up
                 , pcOverrides = overrides, pcNow = now
-                , pcStats = statsJ, pcModifiers = uisModifiers u
+                , pcStats = statsK, pcModifiers = uisModifiers u
                 -- The load gate seeds and scrubs stored keys; nothing it
                 -- does reads blood, and the wounds that price a bleed rate
                 -- are not needed to repair a stat map.
-                , pcBlood = bloodViewOf statsJ (uisBlood u) 0
+                , pcBlood = bloodViewOf statsK (uisBlood u) 0
                 -- the saved wounds price the pain the mood seed reads (#2838)
                 , pcPain = woundsPain (uisWounds u) }
         -- (g): the Nominal-nutrition upkeep's input.
@@ -304,7 +348,8 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
             Nothing → Right ()
         (statsB, repairs) ← either (\(sid, key, why) → reject sid key why) Right
                                    (reconcileStoredKeys ctx)
-        let notes = overrideNotes ⧺ frameNote ⧺ map renderRepair repairs
+        let notes = overrideNotes ⧺ bodyNotes ⧺ frameNote ⧺ cacheNotes
+                    ⧺ promotionNotes ⧺ map renderRepair repairs
             -- A Nominal blood's stored uiBlood is SERIALIZED BUT IGNORED
             -- (#2837): reads never trust it, and the load rewrites it to the
             -- current canonical maximum (base body mass x 0.075) silently,
@@ -315,7 +360,7 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
             canonical = case canonicalBlood ctx of
                 Just c | c ≢ uisBlood u → Just c
                 _ → Nothing
-        if null notes ∧ isNothing canonical
+        if null notes ∧ isNothing canonical ∧ statsB ≡ uisStats u
             then Right (u, [])
             else Right ( u { uisStats = statsB, uisPhysioOverrides = overrides
                            , uisBlood = fromMaybe (uisBlood u) canonical }
@@ -325,6 +370,72 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
     reject ∷ Text → Text → Text → Either [PhysiologyLoadRejection] a
     reject sid key why = Left
         [ InvalidSeedInput pid uid (uisDefName u) sid key why ]
+
+-- | A bodied definition's wholly unbodied legacy unit is restored from the
+--   same standard template values SpawnStandard uses. Partial body state is
+--   malformed and is never completed by this rule.
+prepareBody
+    ∷ PhysiologyLoadDefinition → WorldPageId → Word32 → UnitInstanceSnapshot
+    → Either [PhysiologyLoadRejection] (HM.HashMap Text Float, [Text])
+prepareBody def pid uid u
+    | not (pldBodyAuthored def) = Right (uisStats u, [])
+    | null present = Right (stats', [note | not (null keysAdded)])
+    | not (null missingRequired) = Left
+        [ MalformedBodyInputs pid uid (uisDefName u) missingRequired ]
+    | otherwise = Right (uisStats u, [])
+  where
+    bodyKeys = ["height", "body_mass", "lean_mass", "fat_mass", "frame_mass"]
+    required = ["height", "body_mass", "lean_mass"]
+    present = filter (`HM.member` uisStats u) bodyKeys
+    missingRequired = filter (not ∘ (`HM.member` uisStats u)) required
+    statMeans = HM.map (standardStat ∘ fst) (pldStatTemplates def)
+    bodyMeans = HM.map (standardStat ∘ fst) (pldBodyTemplates def)
+    seeded = seedBodyComposition (HM.union statMeans bodyMeans)
+    bodyBackfill = HM.fromList
+        [ (k, v) | k ← bodyKeys, Just v ← [HM.lookup k seeded] ]
+    strengthBackfill = case (HM.member "strength_base" (uisStats u)
+                           ∨ HM.member "strength" (uisStats u)) of
+        True  → HM.empty
+        False → maybe HM.empty (HM.singleton "strength_base")
+                    (HM.lookup "strength" statMeans)
+    enduranceBackfill = maybe HM.empty (HM.singleton "endurance")
+        (HM.lookup "endurance" statMeans)
+    additions = HM.unions [bodyBackfill, strengthBackfill, enduranceBackfill]
+    stats' = HM.union (uisStats u) additions
+    keysAdded = sortOn id (HM.keys additions)
+    note = "backfilled " <> T.intercalate "," keysAdded
+        <> " from the definition's species averages"
+
+-- | Rebuild all body caches before seed evaluation. A missing cache is a
+--   logged repair; a stale present cache is rewritten silently. The real
+--   body recomputation remains the single source of cache values.
+rebuildBodyCaches
+    ∷ PhysiologyLoadDefinition → HM.HashMap Text Float
+    → (HM.HashMap Text Float, [Text], [Text])
+rebuildBodyCaches def stats
+    | not (pldBodyAuthored def)
+        ∨ any (not ∘ (`HM.member` stats)) ["height", "body_mass", "lean_mass"] =
+            (stats, [], [])
+    | otherwise =
+        let rebuilt0 = recomputeBodyDerivedStats stats
+            -- If no strength input or template exists, the recompute's
+            -- default still yields canonical strength caches, but there is
+            -- no durable strength_base input to promote or invent.
+            noStrengthInput = not (HM.member "strength_base" stats)
+                ∧ (not (HM.member "strength" stats)
+                   ∨ HM.lookup "strength" stats ≡ Just 0)
+                ∧ not (HM.member "strength" (pldStatTemplates def))
+            rebuilt = if noStrengthInput
+                then HM.delete "strength_base" rebuilt0 else rebuilt0
+            missing = filter (not ∘ (`HM.member` stats)) rebuiltCacheStats
+            promoted = not noStrengthInput
+                ∧ not (HM.member "strength_base" stats)
+                ∧ HM.member "strength" stats
+            cacheNotes = ["rebuilt missing body caches: "
+                          <> T.intercalate "," missing | not (null missing)]
+            promotionNotes = ["promoted strength to strength_base for stable body recomputation"
+                             | promoted]
+        in (rebuilt, cacheNotes, promotionNotes)
 
 -- | Case (c): rename and retirement, with one note each.
 remapOverrides ∷ PhysiologyRegistry → PhysioOverrides → (PhysioOverrides, [Text])
@@ -401,7 +512,7 @@ renderRepair r = case r of
 --   and one note per unit that changed, for one log line each.
 physiologyLoadGate
     ∷ PhysiologyRegistry
-    → HM.HashMap Text UnitPhysiology
+    → HM.HashMap Text PhysiologyLoadDefinition
     → Double
     → [(WorldPageId, UnitSnapshot)]
     → Either [Text] ([(WorldPageId, UnitSnapshot)], [PhysiologyNormalization])
@@ -418,9 +529,9 @@ physiologyLoadGate registry defs now pages
 -- | The unit stats the load REBUILDS rather than reads back: caches that
 --   ride in the stat-map payload ("serialized-but-ignored",
 --   @docs\/persistence_state_inventory.md@'s @UnitInstance (physiology
---   stats)@ table) and are recomputed canonically before the first paused
---   frame by @unitResources.onSaveLoaded@ (@unit.recomputeBody@, then the
---   physiology refresh). @circulation@ (#2836, S9) and, since #2838 (S11a),
+--   stats)@ table). Bodied-unit caches are first recomputed at the load gate
+--   before physiology seeding reads them, then remain recomputed before the
+--   first paused frame by @unitResources.onSaveLoaded@. @circulation@ (#2836, S9) and, since #2838 (S11a),
 --   @consciousness@, @concentration@ and @state_of_mind@ are not among them:
 --   they are derived on demand and never stored, and a legacy stored copy is
 --   scrubbed by the load gate in every mode.

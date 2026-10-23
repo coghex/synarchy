@@ -51,7 +51,7 @@ import Test.Headless.Unit.PhysiologyFixture
     (ensurePhysiologyRegistry, withProfile)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, mkItem, newBareLuaBackend)
-import World.Save.Physiology (normalizeSavedPhysiology)
+import World.Save.Physiology (normalizeSavedPhysiology, physiologyLoadDefinition)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -452,7 +452,7 @@ persisted stats act = withScene stats 0 $ \env ls → do
                 -- the load gate's deterministic normalization (#2831, D-6),
                 -- applied to what the decode produced
                 normalized = case normalizeSavedPhysiology reg
-                                (HM.map udPhysiology (umDefs um0)) 0
+                                (HM.map physiologyLoadDefinition (umDefs um0)) 0
                                 [(fixturePage, decoded)] of
                     Right ([(_, us)], _) → us
                     _ → decoded

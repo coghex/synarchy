@@ -51,7 +51,7 @@ import Unit.Physiology (registrySystem, resolveMode)
 import Unit.Physiology.Types
 import Unit.Types
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
-import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate)
+import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadDefinition, physiologyLoadGate)
 import World.Save.Snapshot
     ( PageSnapshot(..), SessionSnapshot(..), captureSessionSnapshot )
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -233,7 +233,7 @@ codecRoundTrip pg = case captureSessionSnapshot minimalGlobals [pg] of
 -- | The load gate over one page of units against the shipped definitions.
 gate ∷ PhysiologyRegistry → HM.HashMap Text UnitDef → UnitSnapshot
      → IO (UnitSnapshot, [PhysiologyNormalization])
-gate reg defs us = case physiologyLoadGate reg (HM.map udPhysiology defs) 0 [(page1, us)] of
+gate reg defs us = case physiologyLoadGate reg (HM.map physiologyLoadDefinition defs) 0 [(page1, us)] of
     Right ([(_, us')], notes) → pure (us', notes)
     Right _ → do
         expectationFailure "unexpected page shape"

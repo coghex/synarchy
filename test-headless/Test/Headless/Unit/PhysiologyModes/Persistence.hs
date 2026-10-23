@@ -17,35 +17,47 @@ module Test.Headless.Unit.PhysiologyModes.Persistence (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.List (sort)
+import Data.List (nub, sort)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Unit.PhysiologyFixture
     ( exemptPhysiology, profilePhysiology, readShippedPhysiologyRegistry
     , richPhysiology )
 import Test.Headless.Unit.PhysiologyModes.Harness
+import Test.Headless.Unit.PhysiologySpeciesProfiles
+    ( shippedDefs, withShipped )
 import Test.Headless.World.Save.Components.Fixture
     ( minimalGlobals, minimalPage, minimalSimState, minimalUnitInstance
     , page1 )
 import Unit.Physiology.Types
+import Unit.Physiology (PhysioContext(..), engagementApplied, resolveMode)
+import Unit.Blood (bloodViewOf)
+import Unit.Thread.Command.Body (recomputeBodyDerivedStats)
+import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Types
 import World.Page.Types (WorldPageId)
+import World.Page.GeneratedId (newGeneratedWorldId)
 import Equipment.Types (emptyEquipmentClassManager)
 import Infection.Types (emptyInfectionManager)
 import Item.Types (emptyItemManager)
-import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
+import World.Save.Envelope
+    ( LuaComponentSpec(..), decodeSessionEnvelope, encodeSessionSnapshot )
 import World.Save.Physiology
-    ( PhysiologyNormalization(..), physiologyLoadGate, rebuiltCacheStats
+    ( PhysiologyLoadDefinition(..), PhysiologyNormalization(..)
+    , physiologyLoadDefinition, physiologyLoadGate, rebuiltCacheStats
     , withoutRebuiltCaches )
 import World.Save.Snapshot
     ( PageSnapshot(..), SessionSnapshot(..), captureSessionSnapshot )
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
+import Combat.Resolution.Common (woundsPain)
 import World.Save.Types
-    ( UnitInstanceSnapshot(..), UnitSnapshot(..), fromUnitSnapshot, toUnitSnapshot )
+    ( SaveMetadata(..), UnitInstanceSnapshot(..), UnitSnapshot(..)
+    , fromUnitSnapshot, toUnitSnapshot )
 
 -----------------------------------------------------------------------
 -- Pure fixtures
@@ -95,8 +107,13 @@ mindSeeds =
     , ("mental_cooldown_until", 0), ("mental_high_since", 0)
     , ("mental_break_behavior", 0), ("thought_next_at", 0) ]
 
-defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text UnitPhysiology
-defsOf = HM.fromList
+defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text PhysiologyLoadDefinition
+defsOf = HM.fromList ∘ map (\(name, up) → (name, PhysiologyLoadDefinition
+    { pldPhysiology = up, pldBodyAuthored = False
+    , pldStatTemplates = HM.empty, pldBodyTemplates = HM.empty }))
+
+defsBodied ∷ [(Text, UnitPhysiology)] → HM.HashMap Text PhysiologyLoadDefinition
+defsBodied = HM.map (\def → def { pldBodyAuthored = True }) ∘ defsOf
 
 pageOf ∷ [(Word32, UnitInstanceSnapshot)] → [(WorldPageId, UnitSnapshot)]
 pageOf us = [(page1, UnitSnapshot
@@ -107,7 +124,16 @@ pageOf us = [(page1, UnitSnapshot
 --   its notes, or the rejection messages.
 gate1 ∷ PhysiologyRegistry → [(Text, UnitPhysiology)] → UnitInstanceSnapshot
       → Either [Text] (UnitInstanceSnapshot, [Text])
-gate1 reg defs u = case physiologyLoadGate reg (defsOf defs) 0 (pageOf [(1, u)]) of
+gate1 = gate1With defsOf
+
+gate1Bodied ∷ PhysiologyRegistry → [(Text, UnitPhysiology)] → UnitInstanceSnapshot
+            → Either [Text] (UnitInstanceSnapshot, [Text])
+gate1Bodied = gate1With defsBodied
+
+gate1With ∷ ([(Text, UnitPhysiology)] → HM.HashMap Text PhysiologyLoadDefinition)
+         → PhysiologyRegistry → [(Text, UnitPhysiology)] → UnitInstanceSnapshot
+         → Either [Text] (UnitInstanceSnapshot, [Text])
+gate1With makeDefs reg defs u = case physiologyLoadGate reg (makeDefs defs) 0 (pageOf [(1, u)]) of
     Left msgs → Left msgs
     Right ([(_, us)], notes) → case HM.lookup (UnitId 1) (usnInstances us) of
         Just u' → Right (u', concatMap pnNotes notes)
@@ -130,11 +156,185 @@ shouldReject (Left msgs) needles =
 
 spec ∷ Spec
 spec = describe "persistence of the physiology modes" $ do
+    legacyUnbodiedSpec
     beforeAll readShippedPhysiologyRegistry $ do
         canonicalSpec
         normalizationSpec
         policySpec
     engineSpec
+
+legacyUnbodiedSpec ∷ Spec
+legacyUnbodiedSpec = describe "legacy unbodied units (#2893)" $ do
+    it "loads the five original fixture byte streams, backfills acolyte inputs, seeds, and round-trips idempotently" $ do
+        reg ← readShippedPhysiologyRegistry
+        withShipped $ \(env, _) → do
+            defs ← shippedDefs env
+            let names =
+                    [ "b2-split-haskell-lua-state"
+                    , "b3-lua-versioned-session-v1"
+                    , "c3-typed-reference-v1"
+                    , "c3-typed-reference-v1-multipage"
+                    , "c3-typed-reference-v1-with-items" ]
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            forM_ names $ \name → do
+                bytes ← BS.readFile ("test-headless/data/save-compat/"
+                                     <> T.unpack name <> ".bin")
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure (T.unpack err)
+                    Right (meta, snap, lua, _) → case physiologyLoadGate reg
+                            (HM.map physiologyLoadDefinition defs) 0
+                            [ (pid, pgsUnits pg)
+                            | (pid, pg) ← HM.toList (snapPages snap) ] of
+                        Left errs → expectationFailure (show errs)
+                        Right (unitsByPage, notes) → do
+                            let pageUnits = lookup page1 unitsByPage
+                                target = pageUnits >>= HM.lookup (UnitId 1) ∘ usnInstances
+                                unitNotes = [n | n ← notes, pnPage n ≡ page1, pnUnit n ≡ 1]
+                                normPages = HM.mapWithKey
+                                    (\pid pg → case lookup pid unitsByPage of
+                                        Just units → pg { pgsUnits = units }
+                                        Nothing → pg) (snapPages snap)
+                                normSnap = snap { snapPages = normPages }
+                            target `shouldSatisfy` isJust
+                            case (target, unitNotes) of
+                                (Just u, [n]) → do
+                                    stat "height" u >>= \v → near 1e-6 1.8 (realToFrac v)
+                                    stat "body_mass" u >>= \v → near 1e-5 71.28 (realToFrac v)
+                                    stat "frame_mass" u >>= \v → near 1e-5 71.28 (realToFrac v)
+                                    stat "fat_mass" u >>= \v → near 1e-5 14.256 (realToFrac v)
+                                    stat "lean_mass" u >>= \v → near 1e-5 28.512 (realToFrac v)
+                                    stat "strength_base" u >>= \v → near 1e-6 1 (realToFrac v)
+                                    stat "endurance" u >>= \v → near 1e-6 1 (realToFrac v)
+                                    let rebuilt = recomputeBodyDerivedStats (uisStats u)
+                                    forM_ rebuiltCacheStats $ \key →
+                                        HM.lookup key (uisStats u) `shouldBe` HM.lookup key rebuilt
+                                    stat "max_hydration" u >>= \v → near 1e-5 (0.6 * 71.28) (realToFrac v)
+                                    stat "hydration" u >>= \v → near 1e-5 42.768 (realToFrac v)
+                                    stat "salt" u >>= \v → near 1e-5 71.28 (realToFrac v)
+                                    stat "salt_store" u >>= \v → near 1e-5 (2 * 71.28) (realToFrac v)
+                                    stat "exhaustion" u >>= \v → near 1e-5 10 (realToFrac v)
+                                    stat "sleep_pressure" u >>= \v → near 1e-5 10 (realToFrac v)
+                                    length [() | note ← pnNotes n,
+                                        "from the definition's species averages" `T.isInfixOf` note]
+                                        `shouldBe` 1
+                                    forM_ ["height", "body_mass", "frame_mass", "lean_mass", "fat_mass",
+                                           "strength_base", "endurance"] $ \key →
+                                        (key, any (key `T.isInfixOf`) (pnNotes n)) `shouldBe` (key, True)
+                                    assertSimulatedSeeds reg defs u
+                                _ → expectationFailure ("expected exactly one page1/unit#1 normalization record for "
+                                                        <> show name <> ", got " <> show unitNotes)
+                            stagedPages ← traverse stagePage (snapPages normSnap)
+                            let reSaveSnap = normSnap { snapPages = stagedPages }
+                                generatedIds = sort (nub
+                                    [gid | pg ← HM.elems stagedPages
+                                         , Just gid ← [pgsGeneratedId pg]])
+                                reSaveMeta = meta { smGeneratedWorldIds = generatedIds }
+                                encoded = encodeSessionSnapshot reSaveMeta reSaveSnap
+                                    (completeRequiredLua lua)
+                            case decodeSessionEnvelope luaNames luaNames encoded of
+                                Left err → expectationFailure (T.unpack err)
+                                Right (_, snap2, _, _) → do
+                                    case physiologyLoadGate reg
+                                            (HM.map physiologyLoadDefinition defs) 0
+                                            [ (pid, pgsUnits pg)
+                                            | (pid, pg) ← HM.toList (snapPages snap2) ] of
+                                        Left errs → expectationFailure (show errs)
+                                        Right (again, secondNotes) → do
+                                            HM.fromList again `shouldBe` HM.fromList
+                                                [ (pid, pgsUnits pg)
+                                                | (pid, pg) ← HM.toList (snapPages snap2) ]
+                                            secondNotes `shouldBe` []
+
+    it "rebuilds every missing cache, preserves durable stats, and silently replaces stale caches" $ do
+        reg ← readShippedPhysiologyRegistry
+        let canonical = recomputeBodyDerivedStats (HM.fromList (body70 ⧺ seeds70))
+            original = saved "acolyte" (HM.toList canonical) []
+            defs = [("acolyte", richPhysiology)]
+            durable stats = HM.filterWithKey (\k _ → k `notElem` rebuiltCacheStats) stats
+        forM_ rebuiltCacheStats $ \missing → do
+            let input = original { uisStats = HM.delete missing (uisStats original) }
+            shouldNormalize (gate1Bodied reg defs input) $ \(out, notes) → do
+                length notes `shouldBe` 1
+                durable (uisStats out) `shouldBe` durable (uisStats input)
+                let expected = recomputeBodyDerivedStats (uisStats out)
+                forM_ rebuiltCacheStats $ \key →
+                    HM.lookup key (uisStats out) `shouldBe` HM.lookup key expected
+                pg ← codecRoundTrip ((minimalPage page1) { pgsUnits =
+                    UnitSnapshot (HM.singleton (UnitId 1) out) 10 mempty mempty })
+                gate1Bodied reg defs (fromMaybe out
+                    (HM.lookup (UnitId 1) (usnInstances (pgsUnits pg))))
+                    `shouldBe` Right (out, [])
+        let allMissing = original { uisStats = foldl' (flip HM.delete)
+                                    (uisStats original) rebuiltCacheStats }
+        shouldNormalize (gate1Bodied reg defs allMissing) $ \(out, notes) → do
+            length notes `shouldBe` 1
+            forM_ rebuiltCacheStats $ \key →
+                HM.lookup key (uisStats out) `shouldBe`
+                    HM.lookup key (recomputeBodyDerivedStats (uisStats out))
+            durable (uisStats out) `shouldBe` durable (uisStats allMissing)
+        let stale = original { uisStats = HM.insert "max_hydration" 999
+                                        (uisStats original) }
+        shouldNormalize (gate1Bodied reg defs stale) $ \(out, notes) → do
+            notes `shouldBe` []
+            statOf' out "max_hydration" `shouldBe` Just (0.6 * 70)
+
+    it "rejects partial bodies, leaves a non-bodied empty stat map alone, and preserves present inputs" $ do
+        reg ← readShippedPhysiologyRegistry
+        let defs = [("acolyte", richPhysiology)]
+            partials =
+                [ [("height", 1.8)]
+                , [("body_mass", 70)]
+                , [("lean_mass", 56)]
+                , [("height", 1.8), ("body_mass", 70)]
+                , [("fat_mass", 14)] ]
+        forM_ partials $ \stats → do
+            let required = ["height", "body_mass", "lean_mass"]
+                missing = filter (\key → key `notElem` map fst stats) required
+            gate1Bodied reg defs (saved "acolyte" stats []) `shouldReject`
+                (["page1", "unit #1", "acolyte", "malformed body"] ⧺ missing)
+        let nonBodied = saved "white_tailed_deer" [] []
+        gate1 reg [("white_tailed_deer", noUnitPhysiology)] nonBodied
+            `shouldBe` Right (nonBodied, [])
+        withShipped $ \(env, _) → do
+            shipped ← shippedDefs env
+            let defs' = HM.map physiologyLoadDefinition shipped
+                present = saved "acolyte" [("endurance", 1.3), ("strength", 0.8)] []
+            case physiologyLoadGate reg defs' 0 (pageOf [(1, present)]) of
+                Left errs → expectationFailure (show errs)
+                Right ([(_, units)], _) → case HM.lookup (UnitId 1) (usnInstances units) of
+                    Nothing → expectationFailure "unit vanished"
+                    Just out → do
+                        statOf' out "endurance" `shouldBe` Just 1.3
+                        statOf' out "strength_base" `shouldBe` Just 0.8
+                Right _ → expectationFailure "unexpected page shape"
+
+stat ∷ Text → UnitInstanceSnapshot → IO Float
+stat key u = case HM.lookup key (uisStats u) of
+    Just value → pure value
+    Nothing → expectationFailure ("missing stat " <> show key) >> pure (-1)
+
+assertSimulatedSeeds ∷ PhysiologyRegistry → HM.HashMap Text UnitDef
+                    → UnitInstanceSnapshot → IO ()
+assertSimulatedSeeds registry defs u = case HM.lookup (uisDefName u) defs of
+    Nothing → expectationFailure "fixture unit definition is missing"
+    Just def → do
+        let owned = concat
+                [ [okKey key | key ← psOwns system, isNothing (okField key)] ⧺ psMeters system
+                | system ← prSystems registry
+                , resolveMode system (udPhysiology def)
+                    (engagementApplied (uisStats u))
+                    (HM.lookup (psId system) (uisPhysioOverrides u)) ≡ ModeSimulated ]
+            stripped = foldl' (flip HM.delete) (uisStats u) owned
+            context = PhysioContext
+                { pcRegistry = registry, pcPhysiology = udPhysiology def
+                , pcOverrides = uisPhysioOverrides u, pcNow = 0
+                , pcStats = stripped, pcModifiers = uisModifiers u
+                , pcBlood = bloodViewOf stripped (uisBlood u) 0
+                , pcPain = woundsPain (uisWounds u) }
+        case reconcileStoredKeys context of
+            Left err → expectationFailure ("fixture seed authority rejected: " <> show err)
+            Right (expected, _) → forM_ owned $ \key →
+                (key, HM.lookup key (uisStats u)) `shouldBe` (key, HM.lookup key expected)
 
 -----------------------------------------------------------------------
 -- Unchanged content: zero normalizations
@@ -274,19 +474,18 @@ normalizationSpec = describe "D-6 normalization" $ do
                 \(n', _) → HM.toList (uisPhysioOverrides n') `shouldBe` [("hydration", PhysioNominal)]
 
     describe "(g) an invalid seed or upkeep input" $ do
-        it "rejects a Simulated unit whose missing key cannot be seeded: absent, zero or non-finite maximum" $ \reg → do
+        it "rebuilds absent, zero and non-finite body caches before seeding, and rejects an unrebuildable malformed body" $ \reg → do
             forM_ [ ("no maximum", filter ((≢ "max_hydration") ∘ fst) body70)
                   , ("zero maximum", ("max_hydration", 0) : filter ((≢ "max_hydration") ∘ fst) body70)
                   , ("NaN maximum", ("max_hydration", 0 / 0) : filter ((≢ "max_hydration") ∘ fst) body70) ] $
-                \(label, stats) →
-                    ( label
-                    , either (const True) (const False)
-                        (gate1 reg [("acolyte", richPhysiology)]
-                            (saved "acolyte" (filter ((≢ "hydration") ∘ fst) stats) []))
-                    ) `shouldBe` (label, True)
-            gate1 reg [("acolyte", richPhysiology)]
-                (saved "acolyte" (filter ((≢ "max_hydration") ∘ fst) body70) [])
-                `shouldReject` ["unit #1", "acolyte", "hydration", "max_hydration"]
+                \(label, stats) → shouldNormalize
+                    (gate1Bodied reg [("acolyte", richPhysiology)]
+                        (saved "acolyte" (filter ((≢ "hydration") ∘ fst) stats) [])) $
+                    \(u, _) → (label, statOf' u "hydration")
+                        `shouldBe` (label, Just 42)
+            gate1Bodied reg [("acolyte", richPhysiology)]
+                (saved "acolyte" [("height", 1.8), ("body_mass", 70)] [])
+                `shouldReject` ["unit #1", "acolyte", "malformed body", "lean_mass"]
 
         it "rejects a Nominal-nutrition unit whose upkeep frame is zero, NaN, or missing with no height" $ \reg → do
             forM_ [ ("zero frame", ("frame_mass", 0) : filter ((≢ "frame_mass") ∘ fst) body70)
@@ -296,10 +495,10 @@ normalizationSpec = describe "D-6 normalization" $ do
                 \(label, stats) →
                     ( label
                     , either (const True) (const False)
-                        (gate1 reg [("nomad_primitive", exemptPhysiology)]
+                        (gate1Bodied reg [("nomad_primitive", exemptPhysiology)]
                             (saved "nomad_primitive" stats []))
                     ) `shouldBe` (label, True)
-            gate1 reg [("nomad_primitive", exemptPhysiology)]
+            gate1Bodied reg [("nomad_primitive", exemptPhysiology)]
                 (saved "nomad_primitive" (("frame_mass", 0) : filter ((≢ "frame_mass") ∘ fst) body70) [])
                 `shouldReject` ["unit #1", "nomad_primitive", "nutrition", "frame_mass"]
 
@@ -330,14 +529,14 @@ normalizationSpec = describe "D-6 normalization" $ do
                     ( [ ("height", h), ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56)
                       , ("endurance", 1), ("stamina", 10) ]
                       ⧺ seeds70 ) []
-            shouldNormalize (gate1 reg [("acolyte", richPhysiology)] preFrame) $ \(u', notes) → do
+            shouldNormalize (gate1Bodied reg [("acolyte", richPhysiology)] preFrame) $ \(u', notes) → do
                 let frame = fromMaybe (-1) (statOf' u' "frame_mass")
                 abs (frame - 22 * h * h) `shouldSatisfy` (< 1e-4)
                 -- the legacy floors (0.44 h^2 fat, 4.4 h^2 lean) are the frame floors
                 abs (0.02 * frame - 0.44 * h * h) `shouldSatisfy` (< 1e-5)
                 abs (0.20 * frame - 4.4 * h * h) `shouldSatisfy` (< 1e-4)
-                length notes `shouldBe` 1
-                gate1 reg [("acolyte", richPhysiology)] u' `shouldBe` Right (u', [])
+                length notes `shouldSatisfy` (>= 2)
+                gate1Bodied reg [("acolyte", richPhysiology)] u' `shouldBe` Right (u', [])
 
     describe "idempotence" $
         it "a compounded legacy unit normalizes once and a second pass finds nothing" $ \reg → do
@@ -346,9 +545,9 @@ normalizationSpec = describe "D-6 normalization" $ do
                       , ("max_hydration", 42), ("max_hunger", 700), ("max_calories", 1400)
                       , ("endurance", 1), ("stamina", 10)
                       , ("salt", 30), ("salt_conc", 0.4), ("core_temp", 37) ] ) []
-            shouldNormalize (gate1 reg [("acolyte", richPhysiology)] u) $ \(u', notes) → do
+            shouldNormalize (gate1Bodied reg [("acolyte", richPhysiology)] u) $ \(u', notes) → do
                 notes `shouldSatisfy` (not ∘ null)
-                gate1 reg [("acolyte", richPhysiology)] u' `shouldBe` Right (u', [])
+                gate1Bodied reg [("acolyte", richPhysiology)] u' `shouldBe` Right (u', [])
 
 -----------------------------------------------------------------------
 -- T-10: defaults and pins across a save and a load
@@ -470,9 +669,22 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
             -- durable values and overrides: exactly what was saved
             usnInstances (pgsUnits back) `shouldBe` usnInstances (pgsUnits pg)
             -- the gate normalizes nothing under unchanged content
-            let defs = HM.map udPhysiology (umDefs before)
-            physiologyLoadGate reg defs 0 [(page1, pgsUnits back)]
-                `shouldBe` Right ([(page1, pgsUnits back)], [])
+            let defs = HM.map physiologyLoadDefinition (umDefs before)
+            let cleanUnits units = units { usnInstances = HM.map
+                    (\u → u { uisStats = foldl' (flip HM.delete) (uisStats u)
+                                rebuiltCacheStats }) (usnInstances units) }
+            case physiologyLoadGate reg defs 0 [(page1, pgsUnits back)] of
+                Left errs → expectationFailure (show errs)
+                Right (gated, notes) → do
+                    notes `shouldBe` []
+                    fmap (fmap cleanUnits) gated `shouldBe`
+                        [(page1, cleanUnits (pgsUnits back))]
+                    case lookup page1 gated of
+                        Just units → forM_ (HM.elems (usnInstances units)) $ \u → do
+                            let expected = recomputeBodyDerivedStats (uisStats u)
+                            forM_ rebuiltCacheStats $ \key →
+                                HM.lookup key (uisStats u) `shouldBe` HM.lookup key expected
+                        Nothing → expectationFailure "gate dropped page1"
             -- caches: load the ORIGINAL and the ROUND-TRIPPED unit through the
             -- load hook; both rebuild to the same canonical values
             let cacheKeys = [ "circulation", "strength", "strength_body"
@@ -512,7 +724,7 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
                 snap = toUnitSnapshot page1 um
                 snapStale = snap { usnInstances = HM.map
                     (\u → u { uisStats = HM.union stale (uisStats u) }) (usnInstances snap) }
-                defs = HM.map udPhysiology (umDefs um)
+                defs = HM.map physiologyLoadDefinition (umDefs um)
             case physiologyLoadGate reg defs 0 [(page1, snapStale)] of
                 Left msgs → expectationFailure (show msgs)
                 Right ([(_, us)], notes) → do
@@ -531,3 +743,22 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
                     readOwned ls 1 "salt_conc" `shouldReturn` "1|nominal"
                     luaNum ls "unit.readPhysio(1, 'consciousness')" >>= near 1e-9 1
                 Right _ → expectationFailure "unexpected page shape"
+
+-- Legacy fixtures predate required Lua modules. Supply the current required
+-- component envelopes when re-saving their migrated Haskell snapshots.
+completeRequiredLua ∷ [LuaComponentSpec] → [LuaComponentSpec]
+completeRequiredLua components = foldl' add components required
+  where
+    required =
+        [ LuaComponentSpec "unit_ai" 4 True BS.empty
+        , LuaComponentSpec "building_spawn" 2 True BS.empty ]
+    add present spec
+        | any (\component → lcsId component ≡ lcsId spec) present = present
+        | otherwise = present ⧺ [spec]
+
+stagePage ∷ PageSnapshot → IO PageSnapshot
+stagePage pg = case pgsGeneratedId pg of
+    Just _ → pure pg
+    Nothing → do
+        gid ← newGeneratedWorldId
+        pure pg { pgsGeneratedId = Just gid }
