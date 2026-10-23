@@ -141,18 +141,36 @@ ride the `uiStats` map, which the units component serializes wholesale, so a
 stat added to a script needs no codec change and is classified **Persist
 exactly** like the rest of the map (stored zero and partial values come back
 verbatim). A save written before the stat existed simply lacks the key, and
-the load invents it ONLY where a declared rule says so: the physiology
+the load invents it ONLY where a declared rule says so. The physiology
 registry's seeding rule fills the MISSING owned keys of a Simulated system at
-load (never overwriting a present one, #2831, design D-6), and nothing else
-is created. The salt reserve `salt_store` (`scripts/salts.lua`) is the worked
-case: a save with no reserve gets a full one at load, as a fresh spawn
-starts, and a stored value, including 0, is kept. The cases are
+load (never overwriting a present one, #2831, design D-6). In addition,
+legacy unbodied units (#2893) qualify for absent-only reconstruction when
+their loaded definition authors a `body:` block and their saved stat map has
+none of `height`, `body_mass`, `lean_mass`, `fat_mass` or `frame_mass`. The
+physiology load gate fills `height`, `body_mass`, `frame_mass`, `lean_mass`
+and `fat_mass` by applying `seedBodyComposition` to the definition's standard
+species means for `height`, `bulk` and `bodyfat`; it also fills absent
+`strength_base` from the `strength` stat-template base only if neither
+`strength` nor `strength_base` is present, and absent `endurance` from its
+stat-template base. `standardStat` supplies each template's non-negative
+base/mean, exactly as `SpawnStandard` does. Existing values win, definitions
+without a template supply no value, and no other stats, skills or knowledge
+are created. One normalization note records the backfilled keys and their
+species-average source. A bodied unit with any saved body input but without
+`height`, `body_mass` or `lean_mass` is malformed and rejects the load; it is
+never completed by the legacy rule. The salt reserve `salt_store`
+(`scripts/salts.lua`) is the worked case for physiology seeding: a save with
+no reserve gets a full one at load, as a fresh spawn starts, and a stored
+value, including 0, is kept. The cases are
 `--match "salt reserve (#2761)"`'s `persistence` group and
 `--match "persistence of the physiology modes"`.
 
-**Serialized-but-ignored caches (#2831).** A stat can ride the `uiStats`
+**Serialized-but-ignored caches (#2831, #2893).** A stat can ride the `uiStats`
 payload and still not be durable: it is a CACHE of other state, recomputed
-canonically before the first paused frame, and never read back as authority.
+canonically at the physiology load gate before missing physiology seeds are
+computed, and again before the first paused frame. It is never read back as
+authority. Missing body caches are logged as repairs; present stale cache
+values are rewritten silently. This does not change durable body values.
 It is classified **Rebuild deterministically**, with the qualifier
 *serialized-but-ignored* in the inventory's classification cell: the
 strength values the body recompute re-derives and the body-derived maxima.
@@ -170,7 +188,7 @@ while Nominal, where the load rewrites it silently to the current canonical
 maximum so a Nominal-blood unit saved by current code normalizes zero times.)
 The wire is unchanged (the stat map is still serialized wholesale, so no
 filter and no codec change), and the load simply does not trust those values:
-`unitResources.onSaveLoaded` runs `unit.recomputeBody` (it no longer runs
+`unitResources.onSaveLoaded` runs `unit.recomputeBody` as well (it no longer runs
 any brain pass: every value that reads physiology is derived on demand, so a
 load publishes no stored value of its own and writes no durable integrator,
 which would fold an active modifier into a stored base even at dt 0).
