@@ -113,6 +113,12 @@ data PhysiologyLoadRejection
         , plrDef    ∷ !Text
         , plrValue  ∷ !Float
         }
+      -- ^ case (h) for the SD-20 marker (#2834): a stored
+      --   @combat_engaged@ that is not finite or not 1 (pending) or 2
+      --   (applied). It is an input of the stamina resolver, so an
+      --   out-of-set value cannot be interpreted; the load is refused
+      --   before anything is published. A VALID marker on a species that
+      --   does not declare the trigger is retained and has no effect.
     | MalformedBodyInputs
         { plrPage  ∷ !WorldPageId
         , plrUnit  ∷ !Word32
@@ -122,12 +128,6 @@ data PhysiologyLoadRejection
       -- ^ a bodied definition has only part of the persisted body. The
       --   recompute requires height, body_mass and lean_mass; partial body
       --   state is not eligible for the legacy wholly-unbodied backfill.
-      -- ^ case (h) for the SD-20 marker (#2834): a stored
-      --   @combat_engaged@ that is not finite or not 1 (pending) or 2
-      --   (applied). It is an input of the stamina resolver, so an
-      --   out-of-set value cannot be interpreted; the load is refused
-      --   before anything is published. A VALID marker on a species that
-      --   does not declare the trigger is retained and has no effect.
     deriving (Show, Eq)
 
 renderPhysiologyRejection ∷ PhysiologyLoadRejection → Text
@@ -402,7 +402,7 @@ prepareBody def pid uid u
         (HM.lookup "endurance" statMeans)
     additions = HM.unions [bodyBackfill, strengthBackfill, enduranceBackfill]
     stats' = HM.union (uisStats u) additions
-    keysAdded = sortOn id (HM.keys additions)
+    keysAdded = sortOn id (HM.keys (HM.difference additions (uisStats u)))
     note = "backfilled " <> T.intercalate "," keysAdded
         <> " from the definition's species averages"
 

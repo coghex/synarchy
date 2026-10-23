@@ -109,7 +109,7 @@ mindSeeds =
 
 defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text PhysiologyLoadDefinition
 defsOf = HM.fromList ∘ map (\(name, up) → (name, PhysiologyLoadDefinition
-    { pldPhysiology = up, pldBodyAuthored = False
+    { pldPhysiology = up, pldBodyAuthored = upBodyAuthored up
     , pldStatTemplates = HM.empty, pldBodyTemplates = HM.empty }))
 
 defsBodied ∷ [(Text, UnitPhysiology)] → HM.HashMap Text PhysiologyLoadDefinition
@@ -301,11 +301,16 @@ legacyUnbodiedSpec = describe "legacy unbodied units (#2893)" $ do
                 present = saved "acolyte" [("endurance", 1.3), ("strength", 0.8)] []
             case physiologyLoadGate reg defs' 0 (pageOf [(1, present)]) of
                 Left errs → expectationFailure (show errs)
-                Right ([(_, units)], _) → case HM.lookup (UnitId 1) (usnInstances units) of
+                Right ([(_, units)], notes) → case HM.lookup (UnitId 1) (usnInstances units) of
                     Nothing → expectationFailure "unit vanished"
                     Just out → do
                         statOf' out "endurance" `shouldBe` Just 1.3
                         statOf' out "strength_base" `shouldBe` Just 0.8
+                        let backfillNotes = [note | norm ← notes, note ← pnNotes norm,
+                                "backfilled " `T.isPrefixOf` note]
+                        backfillNotes `shouldSatisfy` (not ∘ null)
+                        backfillNotes `shouldSatisfy`
+                            (all (not ∘ T.isInfixOf "endurance"))
                 Right _ → expectationFailure "unexpected page shape"
 
 stat ∷ Text → UnitInstanceSnapshot → IO Float
@@ -527,7 +532,7 @@ normalizationSpec = describe "D-6 normalization" $ do
             let h = 1.8 ∷ Float
                 preFrame = saved "acolyte"
                     ( [ ("height", h), ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56)
-                      , ("endurance", 1), ("stamina", 10) ]
+                      , ("strength", 1), ("endurance", 1), ("stamina", 10) ]
                       ⧺ seeds70 ) []
             shouldNormalize (gate1Bodied reg [("acolyte", richPhysiology)] preFrame) $ \(u', notes) → do
                 let frame = fromMaybe (-1) (statOf' u' "frame_mass")
@@ -535,7 +540,12 @@ normalizationSpec = describe "D-6 normalization" $ do
                 -- the legacy floors (0.44 h^2 fat, 4.4 h^2 lean) are the frame floors
                 abs (0.02 * frame - 0.44 * h * h) `shouldSatisfy` (< 1e-5)
                 abs (0.20 * frame - 4.4 * h * h) `shouldSatisfy` (< 1e-4)
-                length notes `shouldSatisfy` (>= 2)
+                notes `shouldSatisfy`
+                    (any ("reconstructed frame_mass" `T.isPrefixOf`))
+                notes `shouldContain`
+                    ["rebuilt missing body caches: strength_body,max_hydration,max_hunger,max_calories,carrying_capacity"]
+                notes `shouldContain`
+                    ["promoted strength to strength_base for stable body recomputation"]
                 gate1Bodied reg [("acolyte", richPhysiology)] u' `shouldBe` Right (u', [])
 
     describe "idempotence" $
