@@ -20,7 +20,9 @@ import Test.Headless.Unit.PhysiologyModes.Harness
 import Test.Headless.Unit.TransferApi (mkItem)
 import Unit.Physiology.Types
 import Unit.Types
-import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate)
+import World.Save.Physiology
+    ( PhysiologyLoadDefinition, PhysiologyNormalization(..)
+    , physiologyLoadDefinition, physiologyLoadGate )
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..), toUnitSnapshot)
 import World.Page.Types (WorldPageId(..))
 
@@ -193,18 +195,18 @@ injuredSeedSpec = describe "T-S11-5: the mood seed prices pain as the drift does
 
 -- | The canonical snapshot of unit 1 (seeded as a spawn would), the registry
 --   and the definitions, for the gate.
-gateInputs ∷ EngineEnv → IO (PhysiologyRegistry, HM.HashMap Text UnitPhysiology, UnitInstanceSnapshot)
+gateInputs ∷ EngineEnv → IO (PhysiologyRegistry, HM.HashMap Text PhysiologyLoadDefinition, UnitInstanceSnapshot)
 gateInputs env = do
     reg ← readShippedPhysiologyRegistry
     um ← readIORef (unitManagerRef env)
     inst ← readInstance env 1
     let snap = toUnitSnapshot (uiPage inst) um
-        defs = HM.map udPhysiology (umDefs um)
+        defs = HM.map physiologyLoadDefinition (umDefs um)
     case HM.lookup (UnitId 1) (usnInstances snap) of
         Just u → pure (reg, defs, u)
         Nothing → expectationFailure "no unit snapshot" >> error "unreachable"
 
-gate ∷ PhysiologyRegistry → HM.HashMap Text UnitPhysiology → Double → UnitInstanceSnapshot
+gate ∷ PhysiologyRegistry → HM.HashMap Text PhysiologyLoadDefinition → Double → UnitInstanceSnapshot
      → Either [Text] (UnitInstanceSnapshot, [Text])
 gate reg defs now u = case physiologyLoadGate reg defs now [(WorldPageId "p", UnitSnapshot (HM.singleton (UnitId 1) u) 10 mempty mempty)] of
     Left msgs → Left msgs

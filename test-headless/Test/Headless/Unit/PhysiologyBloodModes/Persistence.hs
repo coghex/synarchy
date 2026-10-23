@@ -31,7 +31,7 @@ import Equipment.Types (emptyEquipmentClassManager)
 import Infection.Types (emptyInfectionManager)
 import Item.Types (emptyItemManager)
 import Test.Headless.World.Save.Components.Fixture (minimalGlobals, page1)
-import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate, withoutRebuiltCaches)
+import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadDefinition, physiologyLoadGate, withoutRebuiltCaches)
 import World.Save.Snapshot (PageSnapshot(..), captureSessionSnapshot)
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..), fromUnitSnapshot)
 
@@ -218,7 +218,7 @@ malformedSpec = describe "a malformed dedicated volume" $
             let units = pgsUnits pg
                 only keep = units { usnInstances = HM.filterWithKey
                                       (\k _ → k ≡ UnitId keep) (usnInstances units) }
-                loadOf u = physiologyLoadGate reg (HM.map udPhysiology defs) 0
+                loadOf u = physiologyLoadGate reg (HM.map physiologyLoadDefinition defs) 0
                                [(page1, only u)]
             -- a Simulated unit with a NaN dedicated volume is rejected
             case loadOf 1 of

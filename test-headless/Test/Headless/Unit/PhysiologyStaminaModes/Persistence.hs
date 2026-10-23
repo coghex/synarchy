@@ -35,7 +35,7 @@ import Test.Headless.Unit.PhysiologyStaminaModes.Tuning
 import Test.Headless.World.Save.Components.Fixture (page1)
 import Unit.Physiology.Types
 import Unit.Types
-import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate)
+import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadDefinition, physiologyLoadGate)
 import World.Save.Snapshot (PageSnapshot(..))
 import World.Save.Types (fromUnitSnapshot)
 
@@ -306,7 +306,7 @@ malformedSpec = describe "malformed engagement markers reject the load" $ do
                         i { uiStats = HM.insert "combat_engaged" v (uiStats i)
                           , uiPage = page1 }
                     pg ← pageSnapshotOf env
-                    pure (physiologyLoadGate reg (HM.map udPhysiology defs) 0
+                    pure (physiologyLoadGate reg (HM.map physiologyLoadDefinition defs) 0
                               [(page1, pgsUnits pg)])
             forM_ [0, 3, -1, 0.5, 2.5, 1 / 0, 0 / 0] $ \bad → do
                 r ← gateWith bad
