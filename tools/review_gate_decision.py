@@ -64,8 +64,8 @@ and it keeps the whole merge in the object database -- no worktree, no
 index, nothing to clean up in the CI checkout this job shares with other
 steps, and no cost proportional to the size of the repository.
 
-It needs git >= 2.38, which is why `.github/ci/Dockerfile` takes git from
-the git-core PPA rather than Ubuntu 22.04's 2.34.
+It needs git >= 2.38. The CI image uses Ubuntu 26.04's packaged git, which
+meets that requirement without the former git-core PPA workaround.
 
 The replay base is the base revision AFTER actually incorporated
 (`merge-base(base, AFTER)`), never the base tip this checkout fetched.
@@ -159,8 +159,7 @@ STRIP = "strip"
 #:                 the object database: no worktree, no index, nothing
 #:                 to clean up in the CI checkout this job shares.
 #:
-#: Needs git >= 2.38, which is why .github/ci/Dockerfile installs git
-#: from the git-core PPA rather than taking Ubuntu 22.04's 2.34.
+#: Needs git >= 2.38, provided by Ubuntu 26.04's packaged git in the CI image.
 MERGE_TREE_FLAGS = ("merge-tree", "--write-tree")
 
 
