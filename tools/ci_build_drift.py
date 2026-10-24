@@ -312,8 +312,8 @@ def build_steps(runs: list[dict], chain: dict, chain_runs: frozenset[int] = froz
     """Ordered replay steps for the sampled runs, with state lifetimes.
 
     Each run record carries ``run_id``, ``snapshot`` (the relevant count CI
-    restored), ``base_count``, ``head`` and ``policy_snapshot`` (size -> relevant count, see
-    ``policy_snapshot``).
+    restored), ``base_count``, ``head`` and ``policy_snapshot`` (policy -> relevant count, see
+    ``restore_snapshot``).
     Each policy is replayed from the snapshot it would have restored, unless
     that snapshot is the restored one (identical to ``unsplit``) or the base
     (``own``).  ``chain_runs`` names runs whose
@@ -397,12 +397,6 @@ def writer_entries(records: list[dict], chain: dict) -> list[dict]:
     return sorted(out, key=lambda e: (e["position"], e["completed"]))
 
 
-def key_at(entries: list[dict], base_position: int) -> tuple | None:
-    """The key family and plan the base commit's own build used (newest writer at or before it)."""
-    before = [e for e in entries if e["position"] <= base_position]
-    return before[-1]["key"] if before else None
-
-
 POLICY_SIZES = (1, 2, 4, 8)
 
 
@@ -469,9 +463,11 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
         base = rec["merge"]["base"]
         full_base = next(c["sha"] for c in chain["commits"] if c["sha"].startswith(base))
         base_count = chain["index"][full_base]
-        bkey = key_at(entries, position[full_base])
+        # the restore ladder is built from the key the run itself requested (a pull request can change
+        # the dependency plan); the base only decides the epoch group
+        bkey = key_tuple(rec["dist"]["primary_key"])
         if bkey is None:
-            raise RuntimeError(f"run {run_id}: no master writer at or before its base {full_base[:9]}")
+            raise RuntimeError(f"run {run_id}: its logged primary key {rec['dist']['primary_key']!r} is not a dist-v3 key")
         started = rec["job_started_at"]
         policies = {str(size): restore_snapshot(published[size], bkey, base_count // size, started, base_count)
                     for size in POLICY_SIZES}
@@ -768,7 +764,6 @@ def check_restore_model() -> None:
     pub = published_snapshots(later, None)
     assert restore_snapshot(pub, KEY_A, 3, start, 419) == 419    # newest-created ready key, same compiled content
     assert restore_snapshot(pub, KEY_A, 5, start, 419) == 419    # exact key of the base commit itself
-    assert key_at(rotated, 1) == KEY_B
     assert key_tuple("dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-" + "a" * 64 + "-epoch-52") == KEY_A
 
 
@@ -847,6 +842,31 @@ def check_plan_invariants() -> None:
             run_steps(stub, again, {}, results)
         assert stub.built == ["state:417"] and "c417" in stub.states
         assert json.loads(results.read_text())["state:417"] == {"counts": {"old": 1}}
+
+
+def check_pr_changes_the_plan() -> None:
+    """A pull request that changes the dependency plan restores by the plan it requested."""
+    def key(plan: str, epoch: int = 52) -> str:
+        return f"dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-{plan * 64}-epoch-{epoch}"
+    chain = {"commits": [{"sha": f"s{n}"} for n in (416, 417, 418, 419)],
+             "index": {f"s{n}": n for n in (416, 417, 418, 419)}, "at": {n: f"s{n}" for n in (416, 417, 418, 419)}}
+    def push(run_id: int, sha: str, plan: str, done: str, saved: bool) -> dict:
+        k = key(plan)
+        return {"run_id": run_id, "event": "push", "head_sha": sha, "dist": {"primary_key": k, "matched_key": k},
+                "writer_ran": True, "saved_project_cache": saved, "published_key": k if saved else None,
+                "writer_completed_at": done}
+    # master alternates plans B, A, B, A; count 419's writer is unfinished when the PR starts
+    records = [push(1, "s416", "b", "2026-09-27T01:00:00Z", True), push(2, "s417", "a", "2026-09-27T02:00:00Z", True),
+               push(3, "s418", "b", "2026-09-27T03:00:00Z", False), push(4, "s419", "a", "2026-09-27T20:00:00Z", True)]
+    # the PR (base 419, plan A at its base) merges a dependency change: it requests plan C
+    pr = {"run_id": 9, "event": "pull_request", "attempt": 1, "job_started_at": "2026-09-27T12:00:00Z",
+          "merge": {"base": "s419", "head": "headsha"},
+          "dist": {"primary_key": key("c"), "matched_key": key("a")}}      # observed: the plan-A snapshot
+    run = make_plan(records + [pr], chain, [9])["runs"][0]
+    assert run["snapshot"] == 417 and run["policy_snapshot"]["8"] == 417, run
+    # sizes 1 and 2 and every push: no plan-C key exists, so the newest-created key of the same image wins (418)
+    assert run["policy_snapshot"]["1"] == 418 and run["policy_snapshot"]["2"] == 418, run
+    assert run["policy_snapshot"]["every"] == 418, run
 
 
 def check_plan_change_writer_lag() -> None:
@@ -976,6 +996,7 @@ def self_test() -> int:
     assert source_module("test-headless/Spec.hs") == ("Spec", "test") and source_module("README.md") is None
     check_restore_model()
     check_plan_change_writer_lag()
+    check_pr_changes_the_plan()
     check_plan_invariants()
     check_writer_evidence()
     print("ci_build_drift self-test: ok")

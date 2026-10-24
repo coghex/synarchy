@@ -70,7 +70,7 @@ def attribute(drift: frozenset, own: frozenset, unsplit: frozenset) -> dict:
         "residual": len(unsplit - union),
         # the same unsplit build under the opposite convention (own claims the overlap),
         # and with the overlap split evenly: the range the convention can move a share
-        "drift_own_first": len(unsplit - own),
+        "drift_own_first": len((unsplit & drift) - own),
         "own_own_first": len(unsplit & own),
         "drift_split": len((unsplit & drift) - own) + len(unsplit & drift & own) / 2,
         "own_split": len((unsplit & own) - drift) + len(unsplit & drift & own) / 2,
@@ -181,6 +181,12 @@ def per_run_rows(runs: list[dict], plan: dict, replay: dict) -> list[dict]:
             }
         rows.append(row)
     return rows
+
+
+def tolerance_violations(rows: list[dict]) -> list[tuple[int, str, float]]:
+    """(run, step group, relative error) wherever the union model misses the unsplit replay by over 5 %."""
+    return [(r["run_id"], group, r[group]["attribution"]["union_error"]) for r in rows for group in GROUPS
+            if abs(r[group]["attribution"]["union_error"]) > TOLERANCE]
 
 
 def calibrate(rows: list[dict]) -> dict:
@@ -319,7 +325,9 @@ def self_test() -> int:
     assert (a["drift"], a["own"], a["residual"], a["overlap"], a["cancelled"]) == (2, 1, 1, 1, 0), a
     assert a["drift"] + a["own"] + a["residual"] == a["unsplit"]
     assert a["drift_split"] + a["own_split"] + a["residual"] == a["unsplit"]
-    assert (a["drift_own_first"], a["own_own_first"]) == (2, 2)
+    assert (a["drift_own_first"], a["own_own_first"]) == (1, 2)
+    for convention in (("drift", "own"), ("drift_own_first", "own_own_first"), ("drift_split", "own_split")):
+        assert a[convention[0]] + a[convention[1]] + a["residual"] == a["unsplit"], (convention, a)
     cancelled = attribute(frozenset({("lib", "A")}), frozenset(), frozenset())
     assert cancelled["cancelled"] == 1 and cancelled["unsplit"] == 0 and cancelled["union_error"] == 0.0
 
@@ -349,6 +357,10 @@ def self_test() -> int:
     else:
         raise AssertionError("an unavailable snapshot must stop the projection")
 
+    ok = {"attribution": {"union_error": 0.049}}
+    assert tolerance_violations([{"run_id": 1, "lib_exe": ok, "tests": ok}]) == []
+    off = {"attribution": {"union_error": -0.06}}
+    assert tolerance_violations([{"run_id": 2, "lib_exe": ok, "tests": off}]) == [(2, "tests", -0.06)]
     sample = {"runs": [{"run_id": 1}, {"run_id": 2}]}
     try:
         per_run_rows([], sample, {"unsplit:2": {"modules": {}}})
@@ -486,6 +498,10 @@ def main(argv: list[str] | None = None) -> int:
     opt = json.loads(args.opt.read_text()) if args.opt else None
     text = render(runs, plan, rows, fits, lanes, opt)
     (args.out.write_text(text) if args.out else print(text))
+    bad = tolerance_violations(rows)
+    if bad:
+        print(f"attribution model misses the unsplit replay by more than {TOLERANCE:.0%}: {bad}", file=sys.stderr)
+        return 1
     return 0
 
 
