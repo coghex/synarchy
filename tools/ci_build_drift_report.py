@@ -26,6 +26,7 @@ import argparse
 import json
 import math
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -139,12 +140,14 @@ def policy_sets(plan_run: dict, replay: dict, group: str) -> dict:
     """
     rid, sigma, base = plan_run["run_id"], plan_run["snapshot"], plan_run["base_count"]
     unsplit = module_set(replay[f"unsplit:{rid}"], group)
-    drift = module_set(replay.get(f"drift:{sigma}:{base}"), group) if base != sigma else frozenset()
-    own = module_set(replay.get(f"own:{rid}"), group) if base != sigma else unsplit
+    # a missing measurement is an error, never an implicit zero
+    drift = module_set(replay[f"drift:{sigma}:{base}"], group) if base != sigma else frozenset()
+    own = module_set(replay[f"own:{rid}"], group) if base != sigma else unsplit
     out = {"unsplit": unsplit, "drift": drift, "own": own}
     for size, snap in plan_run["policy_snapshot"].items():
         if snap is None:
-            out[f"size{size}"] = None
+            raise ValueError(f"run {rid}: no snapshot available under policy {size} (a cold build is not "
+                             "modelled); every policy must project the same runs")
         elif snap == sigma:
             out[f"size{size}"] = unsplit
         elif snap == base:
@@ -201,11 +204,13 @@ def project(rows: list[dict], fits: dict, policies: dict[str, tuple[str, float]]
         for r in rows:
             counts = {g: r[g]["policy"].get(key) for g in GROUPS}
             if any(v is None for v in counts.values()):
-                continue
+                raise ValueError(f"run {r['run_id']}: no module count under policy {name!r}")
             lib = estimate(fits["lib_exe"], counts["lib_exe"])
             tests = estimate({**fits["tests"], "slope": fits["tests"]["slope"] * tests_scale},
                              counts["tests"])
             per_run.append({"run_id": r["run_id"], "lib_exe": lib, "tests": tests, "total": lib + tests})
+        if len(per_run) != len(rows):
+            raise ValueError(f"policy {name!r} projects {len(per_run)} of {len(rows)} runs")
         totals = [x["total"] for x in per_run]
         out[name] = {"per_run": per_run, "n": len(totals),
                      "median": percentile(totals, 0.5), "p95": percentile(totals, 0.95),
@@ -213,6 +218,9 @@ def project(rows: list[dict], fits: dict, policies: dict[str, tuple[str, float]]
     return out
 
 
+KEY_RE = re.compile(
+    r"^dist-v3-(?P<os>\w+)-(?P<image>\S+?)-ghc-(?P<ghc>[\d.]+)-cabal-(?P<cabal>[\d.]+)-"
+    r"(?P<plan>[0-9a-f]{64})-epoch-(?P<epoch>\d+)$")
 LANES = ("rest", "world")
 LANE_JOB = "headless-lanes ({})"
 LANE_BUILD = "Build headless test suite"
@@ -278,7 +286,7 @@ def whole_run(rows: list[dict], runs: list[dict], fits: dict, lanes: dict, polic
         counts = {g: row[g]["policy"].get(policy) for g in GROUPS}
         base_counts = {g: row[g]["policy"]["size8"] for g in GROUPS}
         if any(v is None for v in counts.values()):
-            continue
+            raise ValueError(f"run {row['run_id']}: no module count under policy {policy!r}")
         lib = estimate(fits["lib_exe"], counts["lib_exe"])
         tests = estimate({**fits["tests"], "slope": fits["tests"]["slope"] * tests_scale}, counts["tests"])
         lib_base = estimate(fits["lib_exe"], base_counts["lib_exe"])
@@ -323,6 +331,22 @@ def self_test() -> int:
     lo, hi = bootstrap(data, 0.5)
     assert 1 <= lo <= 3 <= hi <= 5
 
+    plan_run = {"run_id": 1, "snapshot": 417, "base_count": 419,
+                "policy_snapshot": {"8": 417, "1": 418}}
+    replay = {"unsplit:1": {"modules": {}}, "own:1": {"modules": {}}}
+    for broken, why in ((replay, "missing drift"), ({**replay, "drift:417:419": {"modules": {}}}, "missing build")):
+        try:
+            policy_sets(plan_run, broken, "lib_exe")
+        except KeyError:
+            continue
+        raise AssertionError(f"policy_sets accepted {why}")
+    try:
+        policy_sets({**plan_run, "policy_snapshot": {"1": None}}, {**replay, "drift:417:419": {"modules": {}}}, "lib_exe")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unavailable snapshot must stop the projection")
+
     res = {"modules": {"lib": ["A"], "synarchy-test-headless": ["T"]}}
     assert module_set(res, "lib_exe") == {("lib", "A")} and module_set(None, "tests") == frozenset()
     print("ci_build_drift_report self-test: ok")
@@ -349,6 +373,18 @@ def render(runs: list[dict], plan: dict, rows: list[dict], fits: dict, lanes: di
           f"| {rec['epoch']['position']}/8 | {p['snapshot']} (`{p['snapshot_sha'][:9]}`) "
           f"| {p['base_count']} (`{p['base'][:9]}`) | {rec['attempt']} "
           f"| {row['lib_exe_seconds']} | {row['test_suite_seconds']} |")
+    w("\n### Provenance of each sampled run\n")
+    w("| Run | Attempt | Tested head | PR base | Merge tree | Image | Toolchain | Plan | Snapshot (writer run, commit) | Restore |")
+    w("|---|---:|---|---|---|---|---|---|---|---|")
+    for p in plan["runs"]:
+        key = KEY_RE.match(p.get("restored_key") or "")
+        primary = KEY_RE.match(p.get("primary_key") or "")
+        k = key.groupdict() if key else {"image": "?", "ghc": "?", "cabal": "?", "plan": "?", "epoch": "?"}
+        restore = "exact" if p.get("restored_key") == p.get("primary_key") else \
+            f"prefix (wanted epoch {primary['epoch'] if primary else '?'}, plan {primary['plan'][:8] if primary else '?'})"
+        w(f"| {p['run_id']} | {p['attempt']} | `{p['head'][:12]}` | `{p['base'][:12]}` | `{(p.get('tested_tree') or '?')[:12]}` "
+          f"| `{k['image'].rsplit(':', 1)[-1]}` | ghc {k['ghc']}, cabal {k['cabal']} | `{k['plan'][:8]}` e{k['epoch']} "
+          f"| {p['snapshot_writer_run']}, `{p['snapshot_sha'][:9]}` | {restore} |")
     for group, title in (("lib_exe", "Library and executables"), ("tests", "Headless test suite")):
         w(f"\n### Recompiled modules: {title}\n")
         w("| Run | D drift replay | O own replay | overlap | D∪O | U unsplit | cancelled | residual | (D∪O−U)/U |")
@@ -386,7 +422,8 @@ def render(runs: list[dict], plan: dict, rows: list[dict], fits: dict, lanes: di
         w(f"| {row['run_id']} | {observed} | {fixed:.0f} | {drift:.0f} | {own:.0f} | {resid:.0f} |")
     scale = (opt or {})
     policies = {"today (size 8)": ("size8", 1.0), "size 4": ("size4", 1.0), "size 2": ("size2", 1.0),
-                "size 1": ("size1", 1.0), "ideal every push": ("own", 1.0)}
+                "size 1": ("size1", 1.0), "every successful push": ("sizeevery", 1.0),
+                "ideal every push (lower bound)": ("own", 1.0)}
     for level in ("O1", "O0"):
         if level in scale:
             policies[f"suites -{level}"] = ("size8", scale[level]["compile_cpu_ratio"])
@@ -395,10 +432,10 @@ def render(runs: list[dict], plan: dict, rows: list[dict], fits: dict, lanes: di
             policies[f"size 1 + suites -{level}"] = ("size1", scale[level]["compile_cpu_ratio"])
     proj = project(rows, fits, policies)
     w("\n### Projected build seconds per run (library+exe step plus suites step)\n")
-    w("| Policy | median | 90% CI | p95 | 90% CI |")
-    w("|---|---:|---|---:|---|")
+    w("| Policy | runs | median | 90% CI | p95 | 90% CI |")
+    w("|---|---:|---:|---|---:|---|")
     for name, v in proj.items():
-        w(f"| {name} | {fmt_s(v['median'])} | {fmt_s(v['median_ci90'][0])}-{fmt_s(v['median_ci90'][1])} "
+        w(f"| {name} | {v['n']} | {fmt_s(v['median'])} | {fmt_s(v['median_ci90'][0])}-{fmt_s(v['median_ci90'][1])} "
           f"| {fmt_s(v['p95'])} | {fmt_s(v['p95_ci90'][0])}-{fmt_s(v['p95_ci90'][1])} |")
     w("\n### Projected whole-run wall time (lane jobs of #2745)\n")
     w("| Policy | lane run | median | p95 | critical job |")

@@ -33,7 +33,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import io
 import json
 import re
 import shutil
@@ -128,7 +130,29 @@ def job_seconds(job: dict) -> dict:
             return None
         return int((parse_time(item["completed_at"]) - parse_time(item["started_at"])).total_seconds())
     return {"seconds": span(job), "conclusion": job.get("conclusion"),
+            "completed_at": job.get("completed_at"),
             "steps": {s["name"]: span(s) for s in job["steps"] if s.get("conclusion") == "success"}}
+
+
+WRITER_JOB = "project-cache"
+
+
+def writer_evidence(job: dict, all_jobs: list[dict]) -> dict:
+    """Whether this run could write the project cache, whether it did, and when it finished.
+
+    Since #2745 a separate ``project-cache`` job, after the verdict, saves the
+    snapshot; before it, the ``test-and-audits`` job's own save step did.  Both
+    workflows are read: the writer job is the ``project-cache`` job when the run
+    has one, otherwise the audit job.
+    """
+    writer = next((j for j in all_jobs if j["name"] == WRITER_JOB), None)
+    if writer is not None:
+        ran = writer.get("conclusion") == "success"
+        saved = any(s["name"] == STEP_SAVE and s.get("conclusion") == "success" for s in writer["steps"])
+        return {"writer_ran": ran, "saved_project_cache": saved, "writer_completed_at": writer.get("completed_at")}
+    saved = any(s["name"] == STEP_SAVE and s.get("conclusion") == "success" for s in job["steps"])
+    return {"writer_ran": job.get("conclusion") == "success", "saved_project_cache": saved,
+            "writer_completed_at": job.get("completed_at")}
 
 
 def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = None) -> dict:
@@ -148,7 +172,7 @@ def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = No
         "job_completed_at": job["completed_at"],
         "lib_exe_seconds": step_seconds(steps.get(STEP_LIB)),
         "test_suite_seconds": step_seconds(steps.get(STEP_TESTS)),
-        "saved_project_cache": (steps.get(STEP_SAVE) or {}).get("conclusion") == "success",
+        **writer_evidence(job, all_jobs or [job]),
         **facts,
     }
 
@@ -158,6 +182,11 @@ def gh_api(path: str, *extra: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"gh api {path} failed: {proc.stderr.strip()}")
     return proc.stdout
+
+
+def log_cache_path(cache_dir: Path, run_id: int, job_id: int) -> Path:
+    # a rerun is a new job with new timestamps and cache lines: never reuse another attempt's log
+    return cache_dir / f"log_{run_id}_{job_id}.txt"
 
 
 def collect(repo: str, since: str, until: str, cache_dir: Path, jobs_only: bool = False) -> list[dict]:
@@ -179,7 +208,7 @@ def collect(repo: str, since: str, until: str, cache_dir: Path, jobs_only: bool 
         if jobs_only:
             records.append(run_record(run, job, "", jobs["jobs"]))
             continue
-        log_path = cache_dir / f"log_{run['databaseId']}.txt"
+        log_path = log_cache_path(cache_dir, run["databaseId"], job["id"])
         if not log_path.exists():
             log_path.write_text(gh_api(f"repos/{repo}/actions/jobs/{job['id']}/logs"))
         records.append(run_record(run, job, log_path.read_text(), jobs["jobs"]))
@@ -193,7 +222,7 @@ def snapshot_writers(records: list[dict]) -> dict[str, list[dict]]:
         if rec["event"] == "push" and rec["saved_project_cache"] and rec["dist"]:
             writers.setdefault(rec["dist"]["primary_key"], []).append(
                 {"run_id": rec["run_id"], "sha": rec["head_sha"],
-                 "completed_at": rec["job_completed_at"]})
+                 "completed_at": rec["writer_completed_at"]})
     return writers
 
 
@@ -301,12 +330,13 @@ def build_steps(runs: list[dict], chain: dict, chain_runs: frozenset[int] = froz
     for run in sorted(runs, key=lambda r: (r["base_count"], r["run_id"])):
         rid, sigma, base = run["run_id"], run["snapshot"], run["base_count"]
         tested = {"commit": f"tested:{rid}"}
-        pending_save = {"id": f"drift:{sigma}:{base}", "commit": at[base], "save_as": plan_state_name(base)}
-        if base != sigma:
-            if plan_state_name(base) in live and pending_save["id"] in done:
-                pass
-            elif pending_save["id"] not in done and plan_state_name(base) not in live:
-                add(pending_save, wants=sigma)
+        drift_id = f"drift:{sigma}:{base}"
+        if base != sigma and drift_id not in done and not any(st["id"] == drift_id for st in steps):
+            # one measurement per (snapshot, base) pair, whether or not the base state already exists
+            drift = {"id": drift_id, "commit": at[base]}
+            if plan_state_name(base) not in live:
+                drift["save_as"] = plan_state_name(base)
+            add(drift, wants=sigma)
         for count in (range(sigma + 2, base + 1) if rid in chain_runs else ()):
             add({"id": f"chain:{count - 1}:{count}", "commit": at[count]}, wants=count - 1)
         if base != sigma:
@@ -339,28 +369,45 @@ def plan_floor(count: int, plan_by_count: dict[int, str]) -> int:
 
 
 def writer_completion(records: list[dict], chain: dict) -> dict[int, dt.datetime]:
-    """When the first master job for each build-relevant commit finished writing.
+    """When the first successful master writer job finished, per relevant count.
 
-    Only the commit that made a relevant count writes that count's snapshot
-    under 'a snapshot per successful push'; later non-relevant pushes at the
-    same count restore it.
+    A key is written by the first eligible successful job that finds it absent,
+    so any push at a count (the commit that made it or a later one with no
+    build-relevant change) can seed it; the earliest finish wins.
     """
     done: dict[int, dt.datetime] = {}
     for rec in records:
         count = chain["index"].get(rec["head_sha"])
-        if rec["event"] != "push" or not rec["dist"] or count is None:
+        if rec["event"] != "push" or not rec["dist"] or not rec["writer_ran"] or count is None:
             continue
-        if chain["at"].get(count) != rec["head_sha"]:
-            continue
-        when = parse_time(rec["job_completed_at"])
+        when = parse_time(rec["writer_completed_at"])
         done[count] = min(done.get(count, when), when)
     return done
 
 
-def latest_written(base: int, started_at: str, written: dict[int, dt.datetime]) -> int | None:
-    """Newest snapshot (relevant count <= base) already written when a run started."""
+def push_snapshots(records: list[dict], chain: dict) -> list[tuple[int, int, dt.datetime]]:
+    """Every successful master writer job as (first-parent position, relevant count, finish)."""
+    position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
+    out = []
+    for rec in records:
+        if rec["event"] == "push" and rec["dist"] and rec["writer_ran"] and rec["head_sha"] in position:
+            out.append((position[rec["head_sha"]], chain["index"][rec["head_sha"]],
+                        parse_time(rec["writer_completed_at"])))
+    return sorted(out)
+
+
+def every_push_snapshot(base_position: int, started_at: str, floor: int,
+                        pushes: list[tuple[int, int, dt.datetime]]) -> int | None:
+    """Relevant count of the newest snapshot 'a snapshot per successful master push' has ready.
+
+    Each push writes its own snapshot, whether or not it changed anything
+    build-relevant.  A pull request restores the newest one written at or before
+    its base commit that finished before the run started and shares the base's
+    dependency plan.
+    """
     started = parse_time(started_at)
-    ready = [count for count, when in written.items() if count <= base and when <= started]
+    ready = [count for position, count, when in pushes
+             if position <= base_position and when <= started and count >= floor]
     return max(ready) if ready else None
 
 
@@ -392,8 +439,8 @@ def policy_snapshot(size: int, base: int, started_at: str, floor: int,
 
 def make_plan(records: list[dict], chain: dict, run_ids: list[int],
               chain_ids: list[int] = (), done: frozenset[str] = frozenset(),
-              existing: frozenset[str] = frozenset()) -> dict:
-    """Sample plan: per run, the restored snapshot, base, head and plan floor."""
+              existing: frozenset[str] = frozenset(), repo: Path | None = None) -> dict:
+    """Sample plan: per run, the restored snapshot, base, head, tested tree and policy snapshots."""
     writers = snapshot_writers(records)
     plan_by_count: dict[int, str] = {}
     for rec in records:
@@ -402,6 +449,8 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
             if key and chain["commits"][0]:
                 plan_by_count[chain["index"][rec["head_sha"]]] = key["plan"]
     written = writer_completion(records, chain)
+    pushes = push_snapshots(records, chain)
+    position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
     by_id = {r["run_id"]: r for r in records}
     runs = []
     for run_id in run_ids:
@@ -411,13 +460,21 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
             raise RuntimeError(f"run {run_id}: no identifiable restored snapshot")
         base = rec["merge"]["base"]
         full_base = next(c["sha"] for c in chain["commits"] if c["sha"].startswith(base))
-        runs.append({"run_id": run_id, "snapshot": chain["index"][snap["sha"]],
-                     "snapshot_sha": snap["sha"], "base": full_base,
+        floor = plan_floor(chain["index"][full_base], plan_by_count)
+        policies = {str(size): policy_snapshot(size, chain["index"][full_base], rec["job_started_at"],
+                                               floor, written) for size in POLICY_SIZES}
+        policies["every"] = every_push_snapshot(position[full_base], rec["job_started_at"], floor, pushes)
+        runs.append({"run_id": run_id, "attempt": rec["attempt"], "snapshot": chain["index"][snap["sha"]],
+                     "snapshot_sha": snap["sha"], "snapshot_writer_run": snap["run_id"], "base": full_base,
                      "base_count": chain["index"][full_base], "head": rec["merge"]["head"],
-                     "policy_snapshot": {
-                         str(size): policy_snapshot(size, chain["index"][full_base], rec["job_started_at"],
-                                                    plan_floor(chain["index"][full_base], plan_by_count), written)
-                         for size in POLICY_SIZES}})
+                     "tested_tree": (git(repo, "merge-tree", "--write-tree", full_base, rec["merge"]["head"])
+                                     .splitlines()[0] if repo else None),
+                     "restored_key": rec["dist"]["matched_key"], "primary_key": rec["dist"]["primary_key"],
+                     "policy_snapshot": policies})
+    missing = [(r["run_id"], k) for r in runs for k, v in r["policy_snapshot"].items() if v is None]
+    if missing:
+        raise RuntimeError(f"no snapshot available under some policy (cold build): {missing}; "
+                           "model the cold build or drop the run from every policy alike")
     return {"runs": runs, "steps": build_steps(runs, chain, frozenset(chain_ids), done, existing)}
 
 
@@ -549,6 +606,9 @@ class Replay:
         if name is not None:
             subprocess.run(["cp", "-Rpc", str(self.state_dir / name), str(self.dist)], check=True)
 
+    def has_state(self, name: str) -> bool:
+        return (self.state_dir / name).exists()
+
     def save(self, name: str) -> None:
         target = self.state_dir / name
         if not target.exists():
@@ -582,22 +642,30 @@ class Replay:
 
 def run_steps(replay: Replay, steps: list[dict], tested: dict[str, str],
               results_path: Path) -> None:
-    """Execute plan steps in order, skipping those already recorded.
+    """Execute plan steps in order.
 
+    A step with a recorded result is skipped, except a state-producing step
+    whose saved state is gone (dropped after use): that one runs again to
+    recreate the state, and its recorded measurement is kept, not replaced.
     ``tested`` maps ``tested:<run>`` placeholders to the reconstructed merge
     commits.  A state is dropped after the last step that restores it.
     """
     results = json.loads(results_path.read_text()) if results_path.exists() else {}
     for step in steps:
         sid = step["id"]
-        if sid not in results:
+        measured = sid in results
+        rebuild = bool(step.get("save_as")) and not replay.has_state(step["save_as"])
+        if not measured or rebuild:
             replay.restore(step["from"])  # None starts from nothing: a cold build
             commit = tested.get(step["commit"], step["commit"])
-            results[sid] = replay.build(sid, commit)
+            result = replay.build(sid, commit)
             if step.get("save_as"):
                 replay.save(step["save_as"])
-            results_path.write_text(json.dumps(results, indent=1))
-            print(f"{sid}: {results[sid]['counts']} in {results[sid]['wall_seconds']}s", flush=True)
+            if not measured:
+                results[sid] = result
+                results_path.write_text(json.dumps(results, indent=1))
+            print(f"{sid}: {result['counts']} in {result['wall_seconds']}s"
+                  f"{' (state rebuilt, recorded measurement kept)' if measured else ''}", flush=True)
         for name in step.get("drop_after", []):
             replay.drop(name)
 
@@ -640,18 +708,46 @@ def check_policy_snapshot() -> None:
     assert policy_snapshot(8, 413, start, 413, written) is None  # nothing written at or after the plan floor
 
 
+class StubReplay:
+    """Records what the executor does to saved states; builds nothing."""
+
+    def __init__(self, states: set[str]):
+        self.states, self.restored, self.built = set(states), [], []
+
+    def has_state(self, name: str) -> bool:
+        return name in self.states
+
+    def restore(self, name: str | None) -> None:
+        assert name is None or name in self.states, f"restoring missing state {name}"
+        self.restored.append(name)
+
+    def build(self, label: str, commit: str) -> dict:
+        self.built.append(label)
+        return {"label": label, "commit": commit, "wall_seconds": 0.0, "modules": {}, "counts": {}}
+
+    def save(self, name: str) -> None:
+        self.states.add(name)
+
+    def drop(self, name: str) -> None:
+        self.states.discard(name)
+
+
 def check_plan_invariants() -> None:
     """Every step restores a state an earlier step (or the disk) provided and has not dropped."""
     chain = {"at": {n: f"sha{n}" for n in range(410, 436)}}
+
     def snaps(sigma: int, base: int, **over: int) -> dict:
         return {"snapshot": sigma, "base_count": base,
                 "policy_snapshot": {"1": over.get("one", base), "2": over.get("two", sigma),
-                                    "4": over.get("four", sigma), "8": sigma}}
+                                    "4": over.get("four", sigma), "8": sigma,
+                                    "every": over.get("every", base)}}
     runs = [{"run_id": 1, **snaps(417, 417)},
-            {"run_id": 2, **snaps(417, 419, one=418, two=418)},
-            {"run_id": 3, **snaps(420, 423, one=422, two=422)},
-            {"run_id": 4, **snaps(424, 430, two=430, four=428)}]
-    for done, existing in ((frozenset(), frozenset({"c417"})),
+            {"run_id": 2, **snaps(417, 419, one=418, two=418, every=418)},
+            {"run_id": 3, **snaps(420, 423, one=422, two=422, every=422)},
+            {"run_id": 4, **snaps(424, 430, two=430, four=428)},
+            # the same base 419 as run 2 but another restored snapshot (418 instead of 417)
+            {"run_id": 5, **snaps(418, 419)}]
+    for done, existing in ((frozenset(), frozenset({"c417", "c418"})),
                            (frozenset({"unsplit:1", "drift:417:419"}), frozenset())):
         steps = build_steps(runs, chain, frozenset({2}), done, existing)
         provided = set(existing)
@@ -662,6 +758,62 @@ def check_plan_invariants() -> None:
             provided.difference_update(step.get("drop_after", []))
         ids = [step["id"] for step in steps]
         assert len(set(ids)) == len(ids) and not set(ids) & done, ids
+    # every (snapshot, base) pair is measured, even when the base state already exists
+    steps = build_steps(runs, chain, frozenset(), frozenset(), frozenset({"c417", "c418"}))
+    ids = {step["id"] for step in steps}
+    assert {"drift:417:419", "drift:418:419"} <= ids, sorted(ids)
+
+    # planner and executor together: a completed sample whose saved states were dropped
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        results = Path(tmp) / "replay.json"
+        results.write_text(json.dumps({"unsplit:1": {"counts": {}}, "drift:417:419": {"counts": {"kept": 1}}}))
+        steps = build_steps(runs, chain, frozenset(), frozenset({"unsplit:1", "drift:417:419"}), frozenset())
+        stub = StubReplay(set())
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_steps(stub, steps, {f"tested:{i}": f"merge{i}" for i in range(1, 6)}, results)
+        recorded = json.loads(results.read_text())
+        assert recorded["drift:417:419"] == {"counts": {"kept": 1}}, "a rebuilt state must not replace its measurement"
+        assert all(i in recorded for i in ("own:2", "unsplit:5", "drift:418:419")), sorted(recorded)
+        # a state-producing step that already has a result but lost its state runs again
+        again = [{"id": "state:417", "from": None, "commit": "sha417", "save_as": "c417"}]
+        results.write_text(json.dumps({"state:417": {"counts": {"old": 1}}}))
+        stub = StubReplay(set())
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_steps(stub, again, {}, results)
+        assert stub.built == ["state:417"] and "c417" in stub.states
+        assert json.loads(results.read_text())["state:417"] == {"counts": {"old": 1}}
+
+
+def check_writer_evidence() -> None:
+    def job(name: str, conclusion: str, done: str, saved: bool = False) -> dict:
+        steps = [{"name": STEP_SAVE, "conclusion": "success" if saved else "skipped"}]
+        return {"name": name, "conclusion": conclusion, "completed_at": done, "steps": steps}
+    audit = job(JOB_NAME, "success", "2026-09-27T13:00:00Z", saved=True)
+    # historical workflow: the audit job wrote the snapshot
+    old = writer_evidence(audit, [audit])
+    assert old == {"writer_ran": True, "saved_project_cache": True, "writer_completed_at": "2026-09-27T13:00:00Z"}
+    # current workflow: the separate project-cache job writes it, later
+    audit2 = job(JOB_NAME, "success", "2026-10-20T13:00:00Z", saved=False)
+    writer = job(WRITER_JOB, "success", "2026-10-20T13:12:00Z", saved=True)
+    new = writer_evidence(audit2, [audit2, writer])
+    assert new == {"writer_ran": True, "saved_project_cache": True, "writer_completed_at": "2026-10-20T13:12:00Z"}, new
+    skipped = writer_evidence(audit2, [audit2, job(WRITER_JOB, "skipped", "2026-10-20T13:13:00Z")])
+    assert skipped["writer_ran"] is False and skipped["saved_project_cache"] is False
+    assert job_seconds({"name": "x", "started_at": "2026-10-20T13:00:00Z", "completed_at": "2026-10-20T13:01:00Z",
+                        "steps": []})["completed_at"] == "2026-10-20T13:01:00Z"
+    assert log_cache_path(Path("c"), 5, 7) != log_cache_path(Path("c"), 5, 8)  # a rerun is a different job
+
+
+def check_every_push() -> None:
+    def when(hour: int) -> dt.datetime:
+        return dt.datetime(2026, 9, 27, hour, tzinfo=dt.timezone.utc)
+    # positions are first-parent order; count 418 has a later docs-free push (position 5) at the same count
+    pushes = [(1, 417, when(2)), (2, 418, when(7)), (3, 419, when(20)), (5, 419, when(9))]
+    start = "2026-09-27T12:00:00Z"
+    assert every_push_snapshot(3, start, 412, pushes) == 418    # 419's own push finished after the run started
+    assert every_push_snapshot(5, start, 412, pushes) == 419    # a later push at the same count had finished
+    assert every_push_snapshot(2, start, 419, pushes) is None   # nothing at or after the plan floor
 
 
 def self_test() -> int:
@@ -690,7 +842,8 @@ def self_test() -> int:
 
     def push(run_id: int, done: str, saved: bool) -> dict:
         return {"run_id": run_id, "event": "push", "created_at": done, "head_sha": f"sha{run_id}",
-                "saved_project_cache": saved, "job_completed_at": done, "dist": {"primary_key": key}}
+                "saved_project_cache": saved, "writer_ran": True, "writer_completed_at": done,
+                "job_completed_at": done, "dist": {"primary_key": key}}
 
     records = [push(1, "2026-09-24T20:30:00Z", True), push(2, "2026-09-26T01:00:00Z", False),
                push(3, "2026-09-27T01:40:00Z", True)]
@@ -710,6 +863,8 @@ def self_test() -> int:
     assert source_module("test-headless/Spec.hs") == ("Spec", "test") and source_module("README.md") is None
     check_policy_snapshot()
     check_plan_invariants()
+    check_writer_evidence()
+    check_every_push()
     print("ci_build_drift self-test: ok")
     return 0
 
@@ -761,7 +916,8 @@ def main(argv: list[str] | None = None) -> int:
         done = frozenset(json.loads(args.resume.read_text())) if args.resume else frozenset()
         existing = frozenset(p.name for p in args.state_dir.iterdir()
                              if re.fullmatch(r"c\d+", p.name)) if args.state_dir else frozenset()
-        plan = make_plan(json.loads(args.runs.read_text()), chain, args.ids, args.chain_ids, done, existing)
+        plan = make_plan(json.loads(args.runs.read_text()), chain, args.ids, args.chain_ids, done, existing,
+                         args.worktree)
         args.out.write_text(json.dumps(plan, indent=1))
         print(f"{len(plan['runs'])} runs, {len(plan['steps'])} steps -> {args.out}")
         return 0
