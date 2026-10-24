@@ -343,6 +343,14 @@ differs.
 | 5 | Split the largest test modules | **~0 s** | **not worth doing** | top 20 are 22.6% of CPU but the 4-vCPU schedule is CPU-bound with 270–484 modules queued, not tail-bound |
 | 6 | Move engine-free specs into a separately linked component | **−41 s** (adds one link; avoids 0 recompiles) | **harmful** | a second link on every run |
 
+**Rank 1, measured (#2746).** [`ci_build_drift_measurement.md`](ci_build_drift_measurement.md)
+replays 17 pull-request builds and picks between the two mechanisms: a snapshot
+on every build-relevant master change (`EPOCH_SIZE = 1`) is the one that moves
+the median; lowering `EPOCH_SIZE` to 2 or 4 does not. It also measures rank 2
+(`-O1` −12 % suite compile CPU; `-O0` +23 % at today's suite, which this
+section's −46.4 % does not reproduce) and finds the cascades run through hub
+type modules other than `Engine.Core.State`.
+
 **On rank 2.** The dossier records `-O0` vs `-O2` as measured with no
 effect (106 s vs 111 s). That does not reconcile with the phase split,
 and a controlled re-measurement disagrees. Four forced full rebuilds of
