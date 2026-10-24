@@ -21,7 +21,7 @@ other Ubuntu, those packages and everything depending on them rebuild.
 | `ubuntu24.04-x86_64-ghc9.12.2-<sha256>` | Immutable: one image per resolved plan, pushed once and never overwritten. `<sha256>` is the sha256 of the producer's `plan.json`. |
 
 The immutable tag is not an Actions cache key. CI's cache resolves its
-plan inside the 22.04 CI image, so its hashes differ.
+plan inside the 26.04 CI image, so its hashes differ.
 
 `.github/workflows/deps-image.yml` publishes on pushes to master only;
 pull requests never publish. An unchanged plan publishes nothing.
