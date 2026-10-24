@@ -84,6 +84,9 @@ def expected_pack(name: str) -> tuple[list[dict], set[str]]:
     def lifecycle_paths(decl: dict) -> list[str]:
         out = list(decl.get("construction") or [])
         out += list((decl.get("destruction") or {}).get("frames") or [])
+        # #2516: a lifecycle may pair every frame with its own facemap.
+        out += list(decl.get("construction_facemaps") or [])
+        out += list((decl.get("destruction") or {}).get("facemaps") or [])
         return out
 
     for kind, base in pieces.items():
@@ -118,11 +121,14 @@ def expected_pack(name: str) -> tuple[list[dict], set[str]]:
                                       for c in WALL_CAPS}})
     for cname, entry in conns.items():
         tex = entry if isinstance(entry, str) else entry["texture"]
-        named.update([tex, doc["facemap"]])
+        # #2516: each connection declares its OWN facemap; a scalar entry
+        # declares none.
+        face = None if isinstance(entry, str) else entry.get("facemap")
+        named.update(p for p in [tex, face] if p)
         if isinstance(entry, dict):
             named.update(lifecycle_paths(entry))
         apps.append({"identity": f"wire:{cname}", "texture": tex,
-                     "facemaps": {None: doc["facemap"]}})
+                     "facemaps": {None: face}})
     return apps, named
 
 

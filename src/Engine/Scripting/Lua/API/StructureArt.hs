@@ -142,7 +142,7 @@ structureRegisterPackArtFn env = do
             -- catalogue still reports the same fault by the same rule.
             sizes ← if any (escapingPath ∘ aaPath) (declaredAssets reg0)
                         then pure HM.empty
-                        else Lua.liftIO (measureSequences (parFrames reg0))
+                        else Lua.liftIO (measureSequences reg0)
             let reg = reg0 { parSizes = sizes }
             (outcome, cat) ← Lua.liftIO $
                 atomicModifyIORef' (rhStructureArtCatalogRef
@@ -456,11 +456,13 @@ structureRegisterPackArtFn env = do
                           when (escapingPath tex) $
                               Left (escapeFault pack role tex)
                           texH   ← need "texHandle" mTexH
-                          frames ← eFrames
+                          framePairs ← eFrames
+                          (frames, faces) ← splitPairs pack role framePairs
                           pure ( ak
                                , ConstructionSequence
                                    { csStatic = ArtAsset tex texH
-                                   , csFrames = V.fromList frames } )
+                                   , csFrames = V.fromList frames
+                                   , csFacemaps = V.fromList <$> faces } )
       where
         seqFault mKind role =
             fault pack mKind
@@ -607,12 +609,14 @@ structureRegisterPackArtFn env = do
                               _ → Left (wreckFault (Just kind)
                                           (role <> " fps")
                                           "the entry has no `fps` number")
-                          frames ← eFrames
+                          framePairs ← eFrames
+                          (frames, faces) ← splitPairs pack role framePairs
                           pure ( ak
                                , DestructionSequence
                                    { dsStatic = ArtAsset tex texH
                                    , dsFrames = V.fromList frames
-                                   , dsFps    = fps } )
+                                   , dsFps    = fps
+                                   , dsFacemaps = V.fromList <$> faces } )
       where
         wreckFault mKind role =
             fault pack mKind
@@ -624,7 +628,8 @@ structureRegisterPackArtFn env = do
     -- a sparse `frames` would silently drop stages, and a clip missing a
     -- stage is not a shorter clip, it is wrong.
     readWreckFrames ∷ Text → Int
-                    → Lua.LuaE Lua.Exception (Either ArtFault [ArtAsset])
+                    → Lua.LuaE Lua.Exception
+                          (Either ArtFault [(ArtAsset, Maybe ArtAsset)])
     readWreckFrames pack i = do
         ty ← Lua.getfield (-1) "frames"
         r ← if ty ≢ Lua.TypeTable
@@ -637,15 +642,9 @@ structureRegisterPackArtFn env = do
         pure r
 
     readWreckFrame ∷ Text → Int → Int
-                   → Lua.LuaE Lua.Exception (Either ArtFault ArtAsset)
-    readWreckFrame pack i j = do
-        mTex  ← fieldString (-1) "texture"
-        mTexH ← fieldHandle (-1) "texHandle"
-        pure $ case (mTex, mTexH) of
-            (Just tex, _) | escapingPath tex → Left (escapeFault pack role tex)
-            (Just tex, Just h) → Right (ArtAsset tex h)
-            _ → Left $ fault pack Nothing role
-                    "the frame has no `texture` string and `texHandle` number"
+                   → Lua.LuaE Lua.Exception
+                         (Either ArtFault (ArtAsset, Maybe ArtAsset))
+    readWreckFrame pack i j = readFramePair pack role
       where
         role = "destruction frames " <> tshow i <> " frame " <> tshow j
 
@@ -653,7 +652,8 @@ structureRegisterPackArtFn env = do
     -- in this payload: a sparse `frames` would silently drop stages, and
     -- a sequence missing a stage is not a shorter sequence, it is wrong.
     readFrames ∷ Text → Int
-               → Lua.LuaE Lua.Exception (Either ArtFault [ArtAsset])
+               → Lua.LuaE Lua.Exception
+                     (Either ArtFault [(ArtAsset, Maybe ArtAsset)])
     readFrames pack i = do
         ty ← Lua.getfield (-1) "frames"
         r ← if ty ≢ Lua.TypeTable
@@ -666,17 +666,54 @@ structureRegisterPackArtFn env = do
         pure r
 
     readFrame ∷ Text → Int → Int
-              → Lua.LuaE Lua.Exception (Either ArtFault ArtAsset)
-    readFrame pack i j = do
-        mTex  ← fieldString (-1) "texture"
-        mTexH ← fieldHandle (-1) "texHandle"
-        pure $ case (mTex, mTexH) of
-            (Just tex, _) | escapingPath tex → Left (escapeFault pack role tex)
-            (Just tex, Just h) → Right (ArtAsset tex h)
-            _ → Left $ fault pack Nothing role
-                    "the frame has no `texture` string and `texHandle` number"
+              → Lua.LuaE Lua.Exception
+                    (Either ArtFault (ArtAsset, Maybe ArtAsset))
+    readFrame pack i j = readFramePair pack role
       where
         role = "construction frames " <> tshow i <> " frame " <> tshow j
+
+    -- One frame and, when it declares one, the facemap it is lit with
+    -- (#2516). The facemap fields are `facemap` + `faceHandle`, read on
+    -- the same terms as the texture: an escaping path is reported as an
+    -- escape (the loader deliberately sends no handle for one), and a
+    -- path without a handle, or a handle without a path, is a refusal
+    -- rather than a frame that quietly goes unpaired.
+    readFramePair ∷ Text → Text
+                  → Lua.LuaE Lua.Exception
+                        (Either ArtFault (ArtAsset, Maybe ArtAsset))
+    readFramePair pack role = do
+        mTex   ← fieldString (-1) "texture"
+        mTexH  ← fieldHandle (-1) "texHandle"
+        mFace  ← fieldString (-1) "facemap"
+        mFaceH ← fieldHandle (-1) "faceHandle"
+        pure $ case (mTex, mTexH) of
+            (Just tex, _) | escapingPath tex → Left (escapeFault pack role tex)
+            (Just tex, Just h) → case (mFace, mFaceH) of
+                (Nothing, Nothing) → Right (ArtAsset tex h, Nothing)
+                (Just face, _) | escapingPath face →
+                    Left (escapeFault pack (role <> " facemap") face)
+                (Just face, Just fh) →
+                    Right (ArtAsset tex h, Just (ArtAsset face fh))
+                _ → Left $ fault pack Nothing role
+                        "the frame's `facemap` string and `faceHandle` \
+                        \number must be given together"
+            _ → Left $ fault pack Nothing role
+                    "the frame has no `texture` string and `texHandle` number"
+
+    -- A sequence's frames are either ALL paired or none are: a half-paired
+    -- list would light some frames by a map that describes them and
+    -- others by one that does not.
+    splitPairs ∷ Text → Text → [(ArtAsset, Maybe ArtAsset)]
+               → Either ArtFault ([ArtAsset], Maybe [ArtAsset])
+    splitPairs pack role pairs = case (frames, [ f | Just f ← faces ]) of
+        (_, []) → Right (frames, Nothing)
+        (_, fs) | length fs ≡ length pairs → Right (frames, Just fs)
+        _ → Left $ fault pack Nothing role
+                "some frames declare a facemap and others do not; a sequence \
+                \pairs every frame or none"
+      where
+        frames = map fst pairs
+        faces  = map snd pairs
 
     -- An escaping path is reported AS an escape even though the entry
     -- also lacks a handle. A loader that asked `structure.isSafeArtPath`
@@ -722,20 +759,26 @@ structureRegisterPackArtFn env = do
         simple k = k ⚟ guard (isNothing mEdge ∧ isNothing mCaps
                                 ∧ isNothing mShape)
 
--- | Every asset any declared sequence names, static sprite included.
+-- | Every asset any declared sequence names, static sprite included, and
+--   (#2516) every paired facemap.
 declaredAssets ∷ PackArtRegistration → [ArtAsset]
 declaredAssets reg =
     [ a
     | (_, cs) ← parFrames reg
-    , a ← csStatic cs : V.toList (csFrames cs) ]
+    , a ← csStatic cs : V.toList (csFrames cs)
+                      ⧺ maybe [] V.toList (csFacemaps cs) ]
     ⧺ [ a
       | (_, ds) ← parDestruction reg
-      , a ← dsStatic ds : V.toList (dsFrames ds) ]
+      , a ← dsStatic ds : V.toList (dsFrames ds)
+                        ⧺ maybe [] V.toList (dsFacemaps ds) ]
     ⧺ map snd (parVariants reg)
     ⧺ map snd (parVariantFaces reg)
 
--- | Measure every image a declared sequence's dimension check needs:
---   the appearance's static sprite and the sequence's LAST frame.
+-- | Measure every image a registration's dimension checks need: each
+--   construction appearance's static sprite and LAST frame (the handoff
+--   canvas rule), and — for #2516's pairing rules — every paired frame
+--   and facemap, plus the static sprite/facemap pair of every Wire
+--   appearance and of every appearance whose sequence is paired.
 --
 --   Reads the files directly rather than consulting
 --   'Engine.Core.Capability.RenderView.rvTextureSizeRef'. That cache is
@@ -744,17 +787,45 @@ declaredAssets reg =
 --   headless session — so a check written against it would be silently
 --   vacuous exactly where it is asserted. A path that cannot be read is
 --   simply left out of the map, and 'registerPackArt' refuses the pack
---   for it by name.
-measureSequences ∷ [(AppearanceKey, ConstructionSequence)]
-                 → IO (HM.HashMap Text (Int, Int))
-measureSequences seqs = HM.fromList ∘ catMaybes <$> mapM measure paths
+--   for it by name. Only the paths those rules name are read, so a pack
+--   that declares no sequences and no Wire reads no files.
+measureSequences ∷ PackArtRegistration → IO (HM.HashMap Text (Int, Int))
+measureSequences reg = HM.fromList ∘ catMaybes <$> mapM measure paths
   where
+    paired ak = case apSlot ak of
+        ApWire _ → True
+        _        → False
+    -- The static pair of the appearances that need one measured.
+    staticPairs slotsPaired =
+        [ a
+        | (key, art) ← parEntries reg
+        , artKeyAppearanceSlot key `elem` slotsPaired ∨ artKeyKind key ≡ KWire
+        , a ← [aaPath (paTexture art), aaPath (paFacemap art)] ]
+    pairedSlots = [ apSlot ak | (ak, cs) ← parFrames reg
+                              , isJust (csFacemaps cs) ∨ paired ak ]
+               ⧺ [ apSlot ak | (ak, ds) ← parDestruction reg
+                             , isJust (dsFacemaps ds) ∨ paired ak ]
     paths = ordNub
-        [ path
-        | (_, cs) ← seqs
-        , path ← aaPath (csStatic cs)
-                   : [ aaPath (V.last fs) | let fs = csFrames cs
-                                          , not (V.null fs) ] ]
+        ( [ path
+          | (_, cs) ← parFrames reg
+          , path ← aaPath (csStatic cs)
+                     : [ aaPath (V.last fs) | let fs = csFrames cs
+                                            , not (V.null fs) ]
+                     ⧺ map aaPath (maybe [] V.toList (csFacemaps cs))
+                     ⧺ [ aaPath f | isJust (csFacemaps cs)
+                                  , f ← V.toList (csFrames cs) ] ]
+        ⧺ [ path
+          | (_, ds) ← parDestruction reg
+          , path ← map aaPath (maybe [] V.toList (dsFacemaps ds))
+                     ⧺ [ aaPath f | isJust (dsFacemaps ds)
+                                  , f ← V.toList (dsFrames ds) ] ]
+        ⧺ [ aaPath f
+          | (ak, ds) ← parDestruction reg, paired ak
+          , f ← V.toList (dsFrames ds) ]
+        ⧺ [ aaPath f
+          | (ak, cs) ← parFrames reg, paired ak
+          , f ← V.toList (csFrames cs) ]
+        ⧺ staticPairs pairedSlots )
     measure path = do
         r ← try (JP.readImage (T.unpack path))
         pure $ case r ∷ Either SomeException (Either String JP.DynamicImage) of

@@ -74,6 +74,7 @@ module Structure.ArtCatalog
     , ConstructionSequence(..)
     , constructionFrameIndex
     , constructionFrameAt
+    , constructionFaceAt
       -- * Destruction appearances (#2491)
     , DestructionSequence(..)
     , destructionSequenceDuration
@@ -105,9 +106,12 @@ module Structure.ArtCatalog
     , placedArtPairs
     , resolveConstructionSequence
     , resolveConstructionFrame
+    , resolveConstructionFramePair
     , undeclaredConstructionAppearances
     , missingConstructionMessage
     , appearanceForTexturePath
+    , placedWireArt
+    , placedFacemapPath
     , ambiguousAppearancePaths
     , ambiguousAppearanceMessage
     , resolveDestructionSequence
@@ -127,6 +131,7 @@ import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Facing (WallEdge(..), WallCaps(..), wallCapsCode)
+import Structure.Types (StructureSlot(..))
 import Structure.Wire (WireShape(..), wireShapeName, allWireShapes)
 
 -- * Vocabulary
@@ -305,6 +310,15 @@ data ConstructionSequence = ConstructionSequence
     { csStatic ∷ !ArtAsset
     , csFrames ∷ !(V.Vector ArtAsset)
       -- ^ Ordered, NON-EMPTY (registration refuses an empty list).
+    , csFacemaps ∷ !(Maybe (V.Vector ArtAsset))
+      -- ^ #2516: the facemap each frame is lit with, paired by position
+      --   with 'csFrames' (registration refuses a different length).
+      --   'Nothing' is every pack that predates it: the frame is then
+      --   lit through the FINISHED piece's facemap with the lifecycle
+      --   alpha flag, exactly as before. 'Just' makes the frame a
+      --   colour\/facemap PAIR that is drawn as one, with no flag and no
+      --   reused map, because a frame whose silhouette differs from the
+      --   finished piece's has to be lit by a map that describes it.
     } deriving (Show, Eq)
 
 -- | The frame index a progress fraction selects, in the same convention
@@ -326,6 +340,14 @@ constructionFrameIndex n progress
 constructionFrameAt ∷ Float → ConstructionSequence → ArtAsset
 constructionFrameAt progress cs =
     csFrames cs V.! constructionFrameIndex (V.length (csFrames cs)) progress
+
+-- | The facemap that goes with 'constructionFrameAt' at the same
+--   @progress@ (#2516), or 'Nothing' when the sequence declares none and
+--   the frame is lit through the appearance's own facemap.
+constructionFaceAt ∷ Float → ConstructionSequence → Maybe ArtAsset
+constructionFaceAt progress cs = do
+    faces ← csFacemaps cs
+    faces V.!? constructionFrameIndex (V.length (csFrames cs)) progress
 
 -- * Destruction appearances (#2491)
 
@@ -355,6 +377,9 @@ data DestructionSequence = DestructionSequence
       -- ^ Ordered, NON-EMPTY (registration refuses an empty list).
     , dsFps    ∷ !Double
       -- ^ Finite and positive (registration refuses anything else).
+    , dsFacemaps ∷ !(Maybe (V.Vector ArtAsset))
+      -- ^ #2516: the facemap each frame is lit with, paired by position
+      --   with 'dsFrames', on the same terms as 'csFacemaps'.
     } deriving (Show, Eq)
 
 -- | The clip's full length in game seconds: @frameCount / fps@, so every
@@ -683,6 +708,12 @@ registerPackArt reg cat = case validate of
             unless (M.member key artMap) $
                 Left (fault (Just k) (artKeyRole key) Nothing
                             "the registration supplies no art for this slot")
+        -- #2516: a Wire appearance's static colour image and facemap are
+        -- one pair and measure the same, sequence or no sequence.
+        forM_ (parEntries reg) $ \(key, art) →
+            when (artKeyKind key ≡ KWire) $
+                pairSizes (fault (Just KWire) (artKeyRole key)) " static pair"
+                          (paTexture art) (paFacemap art)
         -- #2488: the construction sequences, under the same
         -- all-or-nothing rule. Checked AFTER the static inventory so a
         -- pack that is short of a sprite is reported as that rather than
@@ -694,7 +725,7 @@ registerPackArt reg cat = case validate of
         -- these.
         variantMap ← validateVariants kindSet
         variantFaceMap ← validateVariantFaces kindSet variantMap
-        wreckMap ← validateDestruction kindSet
+        wreckMap ← validateDestruction kindSet artMap
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
                      , pkBuild     = buildMap
@@ -732,6 +763,8 @@ registerPackArt reg cat = case validate of
                 Left (sFault Nothing
                         "the construction frame list names the same image \
                         \more than once")
+            checkLifecyclePairs kind role sFault ak artMap
+                (csFrames cs) (csFacemaps cs)
             -- The DEFAULT art's sequence must hand off to the very
             -- sprite this registration declares for the appearance. A
             -- variant's cannot be cross-checked — the catalogue stores
@@ -859,9 +892,9 @@ registerPackArt reg cat = case validate of
     -- different moments depending on where the camera happened to be.
     -- So a family that declares ANY direction must declare all four,
     -- identically shaped, and the whole pack is refused otherwise.
-    validateDestruction ∷ S.Set PieceKind
+    validateDestruction ∷ S.Set PieceKind → M.Map ArtKey PieceArt
                         → Either ArtFault (M.Map AppearanceKey DestructionSequence)
-    validateDestruction kindSet = do
+    validateDestruction kindSet artMap = do
         forM_ (parDestruction reg) $ \(ak, ds) → do
             let kind  = appearanceSlotKind (apSlot ak)
                 role  = appearanceKeyRole ak <> " destruction"
@@ -890,6 +923,8 @@ registerPackArt reg cat = case validate of
                 Left (sFault Nothing
                         "the destruction frame list names the same image \
                         \more than once")
+            checkLifecyclePairs kind role sFault ak artMap
+                (dsFrames ds) (dsFacemaps ds)
         forM_ (M.toList wreckWalls) $ \(variant, declared) → do
             let named = M.fromList declared
                 role  = appearanceKeyRole (AppearanceKey variant (ApWall WallNE))
@@ -924,6 +959,67 @@ registerPackArt reg cat = case validate of
         wreckWalls = M.fromListWith (++)
             [ (apVariant ak, [(e, (V.length (dsFrames ds), dsFps ds))])
             | (ak, ds) ← parDestruction reg, ApWall e ← [apSlot ak] ]
+
+    -- #2516: one lifecycle sequence's facemap PAIRING, shared by the
+    -- construction and destruction halves because the rule is the same
+    -- for both: a frame is either lit through its appearance's finished
+    -- facemap (no pairing) or is a colour/facemap pair drawn as one.
+    --
+    --   * a pack MAY pair any appearance's frames, except a wall's: a wall
+    --     is lit by one of four CAP facemaps that rotate with the camera
+    --     (#1712), so a single paired map per frame has no defined
+    --     meaning there;
+    --   * a WIRE appearance MUST pair its frames. Wire's silhouette changes
+    --     frame to frame and its static art no longer shares a map, so an
+    --     unpaired Wire frame would be lit by a map describing a
+    --     different image -- the shared-map fallback the Wire art contract
+    --     forbids;
+    --   * a paired list is exactly as long as its frame list and every
+    --     entry is a loaded, non-escaping asset;
+    --   * every frame/facemap pair, and (for a default appearance) the
+    --     static sprite/facemap pair, is the same pixel size, measured
+    --     from the files like the handoff check. A Wire appearance's
+    --     static pair is measured whether or not it declares a sequence.
+    checkLifecyclePairs kind role sFault ak artMap frames mFaces = do
+        let staticPairs =
+                [ (paTexture art, paFacemap art)
+                | isNothing (apVariant ak)
+                , (key, art) ← M.toList artMap
+                , artKeyAppearanceSlot key ≡ apSlot ak ]
+        case mFaces of
+            Nothing → when (kind ≡ KWire) $
+                Left (sFault Nothing
+                        "a wire appearance must pair every lifecycle frame \
+                        \with its own facemap; there is no shared-map \
+                        \fallback")
+            Just faces → do
+                when (kind ≡ KWall) $
+                    Left (sFault Nothing
+                            "paired lifecycle facemaps are not supported for \
+                            \a wall, whose facemap is one of four cap masks \
+                            \chosen by the camera")
+                when (V.length faces ≢ V.length frames) $
+                    Left (sFault Nothing
+                            ("the frame list has " <> tshow (V.length frames)
+                               <> " entries but the facemap list has "
+                               <> tshow (V.length faces)))
+                forM_ (zip [1 ∷ Int ..] (V.toList faces)) $ \(i, a) →
+                    checkFramePath kind (role <> " frame " <> tshow i)
+                                   "facemap" a
+                forM_ (zip3 [1 ∷ Int ..] (V.toList frames) (V.toList faces)) $
+                    \(i, f, m) → pairSizes sFault (" frame " <> tshow i) f m
+        when (kind ≡ KWire ∨ isJust mFaces) $
+            forM_ staticPairs $ \(t, m) → pairSizes sFault " static pair" t m
+
+    -- Both halves of one colour/facemap pair measure the same.
+    pairSizes sFault what tex face = do
+        td ← measured sFault (aaPath tex)
+        fd ← measured sFault (aaPath face)
+        when (td ≢ fd) $
+            Left (sFault (Just (aaPath face))
+                    ("the" <> what <> " colour image " <> aaPath tex <> " is "
+                       <> dims td <> " but its facemap " <> aaPath face
+                       <> " is " <> dims fd))
 
     dims (w, h) = tshow w <> "x" <> tshow h
 
@@ -1154,6 +1250,9 @@ failPackArtPath path reason cat =
         , (mIndex, a) ← (Nothing, csStatic cs)
                           : [ (Just i, f)
                             | (i, f) ← zip [1 ∷ Int ..] (V.toList (csFrames cs)) ]
+                          ⧺ [ (Just i, f)
+                            | (i, f) ← zip [1 ∷ Int ..]
+                                           (maybe [] V.toList (csFacemaps cs)) ]
         , aaPath a ≡ path ]
     -- #2491's teardown half of the same lookup, on the same terms: a
     -- destruction frame that will not load invalidates the whole pack,
@@ -1164,6 +1263,9 @@ failPackArtPath path reason cat =
         , (mIndex, a) ← (Nothing, dsStatic ds)
                           : [ (Just i, f)
                             | (i, f) ← zip [1 ∷ Int ..] (V.toList (dsFrames ds)) ]
+                          ⧺ [ (Just i, f)
+                            | (i, f) ← zip [1 ∷ Int ..]
+                                           (maybe [] V.toList (dsFacemaps ds)) ]
         , aaPath a ≡ path ]
 
 -- * Resolution
@@ -1251,6 +1353,15 @@ resolveConstructionFrame ∷ StructureArtCatalog → Text → AppearanceKey → 
 resolveConstructionFrame cat pack ak progress =
     constructionFrameAt progress <$> resolveConstructionSequence cat pack ak
 
+-- | 'resolveConstructionFrame' with the facemap that goes with the frame
+--   (#2516): 'Nothing' for the facemap when the sequence pairs none, and
+--   'Nothing' overall when the appearance declares no sequence.
+resolveConstructionFramePair ∷ StructureArtCatalog → Text → AppearanceKey
+                             → Float → Maybe (ArtAsset, Maybe ArtAsset)
+resolveConstructionFramePair cat pack ak progress = do
+    cs ← resolveConstructionSequence cat pack ak
+    pure (constructionFrameAt progress cs, constructionFaceAt progress cs)
+
 -- | Every DEFAULT appearance this stored pack has static art for but no
 --   construction sequence, ascending.
 --
@@ -1295,6 +1406,34 @@ appearanceForTexturePath cat path = do
     owner ← join (HM.lookup path (sacAppearanceByPath cat))
     guard (packArtResolves cat (fst owner))
     pure owner
+
+-- | The registered art of the Wire appearance a PLACED piece drawn with
+--   this static texture path is (#2516), or 'Nothing'.
+--
+--   Wire's facemap is a function of its shape, and the persisted
+--   texture path is what names the shape, so this is how a placed Wire
+--   piece is lit with its own dedicated facemap whatever facemap id it
+--   was stored with. Silent in the same three cases
+--   'appearanceForTexturePath' is, and for any path that is not a
+--   DEFAULT Wire appearance's sprite.
+placedWireArt ∷ StructureArtCatalog → Text → Maybe PieceArt
+placedWireArt cat path = do
+    (pack, ak) ← appearanceForTexturePath cat path
+    guard (isNothing (apVariant ak))
+    ApWire shape ← Just (apSlot ak)
+    p ← HM.lookup pack (sacPacks cat)
+    M.lookup (AkWire shape) (pkArt p)
+
+-- | The facemap a placed piece of this slot and texture path is drawn
+--   with, when the catalogue has its own answer (#2516). Only Wire has
+--   one. The ONE rule the render pass and @structure.drawnFacemap@
+--   share; the first argument is the catalogue's 'placedWireArt'
+--   (or a stand-in), so a spec can drive it without a catalogue.
+placedFacemapPath ∷ (Text → Maybe PieceArt) → StructureSlot → Maybe Text
+                  → Maybe ArtAsset
+placedFacemapPath override slot mTexPath
+    | slot ≡ SWire = paFacemap ⊚ (mTexPath ⌦ override)
+    | otherwise    = Nothing
 
 -- | The destruction playback this pack declares for that exact
 --   appearance, or 'Nothing'.

@@ -115,7 +115,9 @@ structurePackErrorMessage (PackManifestMalformed p why) =
 --   which gameplay indexes by build progress rather than a clock (#2488).
 data DeclLifecycle
   = DeclUndeclared
-  | DeclSequence ![Text] !(Maybe Double)
+  | DeclSequence ![Text] !(Maybe Double) !(Maybe [Text])
+    -- ^ The frames, the authored fps, and (#2516) the facemap paired with
+    --   each frame when the sequence declares them.
   deriving (Eq, Show)
 
 -- | One facemap an appearance lights with, after inheritance: the cap
@@ -304,7 +306,11 @@ lifecycles ctx o = (,) ⊚ construction ⊛ destruction
   where
     construction = case field o "construction" of
         Nothing → pure DeclUndeclared
-        Just v  → (`DeclSequence` Nothing) ⊚ frameList (ctx <> ".construction") v
+        Just v  → do
+            frames ← frameList (ctx <> ".construction") v
+            faces ← pairedFaces (ctx <> ".construction_facemaps")
+                                (length frames) (field o "construction_facemaps")
+            pure (DeclSequence frames Nothing faces)
     destruction = case field o "destruction" of
         Nothing → pure DeclUndeclared
         Just (Aeson.Object d) → do
@@ -331,9 +337,24 @@ lifecycles ctx o = (,) ⊚ construction ⊛ destruction
             frames ← case field d "frames" of
                 Just v  → frameList (dctx <> ".frames") v
                 Nothing → Left (dctx <> ": missing required `frames` list")
-            pure (DeclSequence frames (Just fps))
+            faces ← pairedFaces (dctx <> ".facemaps") (length frames)
+                                (field d "facemaps")
+            pure (DeclSequence frames (Just fps) faces)
         Just _ → Left (ctx <> ".destruction: expected a mapping with `fps` \
                               \and `frames`")
+
+-- | #2516's paired facemap list: absent is unpaired, and a present one
+--   must be exactly as long as the frame list it pairs with — the game
+--   refuses any other (@Structure.ArtCatalog.registerPackArt@).
+pairedFaces ∷ Text → Int → Maybe Aeson.Value → P (Maybe [Text])
+pairedFaces _ _ Nothing = pure Nothing
+pairedFaces ctx n (Just v) = do
+    faces ← frameList ctx v
+    when (length faces ≢ n) $
+        Left (ctx <> ": has " <> tshow (length faces)
+              <> " entries but the frame list it pairs with has "
+              <> tshow n)
+    pure (Just faces)
 
 frameList ∷ Text → Aeson.Value → P [Text]
 frameList ctx (Aeson.Array xs)
@@ -450,28 +471,35 @@ variantDecl orders basePieces baseWalls name v = do
     pure (pieces, walls)
 
 -- | Wire's 16 autotile connections (@scripts\/wire.lua@
---   @connectionEntry@): each is a bare texture path or a table with a
---   @texture@ and optional lifecycle sequences, all sharing the pack's
---   one top-level @facemap@.
+--   @connectionEntry@): each is a table with a @texture@, its OWN
+--   @facemap@ (#2516 — Wire no longer shares one) and optional lifecycle
+--   sequences. The legacy bare-path form declares no facemap and is
+--   refused.
 wireAppearances ∷ Orders → Aeson.Object → Aeson.Object → P [DeclAppearance]
-wireAppearances orders top conns = do
-    let pairs = orderedPairs orders ["connections"] conns
-    if null pairs then pure [] else do
-        face ← reqPath "pack" top "facemap"
-        forM pairs $ \(name, v) → do
-            let ctx = "connections." <> name
-            (tex, (c, d)) ← case v of
-                Aeson.String _ → (, (DeclUndeclared, DeclUndeclared))
-                                   ⊚ pathValue ctx v
-                Aeson.Object o → (,) ⊚ reqPath ctx o "texture" ⊛ lifecycles ctx o
-                _ → Left (ctx <> ": expected a texture path or a mapping \
-                                 \with a `texture` path")
-            pure DeclAppearance
-                { daKind = "wire", daEdge = Nothing, daConnection = Just name
-                , daVariant = defaultVariant, daOverride = False, daTexture = tex
-                , daTextureInherited = False
-                , daFacemaps = [DeclFacemap Nothing (Just face) False]
-                , daConstruction = c, daDestruction = d }
+wireAppearances orders _top conns =
+    forM (orderedPairs orders ["connections"] conns) $ \(name, v) → do
+        let ctx = "connections." <> name
+        (tex, face, (c, d)) ← case v of
+            -- The game refuses a pack whose connection declares no
+            -- facemap of its own (no shared-map fallback), so the viewer
+            -- refuses it too rather than showing art the game never loads.
+            Aeson.String _ → Left (ctx <> ": a bare texture path declares \
+                                         \no facemap; each Wire connection \
+                                         \needs a mapping with its own \
+                                         \`facemap`")
+            Aeson.Object o → do
+                t ← reqPath ctx o "texture"
+                f ← reqPath ctx o "facemap"
+                l ← lifecycles ctx o
+                pure (t, Just f, l)
+            _ → Left (ctx <> ": expected a texture path or a mapping \
+                             \with a `texture` path")
+        pure DeclAppearance
+            { daKind = "wire", daEdge = Nothing, daConnection = Just name
+            , daVariant = defaultVariant, daOverride = False, daTexture = tex
+            , daTextureInherited = False
+            , daFacemaps = [DeclFacemap Nothing face False]
+            , daConstruction = c, daDestruction = d }
 
 -- * Resolution
 
@@ -526,7 +554,7 @@ resolveStructurePack texRoot name manifest decls = do
         let staticL = PreviewStructLifecycle
                 { pslName = "static", pslDeclared = True, pslFrames = [static]
                 , pslFps = 0, pslFpsSource = "static"
-                , pslAlphaPolicy = "facemap-alpha" }
+                , pslAlphaPolicy = "facemap-alpha", pslFaceFrames = [] }
         pure PreviewStructAppearance
             { psaIdentity   = identityOf da
             , psaLabel      = labelOf da
@@ -545,14 +573,17 @@ resolveStructurePack texRoot name manifest decls = do
         DeclUndeclared → pure PreviewStructLifecycle
             { pslName = lname, pslDeclared = False, pslFrames = []
             , pslFps = 0, pslFpsSource = "undeclared"
-            , pslAlphaPolicy = "frame-alpha" }
-        DeclSequence paths mfps → do
+            , pslAlphaPolicy = "frame-alpha", pslFaceFrames = [] }
+        DeclSequence paths mfps mfaces → do
             frames ← forM paths judge
+            faces ← forM (fromMaybe [] mfaces) judge
             pure PreviewStructLifecycle
                 { pslName = lname, pslDeclared = True, pslFrames = frames
                 , pslFps = maybe structurePreviewDefaultFps realToFrac mfps
                 , pslFpsSource = maybe "preview-default" (const "authored") mfps
-                , pslAlphaPolicy = "frame-alpha" }
+                , pslAlphaPolicy = maybe "frame-alpha" (const "facemap-alpha")
+                                         mfaces
+                , pslFaceFrames = faces }
 
     groupOf da = case (daEdge da, daConnection da) of
         (Just e, _) → "wall " <> e

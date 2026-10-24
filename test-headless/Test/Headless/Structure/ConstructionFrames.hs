@@ -315,14 +315,14 @@ refusalSpec = describe "registration" $ do
 
     it "refuses an EMPTY frame list, naming the pack and the appearance" $
         refusal (AppearanceKey Nothing ApFloor)
-            (Just (ConstructionSequence (staticAsset ApFloor) V.empty))
+            (Just (ConstructionSequence (staticAsset ApFloor) V.empty Nothing))
             `shouldSatisfy` faultSays ["fixture_dungeon", "floor", "empty"]
 
     it "refuses a list that names the same image twice" $ do
         let p = firstOf (framePathsFor (AppearanceKey Nothing ApFloor))
         refusal (AppearanceKey Nothing ApFloor)
             (Just (ConstructionSequence (staticAsset ApFloor)
-                       (V.fromList [pathAsset p, pathAsset p])))
+                       (V.fromList [pathAsset p, pathAsset p]) Nothing))
             `shouldSatisfy` faultSays ["fixture_dungeon", "floor", "more than once"]
 
     it "refuses a frame path that escapes the resource root" $
@@ -331,7 +331,7 @@ refusalSpec = describe "registration" $ do
               , "assets\\floor.png", "~/floor.png" ] $ \bad →
             refusal (AppearanceKey Nothing ApFloor)
                 (Just (ConstructionSequence (staticAsset ApFloor)
-                           (V.fromList [pathAsset bad])))
+                           (V.fromList [pathAsset bad]) Nothing))
                 `shouldSatisfy` faultSays ["fixture_dungeon", "escapes"]
 
     it "refuses an escaping path BEFORE asking whether it could be \
@@ -343,7 +343,7 @@ refusalSpec = describe "registration" $ do
         -- consequence of the guard rather than the rule.
         let ak = AppearanceKey Nothing ApFloor
             bad = ConstructionSequence (staticAsset ApFloor)
-                      (V.fromList [pathAsset "../outside.png"])
+                      (V.fromList [pathAsset "../outside.png"]) Nothing
             reg = (withSequence ak (Just bad) fixtureRegistration)
                     { parSizes = fixtureSizesOf }
         outcomeOf reg `shouldSatisfy`
@@ -354,14 +354,14 @@ refusalSpec = describe "registration" $ do
     it "accepts an ordinary nested relative path" $
         outcomeOf (withSequence (AppearanceKey Nothing ApFloor)
             (Just (ConstructionSequence (staticAsset ApFloor)
-                       (V.fromList [pathAsset "fx/build/floor_0.png"])))
+                       (V.fromList [pathAsset "fx/build/floor_0.png"]) Nothing))
             fixtureRegistration) `shouldBe` ArtRegistered
 
     it "refuses a frame whose handle was never loaded" $
         refusal (AppearanceKey Nothing ApFloor)
             (Just (ConstructionSequence (staticAsset ApFloor)
                        (V.fromList [ ArtAsset "fx/floor_build_0.png"
-                                         (TextureHandle 0) ])))
+                                         (TextureHandle 0) ]) Nothing))
             `shouldSatisfy` faultSays ["fixture_dungeon", "not a loaded handle"]
 
     it "refuses a LAST frame whose canvas differs from the static sprite" $ do
@@ -394,7 +394,7 @@ refusalSpec = describe "registration" $ do
         refusal (AppearanceKey Nothing ApFloor)
             (Just (ConstructionSequence (pathAsset "fx/ceiling.png")
                        (V.fromList (map pathAsset
-                           (framePathsFor (AppearanceKey Nothing ApFloor))))))
+                           (framePathsFor (AppearanceKey Nothing ApFloor)))) Nothing))
             `shouldSatisfy` faultSays ["fixture_dungeon", "does not declare"]
 
     it "refuses frames for a kind the registration never declared" $ do

@@ -664,13 +664,24 @@ warningSpec = describe "a failure" $ do
                 resolvedArtAt ls pack "floor" Nothing (simpleTile 0)
                     `shouldReturn` Nothing
 
-    it "shares a facemap between the two shipped packs, which is what \
-       \makes that coalescing a real case" $ \(_, ls) → do
-        shared ← evalDebug ls
-            "local d = engine.loadYaml('data/structure_packs/dungeon_1.yaml'); \
-            \local w = engine.loadYaml('data/structure_packs/wire.yaml'); \
-            \return tostring(d.pieces.floor.facemap == w.facemap)"
-        shared `shouldBe` "true"
+    it "is a real case for shipped packs that share a facemap — dungeon_1 \
+       \keeps one, while Wire (#2516) now declares its own per connection" $
+        \(_, ls) → do
+            -- Wire used to share dungeon_1's floorface.png, which is why
+            -- the coalescing above had a real instance. It no longer
+            -- does: no Wire connection may reuse the floor's map. The
+            -- coalescing itself is a property of the catalogue, shown
+            -- with two synthetic packs above, and still applies to any
+            -- two packs that name one facemap.
+            shared ← evalDebug ls
+                "local d = engine.loadYaml('data/structure_packs/dungeon_1.yaml'); \
+                \local w = engine.loadYaml('data/structure_packs/wire.yaml'); \
+                \local n = 0; \
+                \for _, c in pairs(w.connections) do \
+                \  if c.facemap == d.pieces.floor.facemap then n = n + 1 end \
+                \end; \
+                \return tostring(n == 0 and w.facemap == nil)"
+            shared `shouldBe` "true"
 
     it "tells every Lua listener the diagnostic is already reported" $
         \(env, ls) → do

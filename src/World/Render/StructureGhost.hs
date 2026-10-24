@@ -72,7 +72,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec4)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
     ( AppearanceKey(..), AppearanceSlot(..), ArtAsset(..)
-    , PieceArt(..), PieceArtContext(..), resolveConstructionFrame )
+    , PieceArt(..), PieceArtContext(..), resolveConstructionFramePair )
 import Structure.Facing (WallEdge, screenWallEdge)
 import Structure.Render
     ( ResolvedPieceArt(..), opaqueTint, structurePieceQuadsResolved
@@ -137,7 +137,8 @@ ghostQuadsFor ge = ghostQuadsWith ge Nothing
 --   the candidate emits NOTHING, because requirement 8's answer for an
 --   appearance with no declaration is that the site keeps drawing
 --   nothing — not that it falls back to the finished sprite.
-ghostQuadsWith ∷ GhostEnv → Maybe (PieceArt → Maybe ArtAsset) → Vec4
+ghostQuadsWith ∷ GhostEnv
+               → Maybe (PieceArt → Maybe (ArtAsset, Maybe ArtAsset)) → Vec4
                → StructurePiece → (Int, Int) → PlanResult → [SortableQuad]
 ghostQuadsWith ge lifecycle tint piece tile@(gx, gy) pr = fromMaybe [] $ do
     slot   ← prSlot pr
@@ -153,7 +154,9 @@ ghostQuadsWith ge lifecycle tint piece tile@(gx, gy) pr = fromMaybe [] $ do
         structurePieceQuadsResolved (geCatalog ge) (geLookupSlot ge)
             (geTexSizes ge) (geFacing ge) (geZSlice ge) (geEffDepth ge)
             tint gx gy (slot ∷ StructureSlot)
-            (resolvedArt art) { rpaLifecycle = aaHandle <$> mFrame }
+            (resolvedArt art)
+                { rpaLifecycle     = aaHandle ∘ fst <$> mFrame
+                , rpaLifecycleFace = mFrame ⌦ fmap aaHandle ∘ snd }
             gridZ
 
 -- | #1842's catalogue answer, in the shape the shared render body takes.
@@ -166,6 +169,7 @@ resolvedArt pa = ResolvedPieceArt
     , rpaTexturePath = Just (aaPath (paTexture pa))
     , rpaFacemapPath = Just (aaPath (paFacemap pa))
     , rpaLifecycle   = Nothing
+    , rpaLifecycleFace = Nothing
     }
 
 -- | The DESIGNATED state (D-19): every committed structure designation
@@ -264,8 +268,8 @@ structureConstructionGhosts ge
     frameFor piece tile progress art = do
         ak ← constructionAppearanceAt (gePlan ge) (geCatalog ge) (geFacing ge)
                  piece tile art
-        resolveConstructionFrame (pwCatalog (gePlan ge)) (spPack piece) ak
-                                 progress
+        resolveConstructionFramePair (pwCatalog (gePlan ge)) (spPack piece) ak
+                                     progress
     alreadyBuilt piece (gx, gy) = fromMaybe False $ do
         slot ← structurePieceSlot piece
         pure (structureCommittedAt (pwWorldSize (gePlan ge))
