@@ -51,7 +51,7 @@ import Engine.Save.Config
     ( SaveConfig(..), loadSaveConfig, writeSaveConfig, clampSaveConfig
     , defaultSaveConfig, saveConfigDefaultPath, saveConfigLocalPath )
 import World.Save.Physiology
-    ( physiologyLoadGate, PhysiologyNormalization(..) )
+    ( physiologyLoadGate, physiologyLoadDefinition, PhysiologyNormalization(..) )
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
@@ -80,7 +80,7 @@ import Location.Instance (locationGeometryErrorText)
 import Location.Types (LocationRegistry(..), LocationDef(..))
 import LootProfile.Types (lootProfileIds)
 import Building.Types (BuildingManager(..))
-import Unit.Types (UnitManager(..), UnitDef(..))
+import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
 import Craft.Types (RecipeManager(..))
 import World.Save.Integrity
@@ -987,7 +987,7 @@ continueLoad env logger requestId saveName descriptors = do
                     missingLocationDefReferences locationDefIds pages
                 missingInfections =
                     missingInfectionReferences infMgr pages
-                -- #2829 (S3): saved physiology state that cannot be
+                -- #2829 (S3) and #2893: saved physiology state that cannot be
                 -- honoured — an override naming a system the registry
                 -- does not declare, or a non-finite Simulated value —
                 -- rejects here, with the old session untouched, for the
@@ -995,17 +995,19 @@ continueLoad env logger requestId saveName descriptors = do
                 -- the loaded definitions are live content a component
                 -- decode must not read.
                 physioGate = physiologyLoadGate physiologyRegistry
-                    (HM.map udPhysiology (umDefs um)) (sdGameTime saveData)
+                    (HM.map physiologyLoadDefinition (umDefs um)) (sdGameTime saveData)
                     [ (wpsPageId w, wpsUnits w) | w ← sdWorlds saveData ]
-                -- #2829 (S3) and #2831 (S4): saved physiology state that
+                -- #2829 (S3), #2831 (S4) and #2893: saved physiology state that
                 -- cannot be honoured — an override naming a system the
                 -- registry does not declare, a non-finite Simulated value,
                 -- a Simulated override for a system the definition no
-                -- longer supports, an unusable seed input — rejects HERE,
+                -- longer supports, an unusable seed input after the legacy
+                -- body backfill and pre-seed cache rebuild — rejects HERE,
                 -- with the old session untouched, for the same reason the
                 -- definition checks do: the registry and the loaded
                 -- definitions are live content a component decode must not
-                -- read. The deterministic normalization (D-6 (b), (c), (g),
+                -- read. The deterministic normalization (legacy body
+                -- backfill, pre-seed cache rebuild, D-6 (b), (c), (g),
                 -- (i), (j)) is part of the same gate, so a unit that cannot
                 -- be normalized rejects the whole load before anything is
                 -- staged.

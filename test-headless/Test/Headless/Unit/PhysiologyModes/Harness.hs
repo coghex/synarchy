@@ -74,6 +74,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Blood (fullBloodView)
+import Unit.Thread.Command.Body (recomputeBodyDerivedStats)
 import Unit.Physiology (PhysioContext(..))
 import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Physiology.Types
@@ -106,10 +107,11 @@ squirrelBody = Body 0.3 0.22
 --   @heart_rate@ and @blood_oxygen@ among them since S9, #2836: a stored base
 --   here would defeat the modifier-aware seed).
 bodyStats ∷ Body → [(Text, Float)]
-bodyStats (Body m h) =
+bodyStats (Body m h) = HM.toList $ recomputeBodyDerivedStats $ HM.fromList $
     [ ("body_mass", m), ("frame_mass", m)
     , ("fat_mass", 0.2 * m), ("lean_mass", 0.8 * m), ("height", h)
-    , ("strength", 1), ("strength_base", 1), ("strength_body", 1)
+    , ("strength", 1), ("strength_base", (0.8 * m / (8.8 * h * h)) ** (-0.7))
+    , ("strength_body", 1)
     , ("endurance", 1), ("constitution", 1), ("metabolism", 1)
     , ("max_hydration", 0.6 * m), ("max_hunger", 10 * m)
     , ("max_calories", 20 * m)

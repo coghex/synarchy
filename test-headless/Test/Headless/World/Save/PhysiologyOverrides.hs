@@ -63,7 +63,7 @@ import World.Save.Envelope.Types
     , defaultEnvelopeLimits )
 import World.Save.Component (componentKnownIds, componentRequiredIds)
 import World.Save.Physiology
-    ( PhysiologyLoadRejection(..), physiologyLoadRejections
+    ( PhysiologyLoadDefinition(..), PhysiologyLoadRejection(..), physiologyLoadRejections
     , renderPhysiologyRejection )
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
@@ -416,12 +416,15 @@ fixtureSpec = describe "retained fixtures (requirement 5)" $ do
 
 -- | Definitions' physiology for the rejection examples: a bodied
 --   species that defaults hydration Simulated, and a bodyless one.
-defPhysiology ∷ HM.HashMap T.Text UnitPhysiology
-defPhysiology = HM.fromList
+defPhysiology ∷ HM.HashMap T.Text PhysiologyLoadDefinition
+defPhysiology = HM.map toLoadDefinition $ HM.fromList
     [ ("acolyte", plainUnitPhysiology True Nothing
           (HM.fromList [("hydration", PhysioSimulated)]))
     , ("bear_brown", plainUnitPhysiology True Nothing HM.empty)
     , ("tiller", noUnitPhysiology) ]
+  where
+    toLoadDefinition up = PhysiologyLoadDefinition up (upBodyAuthored up)
+        HM.empty HM.empty
 
 rejectionsFor ∷ PhysiologyRegistry → [(Word32, UnitInstanceSnapshot)]
               → [PhysiologyLoadRejection]
