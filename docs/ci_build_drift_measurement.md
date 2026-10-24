@@ -79,7 +79,8 @@ compile CPU, slows a lane and breaks an example (§6). The recommendation is in 
 6. **Policies** are projected against the writers' *real* outcomes. Each policy's published
    snapshots are derived first: its key is (image, toolchain, dependency plan, group of N
    relevant changes), published by the earliest-finished successful master job that writes it;
-   a job that finishes later publishes nothing. The restore ladder then runs over those
+   a job that finishes later publishes nothing. The restore ladder then runs, for the key the run itself requested (a pull
+   request can change the dependency plan; its base only fixes the epoch group), over those
    snapshots that finished before the run started: the exact key, else the newest-created key
    of the same plan, else the newest-created key of another plan of the same image and
    toolchain (`restore_snapshot`); another image or toolchain is never restored. For today's
@@ -137,7 +138,7 @@ compile CPU, slows a lane and breaks an example (§6). The recommendation is in 
 
 Taken as a union, the drift replay and the own replay equal the unsplit replay
 exactly: `D ∪ O` = `U` in all 34 run-and-group comparisons (0.0 % against the 5 %
-tolerance), with **no cancellations and no residuals**; the sequential counts
+tolerance, which the report enforces: it exits non-zero past it), with **no cancellations and no residuals**; the sequential counts
 themselves overlap and are never added. The two
 attribution conventions diverge only where a drift and an own cascade overlap
 (`36317483841`, `36343120829`, `36861571111`, `36871884401`), and the table
