@@ -81,7 +81,7 @@ jobs:
   # drainer's branch-update path already assumes.
   dismiss-stale-approval:
     if: github.event.action == 'synchronize'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       pull-requests: write
@@ -179,7 +179,7 @@ jobs:
   review-approved:
     needs: [dismiss-stale-approval]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out the gate policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

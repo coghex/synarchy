@@ -15,7 +15,7 @@
 #     image, the Actions caches or their keys. Its job-level lock below
 #     cannot cancel or queue anything in the CI workflow's runs.
 #   * It is built natively on Ubuntu 24.04 (ubuntu-24.04 runner, FROM the
-#     ubuntu:24.04 digest it resolves), not in the 22.04 CI image: Cabal's
+#     ubuntu:24.04 digest it resolves), not in the 26.04 CI image: Cabal's
 #     unit IDs hash the system pkg-config versions of vulkan and zlib, so
 #     only a 24.04-built store is reused in full on the 24.04 sandboxes.
 #

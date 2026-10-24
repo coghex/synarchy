@@ -57,13 +57,16 @@
 # hackage index snapshot are baked into the CI image (see
 # .github/ci/Dockerfile; the old actions/cache toolchain cache never hit
 # inside the container, so GHC was silently re-downloaded every run), and
-# two caches persist across runs so a typical PR recompiles only the
+# two image-scoped caches persist across runs so no image reuses compiled
+# objects from another image, and a typical PR recompiles only the
 # modules it changed rather than all 360+ —
 #   1. the cabal dependency store (at the image-pinned CABAL_DIR), and
 #   2. the project build products (dist-newstyle), so GHC's recompilation
 #      avoidance rebuilds only dirty modules + their reverse-deps.
-# The dist-newstyle key includes the exact immutable CI image reference,
-# GHC/Cabal versions, dependency plan hash and a deterministic eight-change
+# Both cache key families include the exact immutable CI image reference,
+# so no image restores a dependency store or project tree compiled under
+# another image. The dist-newstyle key also includes GHC/Cabal versions,
+# dependency plan hash and a deterministic eight-change
 # epoch. `ci_cache_epoch.py`
 # counts only first-parent master changes that touch compiled-product
 # inputs after its checked-in anchor; docs, Lua and runtime resources do
@@ -206,7 +209,7 @@ jobs:
   # without weakening the drainer's single-check merge gate.
   test-and-audits:
     needs: resolve-image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -402,10 +405,15 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
-              sed 's/^/worldgen=/'
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
-              sed 's/^/graphical=/'
+            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
+            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
+            # TEMPORARY #2872 migration validation; reverted after this run.
+            if [ "${{ github.head_ref }}" = 'issue-2872-ubuntu-26-04' ]; then
+              WORLDGEN=true
+              GRAPHICAL=true
+            fi
+            printf 'worldgen=%s\n' "$WORLDGEN"
+            printf 'graphical=%s\n' "$GRAPHICAL"
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
@@ -418,16 +426,16 @@ jobs:
         id: cache
         with:
           path: /usr/local/cabal/store
-          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
-          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+          key: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-
 
       # Cache project products so GHC recompiles only dirty modules.
       # plan.json keys compatibility; the eight-change epoch bounds how
       # stale an immutable snapshot can become. Same-plan older epochs are
       # preferred, then any v3 plan for partial reuse. Legacy v2 is a final
       # bootstrap only while the resolved image is the exact image that wrote
-      # those entries; an image-only change therefore starts from compatible
-      # dependencies but never restores old project objects.
+      # those entries; an image-only change cold-starts both stores instead
+      # of restoring dependencies or project objects built under another image.
       #
       # Split out of the combined `actions/cache` action (#1358), which
       # is the only way to learn WHICH key a prefix hit restored: the
@@ -435,7 +443,9 @@ jobs:
       # post step and publishes just `cache-hit`, while
       # `actions/cache/restore` publishes `cache-primary-key` and
       # `cache-matched-key` as outputs the report step below can read.
-      # The key, the path and the restore-keys are untouched, and the
+      # Dependency cache keys are image-scoped too: no restore prefix can
+      # bridge images or match the retired deps-v2 family. The key, path and
+      # restore-keys stay identical across every reader and the writer. The
       # save step reproduces the combined action's conditions term for
       # term — see it.
       - name: Restore project build cache (dist-newstyle)
@@ -513,7 +523,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /usr/local/cabal/store
-          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          key: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
 
       # -v0 on every Cabal build/test below (#1920) drops the build plan,
       # the Configuring/Preprocessing/Building banners and the per-module
@@ -677,7 +687,7 @@ jobs:
   # or suite-level timer.
   headless-lanes:
     needs: resolve-image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -766,10 +776,15 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
-              sed 's/^/worldgen=/'
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
-              sed 's/^/graphical=/'
+            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
+            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
+            # TEMPORARY #2872 migration validation; reverted after this run.
+            if [ "${{ github.head_ref }}" = 'issue-2872-ubuntu-26-04' ]; then
+              WORLDGEN=true
+              GRAPHICAL=true
+            fi
+            printf 'worldgen=%s\n' "$WORLDGEN"
+            printf 'graphical=%s\n' "$GRAPHICAL"
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
@@ -780,8 +795,8 @@ jobs:
         id: cache
         with:
           path: /usr/local/cabal/store
-          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
-          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+          key: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-
 
       - name: Restore project build cache (dist-newstyle)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
@@ -938,7 +953,7 @@ jobs:
   # build-test aggregate below to fail when this job does not succeed.
   static-audits:
     needs: resolve-image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1814,7 +1829,7 @@ jobs:
   behavior-probes:
     if: github.event_name == 'pull_request'
     needs: resolve-image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -1888,8 +1903,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /usr/local/cabal/store
-          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
-          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+          key: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-
 
       - name: Restore project build cache (dist-newstyle)
         if: steps.probe-selection.outputs.selected == 'true'
@@ -1958,7 +1973,7 @@ jobs:
       - static-audits
       - behavior-probes
       - headless-lanes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Require parallel CI workers
@@ -2014,7 +2029,7 @@ jobs:
       && github.ref == 'refs/heads/master'
       && needs.build-test.result == 'success'
       && needs.test-and-audits.outputs.docs_only != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -2059,8 +2074,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /usr/local/cabal/store
-          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
-          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+          key: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v3-${{ needs.resolve-image.outputs.image }}-${{ runner.os }}-ghc9.12.2-
 
       - name: Restore project build cache (dist-newstyle)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
