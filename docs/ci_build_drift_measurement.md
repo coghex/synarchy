@@ -108,6 +108,28 @@ compile CPU, slows a lane and breaks an example (§6). The recommendation is in 
 | 36871884401 | #2775 | exact | 6/8 | 424 (`3b1477a10`) | 430 (`dc766cdb2`) | 2 | 237 | 535 |
 | 36912885361 | #2776 | exact | 7/8 | 424 (`3b1477a10`) | 431 (`65bd147e9`) | 1 | 252 | 527 |
 
+### Provenance of each sampled run
+
+| Run | Attempt | Tested head | PR base | Merge tree | Image | Toolchain | Plan | Snapshot (writer run, commit) | Restore |
+|---|---:|---|---|---|---|---|---|---|---|
+| 36288123692 | 1 | `106131bd56e8` | `835f9b6a3a28` | `303cd401ab37` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `20edd55a` e52 | 36285855248, `835f9b6a3` | exact |
+| 36317483841 | 1 | `c93f17b67d7a` | `1e19e1e86eec` | `07a76f1da337` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `20edd55a` e52 | 36285855248, `835f9b6a3` | exact |
+| 36320504148 | 1 | `5d7f4f576adf` | `e7bed43d5488` | `06e5632dd2ef` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `20edd55a` e52 | 36285855248, `835f9b6a3` | exact |
+| 36343120829 | 1 | `26b95c68476f` | `5de514f96dbe` | `9047b3174f1b` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `20edd55a` e52 | 36285855248, `835f9b6a3` | prefix (wanted epoch 52, plan 5520c6d3) |
+| 36424074239 | 2 | `42fe9dd4338d` | `8b8481c8f305` | `ae49c26a9594` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e52 | 36347729198, `8b8481c8f` | exact |
+| 36443962564 | 1 | `f5eec86707c3` | `c2270c401b59` | `3d67431d3e04` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e52 | 36347729198, `8b8481c8f` | exact |
+| 36595400637 | 1 | `e718d59ee9a4` | `4a3205c5d7a1` | `9ec450923e87` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e52 | 36347729198, `8b8481c8f` | exact |
+| 36610894929 | 1 | `928c6be3ff6d` | `3b1477a10a96` | `5a2cc6f1d6f2` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36664523163 | 1 | `7969a4ce97d8` | `59150765113c` | `2c07dde87df4` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36672797648 | 1 | `68810d8d3729` | `9a274311de75` | `09a3ab1d5ec0` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36681200606 | 1 | `f67ee7598358` | `9a274311de75` | `62b4abe11ea5` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36744783577 | 1 | `ea31b0d0e475` | `d974d0b4ab77` | `be20b983b887` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36749407052 | 1 | `85312ebe2b3c` | `8e317ca88b79` | `d314f6ecb72f` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36822282351 | 1 | `521e411c3a2f` | `a0a4c8752ea1` | `941ee9728928` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36861571111 | 1 | `29f60e92b1ed` | `b1097e5071a4` | `7ec9203162f5` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36871884401 | 2 | `0bf81aa143c5` | `dc766cdb2440` | `9f40b994259e` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+| 36912885361 | 1 | `158dbe01a086` | `65bd147e9f3f` | `b7679eb2f237` | `ci-f90dae38568ffe9f` | ghc 9.12.2, cabal 3.16.1.0 | `5520c6d3` e53 | 36598707561, `3b1477a10` | exact |
+
 
 Taken as a union, the drift replay and the own replay equal the unsplit replay
 exactly: `D ∪ O` = `U` in all 34 run-and-group comparisons (0.0 % against the 5 %
@@ -309,17 +331,18 @@ the honest width of "how much replays master".
 
 ### Projected build seconds per run (library+exe step plus suites step)
 
-| Policy | median | 90% CI | p95 | 90% CI |
-|---|---:|---|---:|---|
-| today (size 8) | 9m19s | 9m16s-11m12s | 12m33s | 11m28s-12m33s |
-| size 4 | 9m19s | 9m16s-11m12s | 12m31s | 11m28s-12m31s |
-| size 2 | 9m16s | 1m53s-9m38s | 11m40s | 10m21s-12m03s |
-| size 1 | 1m53s | 1m48s-9m33s | 11m40s | 9m56s-12m03s |
-| ideal every push | 1m48s | 1m45s-9m16s | 11m40s | 9m50s-12m03s |
-| suites -O1 | 8m35s | 8m33s-10m23s | 11m37s | 10m38s-11m37s |
-| suites -O0 | 10m41s | 10m38s-12m45s | 14m18s | 13m04s-14m18s |
-| size 1 + suites -O1 | 1m52s | 1m48s-8m48s | 10m48s | 9m12s-11m10s |
-| size 1 + suites -O0 | 1m54s | 1m48s-10m56s | 13m19s | 11m20s-13m44s |
+| Policy | runs | median | 90% CI | p95 | 90% CI |
+|---|---:|---:|---|---:|---|
+| today (size 8) | 17 | 9m19s | 9m16s-11m12s | 12m33s | 11m28s-12m33s |
+| size 4 | 17 | 9m19s | 9m16s-11m12s | 12m31s | 11m28s-12m31s |
+| size 2 | 17 | 9m16s | 1m53s-9m38s | 11m40s | 10m21s-12m03s |
+| size 1 | 17 | 1m53s | 1m48s-9m33s | 11m40s | 9m56s-12m03s |
+| every successful push | 17 | 1m53s | 1m48s-9m33s | 11m40s | 9m56s-12m03s |
+| ideal every push (lower bound) | 17 | 1m48s | 1m45s-9m16s | 11m40s | 9m50s-12m03s |
+| suites -O1 | 17 | 8m35s | 8m33s-10m23s | 11m37s | 10m38s-11m37s |
+| suites -O0 | 17 | 10m41s | 10m38s-12m45s | 14m18s | 13m04s-14m18s |
+| size 1 + suites -O1 | 17 | 1m52s | 1m48s-8m48s | 10m48s | 9m12s-11m10s |
+| size 1 + suites -O0 | 17 | 1m54s | 1m48s-10m56s | 13m19s | 11m20s-13m44s |
 
 ### Projected whole-run wall time (lane jobs of #2745)
 
@@ -337,9 +360,12 @@ the honest width of "how much replays master".
 | size 1 | p25 | 15m53s | 24m49s | lane rest |
 | size 1 | p50 | 18m03s | 26m58s | lane rest |
 | size 1 | p75 | 20m04s | 28m59s | lane rest |
-| ideal every push | p25 | 15m44s | 24m49s | lane rest |
-| ideal every push | p50 | 17m54s | 26m58s | lane rest |
-| ideal every push | p75 | 19m55s | 28m59s | lane rest |
+| every successful push | p25 | 15m53s | 24m49s | lane rest |
+| every successful push | p50 | 18m03s | 26m58s | lane rest |
+| every successful push | p75 | 20m04s | 28m59s | lane rest |
+| ideal every push (lower bound) | p25 | 15m44s | 24m49s | lane rest |
+| ideal every push (lower bound) | p50 | 17m54s | 26m58s | lane rest |
+| ideal every push (lower bound) | p75 | 19m55s | 28m59s | lane rest |
 | suites -O1 | p25 | 22m03s | 24m47s | lane rest |
 | suites -O1 | p50 | 24m13s | 26m57s | lane rest |
 | suites -O1 | p75 | 26m14s | 28m58s | lane rest |
@@ -364,9 +390,14 @@ is the second-largest run; treat both as indications.
   pull requests in the sample window started 9–42 minutes before the snapshot of
   their own base had finished writing (the writer was the push's whole
   `test-and-audits` job); since #2745 the writer is the separate `project-cache` job after
-  `build-test`, whose run wall time (push run median 30m51s, 95th percentile
-  48m16s) sets the lag. Those runs restore the previous snapshot; `size 1` includes it,
-  `ideal every push` does not.
+  `build-test`, whose run wall time (push run median 31m25s, 95th percentile
+  52m18s) sets the lag. Those runs restore the previous snapshot. `size 1` and `every successful push`
+  include it (the latter takes the newest snapshot any successful master job at or
+  before the base had finished writing, including pushes with no build-relevant change,
+  which write a snapshot of an unchanged tree); on this sample they pick the same
+  snapshot for all 17 runs and differ only in how many snapshots they write.
+  `ideal every push` assumes the base's snapshot is always ready and is shown only as
+  a lower bound.
 * **Fallback and cold cache.** A group with no finished writer falls back to
   the newest earlier group; there is no cold-cache case in the sample (a cold
   restore would cost the full cascade of 930 library+exe and 514 suite modules, about
@@ -382,8 +413,8 @@ is the second-largest run; treat both as indications.
   prerequisite build scaled by the library estimate; static audits keep each
   run's own time. The `rest` lane is the critical job in every projection.
 * **Writer cost.** A snapshot is only written when the key is absent. Over the
-  22 days since #2745, 72 of 193 successful master pushes ran the writer and 9 wrote a snapshot (median
-  815 s rebuild plus 68 s save). `size 1` writes about 2.4–3.0 snapshots a day
+  22 days since #2745, 74 of 196 successful master pushes ran the writer job to success and 11 wrote a
+  snapshot (median 877 s rebuild plus 67 s save). `size 1` writes about 2.4–3.0 snapshots a day
   (the relevant merges per day), versus 0.3–0.4 now.
 
 ### Cache storage and eviction against the 10 GB quota
@@ -525,6 +556,9 @@ a single run.
   snapshot is fresh. A reasonable follow-up, not needed to reach the target.
   **Suite `-O0` is rejected**: more compile CPU, a slower `world` lane, and one failing
   example whose expectation is optimisation-dependent.
+* **`every successful push` picks the same snapshots as `EPOCH_SIZE = 1` on this sample** (it just writes
+  17 % more of them for an unchanged tree), so `EPOCH_SIZE = 1` is the choice; `ideal every push` in §5 is a
+  lower bound that ignores writer availability.
 * **`EPOCH_SIZE` 2 and 4 are not worth it**: the median stays 9m16s and
   9m19s, because the median run's base is rarely a group start; they save
   storage and little else.
@@ -536,10 +570,30 @@ a single run.
   about 0.4. A pull request that starts before its base's snapshot is written
   (a quarter of them) restores the previous change's snapshot, which is already
   in the projection; shortening the writer lag (it now waits for `build-test`,
-  push run median 30m51s) would help further and is a separate decision about
+  push run median 31m25s) would help further and is a separate decision about
   caching an unverified tree.
 
 ## 8. Repeating this
+
+**Regenerating the tables needs no CI access.** The measurement inputs are
+preserved in [`evidence/ci-build-drift-2746/`](evidence/ci-build-drift-2746/):
+
+| File | Contents |
+|---|---|
+| `runs.json` | the 118 successful CI runs of 2026-09-24 to 10-02 as collected (steps, jobs, cache keys and report lines, merge parents, attempt, writer evidence) |
+| `lanes.json` | the 341 runs of 2026-10-03 to 10-24, timings only, trimmed to the steps the model reads |
+| `plan.json` | the 17 sampled runs: tested head, PR base, **merge-tree identity of the tested tree**, full primary and restored cache keys, snapshot commit and writer run, and each policy's snapshot |
+| `replay.json` | every replayed build: commit and recompiled modules per Cabal component |
+| `replay_replicates.json` | the three replicate builds of §2 |
+| `opt_measurements.json`, `opt.json` | the raw §6 timings, loads and sequential compiles, and the ratios derived from them (compile CPU ratio = sequential CPU of the level / of `-O2`; run ratio = lane wall time / the mean of the two `-O2` runs) |
+
+```bash
+E=docs/evidence/ci-build-drift-2746
+python3 tools/ci_build_drift_report.py --runs $E/runs.json --plan $E/plan.json \
+  --replay $E/replay.json --lanes $E/lanes.json --opt $E/opt.json
+```
+
+To repeat the whole measurement (needs `gh` and a machine that builds the project):
 
 ```bash
 WT=~/worktrees/coghex/synarchy/issue-2746-ci-build-drift     # the checkout holding the tools
@@ -557,12 +611,10 @@ git worktree add --detach ~/worktrees/coghex/synarchy/issue-2746-replay 835f9b6a
 cp -Rpc ~/worktrees/coghex/synarchy/issue-2746-replay/dist-newstyle $STATE/states/c417
 python3 tools/ci_build_drift.py replay --plan $STATE/plan.json --worktree ~/worktrees/coghex/synarchy/issue-2746-replay \
   --state-dir $STATE/states --out $STATE/replay.json
-#    interrupted? re-plan only what is left (a needed state is rebuilt from the nearest live one):
+#    interrupted, or states dropped? re-plan only what is left (a state a pending step
+#    needs is rebuilt from the nearest live one, keeping its recorded measurement):
 python3 tools/ci_build_drift.py plan ... --resume $STATE/replay.json --state-dir $STATE/states --out $STATE/plan.json
-# 4. tables
-python3 tools/ci_build_drift_report.py --runs $STATE/runs.json --plan $STATE/plan.json \
-  --replay $STATE/replay.json --lanes $STATE/runs_lanes.json --opt $STATE/opt.json
-# 5. acceptance
+# 4. tables (as above, with $STATE paths), then acceptance
 python3 tools/ci_timing_report.py --run 36320504148   # likewise 36317483841, 36288123692
 git diff origin/master --stat -- .github/ tools/ci_cache_epoch.py synarchy.cabal 'cabal.project*'   # prints nothing
 ```
