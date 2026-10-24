@@ -464,6 +464,16 @@ receives explicit preview and gameplay signoff.
 
 ### D-10. Structure lifecycle animations do not require per-frame facemaps
 
+> **Wire exception (#2516).** D-10 is a pack-wide default, not a ban. A pack
+> MAY pair lifecycle frames with facemaps of their own, and Wire now MUST:
+> its colour art is flat material colour, its lighting comes entirely from a
+> dedicated facemap per static appearance and per lifecycle frame, and an
+> unpaired Wire frame is refused at registration. A paired frame is drawn by
+> the ordinary alpha rule and does NOT set the lifecycle alpha flag.
+> Dungeon, which pairs nothing, keeps the behaviour below unchanged. The
+> "dedicated frame facemaps are not part of the required inventory" sentence
+> below therefore holds for every pack except Wire.
+
 Structure construction and destruction author color/alpha animation frames
 only. Each sequence reuses its resolved static appearance's existing/default
 facemap RGB for lighting, while a lifecycle-only render flag ignores facemap
@@ -920,6 +930,17 @@ introduced; this epic does not itself add stair gameplay or art.
 
 ### BDA-16. Author Wire structure lifecycle sets
 
+- **Owner decision (#2516):** the power Wire is a THIN cable (about two
+  pixels), no outline, one dark-orange insulation colour, flat colour
+  textures only. Each static appearance and every lifecycle frame has its
+  own facemap; lighting comes from the renderer through those maps, not
+  from painted highlights. This replaces the earlier plan to preserve the
+  static artwork and the shared floor facemap.
+- **Owner amendment (#2516, requirement 11):** four vertical RISER
+  appearances (`riser_n/e/s/w`), art and declaration only, in the same thin
+  style with full lifecycles and facemaps; the two camera-facing ones
+  (`riser_e`, `riser_s`) bake a slightly darker underside into the colour.
+  Nothing places them yet. See `structure_pack_schema.md` §9b.
 - **Outcome:** Every Wire connection appearance has owner-approved static,
   construction, and forward destruction sprites.
 - **Scope:** Full construction and destruction sequences for all 16 shipped

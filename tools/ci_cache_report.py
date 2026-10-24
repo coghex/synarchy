@@ -2,9 +2,10 @@
 """Report which restore outcome each of CI's two caches got (#1358).
 
 `.github/workflows/ci.yml`'s `test-and-audits` worker restores two caches -- the
-cabal dependency store and the `dist-newstyle` project build products --
-each keyed on the dependency plan hash with a broad `restore-keys`
-prefix fallback (#790). That gives three possible outcomes per cache:
+Cabal dependency store and the `dist-newstyle` project build products. Both
+are scoped to the immutable CI image; each also uses the dependency plan hash
+with a compatible `restore-keys` prefix fallback (#790). That gives three
+possible outcomes per cache:
 
   * **exact hit** -- the primary key itself was present;
   * **prefix hit** -- the primary key missed and a `restore-keys` prefix
@@ -304,6 +305,7 @@ def check_wiring(document: object) -> list[str]:
     Returns a list of problems; empty means the wiring is intact.
     """
     problems: list[str] = []
+    deps, _dist = CACHES
 
     jobs = document.get("jobs") if isinstance(document, dict) else None
     if not isinstance(jobs, dict) or not isinstance(jobs.get(AUDITED_JOB), dict):
@@ -349,6 +351,77 @@ def check_wiring(document: object) -> list[str]:
             f"{CACHE_EPOCH_STEP_ID}`, found {len(epoch_steps)}.")
 
     dist_steps = by_id.get("dist-cache", [])
+    deps_steps = by_id.get("cache", [])
+    if len(deps_steps) == 1:
+        deps_with = deps_steps[0].get("with")
+        deps_with = deps_with if isinstance(deps_with, dict) else {}
+        deps_key = str(deps_with.get("key", ""))
+        deps_prefix = str(deps_with.get("restore-keys", ""))
+        if (not deps_key.startswith("deps-v3-") or
+                CACHE_IMAGE_OUTPUT not in deps_key or
+                deps_key.startswith("deps-v2-")):
+            problems.append(
+                f"{WORKFLOW_LABEL}: dependency-cache primary key must use "
+                f"the image-scoped deps-v3 family and contain "
+                f"`{CACHE_IMAGE_OUTPUT}`, got `{deps_key}`.")
+        if (not deps_prefix.startswith("deps-v3-") or
+                CACHE_IMAGE_OUTPUT not in deps_prefix or
+                "deps-v2-" in deps_prefix):
+            problems.append(
+                f"{WORKFLOW_LABEL}: dependency-cache restore prefix must be "
+                f"image-scoped and must not match retired deps-v2 entries, "
+                f"got `{deps_prefix}`.")
+
+        # All dependency-store readers must use the audited primary key and
+        # prefix, and the single save must publish that same key. Keeping the
+        # image identity before the plan hash also prevents a pre-migration
+        # workflow's broad deps-v2 restore prefix from matching these entries.
+        dependency_restores: list[tuple[str, dict]] = []
+        dependency_saves: list[tuple[str, dict]] = []
+        for job_name, job in jobs.items():
+            job_steps = job.get("steps") if isinstance(job, dict) else None
+            for candidate in job_steps if isinstance(job_steps, list) else []:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_with = candidate.get("with")
+                candidate_path = str((candidate_with or {}).get("path", "")).strip() \
+                    if isinstance(candidate_with, dict) else ""
+                uses = str(candidate.get("uses", ""))
+                if candidate_path != deps.path:
+                    continue
+                if uses.startswith(SAVE_ACTION_PREFIX):
+                    dependency_saves.append((job_name, candidate))
+                elif "actions/cache" in uses:
+                    dependency_restores.append((job_name, candidate))
+
+        for job_name, restore in dependency_restores:
+            restore_with = restore.get("with")
+            restore_with = restore_with if isinstance(restore_with, dict) else {}
+            if not str(restore.get("uses", "")).startswith(RESTORE_ACTION_PREFIX):
+                problems.append(
+                    f"{WORKFLOW_LABEL} (job: {job_name}): dependency-cache "
+                    f"restore must use `{RESTORE_ACTION_PREFIX}...`.")
+            if (_normalize_expression(restore_with.get("key", "")) !=
+                    _normalize_expression(deps_key) or
+                    _normalize_expression(restore_with.get("restore-keys", "")) !=
+                    _normalize_expression(deps_prefix)):
+                problems.append(
+                    f"{WORKFLOW_LABEL} (job: {job_name}): dependency-cache "
+                    "key or restore prefix differs from the audited reader/writer.")
+        if len(dependency_saves) != 1:
+            problems.append(
+                f"{WORKFLOW_LABEL}: expected exactly one dependency-cache save, "
+                f"found {[name for name, _ in dependency_saves]}.")
+        else:
+            save_job, save = dependency_saves[0]
+            save_with = save.get("with")
+            save_with = save_with if isinstance(save_with, dict) else {}
+            if (_normalize_expression(save_with.get("key", "")) !=
+                    _normalize_expression(deps_key)):
+                problems.append(
+                    f"{WORKFLOW_LABEL} (job: {save_job}): dependency-cache "
+                    "save key differs from the audited restore key.")
+
     if len(dist_steps) == 1:
         with_block = dist_steps[0].get("with")
         with_block = with_block if isinstance(with_block, dict) else {}
@@ -495,6 +568,7 @@ def check_wiring(document: object) -> list[str]:
 
 def _valid_wiring_document() -> dict:
     """A minimal workflow document `check_wiring` must accept."""
+    deps, _dist = CACHES
     steps: list[dict] = [
         {"name": "Select docs-only fast path",
          "id": DOCS_FAST_PATH_STEP_ID,
@@ -512,15 +586,24 @@ def _valid_wiring_document() -> dict:
                 "path": spec.path,
                 "key": ("dist-v3-Linux-" + CACHE_IMAGE_OUTPUT +
                         "-plan-epoch-" + CACHE_EPOCH_OUTPUT
-                        if spec.step_id == "dist-cache" else "some-key"),
+                        if spec.step_id == "dist-cache" else
+                        "deps-v3-" + CACHE_IMAGE_OUTPUT + "-Linux-ghc9.12.2-plan"),
                 "restore-keys": ("dist-v3-Linux-" + CACHE_IMAGE_OUTPUT +
                                  "-plan-epoch-\n" +
                                  "dist-v3-Linux-" + CACHE_IMAGE_OUTPUT +
                                  "-\n" + CACHE_IMAGE_OUTPUT + " == " +
                                  LEGACY_IMAGE_REF + " ? dist-v2-Linux-\n"
-                                 if spec.step_id == "dist-cache" else "deps-"),
+                                 if spec.step_id == "dist-cache" else
+                                 "deps-v3-" + CACHE_IMAGE_OUTPUT +
+                                 "-Linux-ghc9.12.2-"),
             },
         })
+    steps.append({
+        "name": "Save dependency cache",
+        "uses": f"{SAVE_ACTION_PREFIX}deadbeef",
+        "with": {"path": deps.path, "key":
+                 "deps-v3-" + CACHE_IMAGE_OUTPUT + "-Linux-ghc9.12.2-plan"},
+    })
     steps.append({
         "name": "Report cache restore outcomes",
         "env": dict(expected_env_bindings()),
@@ -528,6 +611,8 @@ def _valid_wiring_document() -> dict:
     })
     dist_restore = next(step for step in steps
                         if step.get("id") == "dist-cache")
+    deps_restore = next(step for step in steps
+                        if step.get("id") == deps.step_id)
     probe_restore = {
         "name": "Restore project build cache (dist-newstyle)",
         "id": "probe-dist-cache",
@@ -551,9 +636,12 @@ def _valid_wiring_document() -> dict:
     }
     return {"jobs": {
         AUDITED_JOB: {"steps": steps},
-        PROBE_JOB: {"steps": [probe_restore]},
-        LANE_JOB: {"steps": [dict(copy, **{"with": dict(copy["with"])})]},
-        WRITER_JOB: {"steps": [dict(copy, **{"with": dict(copy["with"])}), writer_save]},
+        PROBE_JOB: {"steps": [dict(deps_restore, **{"with": dict(deps_restore["with"])}),
+                              probe_restore]},
+        LANE_JOB: {"steps": [dict(deps_restore, **{"with": dict(deps_restore["with"])}),
+                             dict(copy, **{"with": dict(copy["with"])})]},
+        WRITER_JOB: {"steps": [dict(deps_restore, **{"with": dict(deps_restore["with"])}),
+                               dict(copy, **{"with": dict(copy["with"])}), writer_save]},
     }}
 
 
@@ -694,13 +782,40 @@ def _self_test() -> int:
 
     def dist_save_step(steps: list[dict]) -> dict:
         return next(step for step in steps
-                    if str(step.get("uses", "")).startswith(SAVE_ACTION_PREFIX))
+                    if str(step.get("uses", "")).startswith(SAVE_ACTION_PREFIX)
+                    and str((step.get("with") or {}).get("path", "")) ==
+                    "dist-newstyle")
 
     mutate(lambda steps: find(steps, dist.step_id).__setitem__(
                "uses", "actions/cache@deadbeef"),
            "combined `actions/cache` action")
     mutate(lambda steps: find(steps, deps.step_id).__setitem__("id", "renamed"),
            f"`id: {deps.step_id}`")
+    mutate(lambda steps: find(steps, deps.step_id)["with"].__setitem__(
+               "key", "deps-v3-Linux-plan"),
+           "dependency-cache primary key must use")
+    mutate(lambda steps: find(steps, deps.step_id)["with"].__setitem__(
+               "restore-keys", "deps-v2-Linux-ghc9.12.2-"),
+           "dependency-cache restore prefix must be image-scoped")
+    dependency_reader_drift = _valid_wiring_document()
+    dependency_reader_drift["jobs"][PROBE_JOB]["steps"][0]["with"]["restore-keys"] = \
+        "deps-v3-other-image-Linux-ghc9.12.2-"
+    dependency_reader_problems = check_wiring(dependency_reader_drift)
+    check(any("(job: behavior-probes): dependency-cache key or restore prefix" in problem
+              for problem in dependency_reader_problems),
+          "dependency reader image/key drift must fail, got "
+          f"{dependency_reader_problems!r}")
+    dependency_save_drift = _valid_wiring_document()
+    dependency_save = next(
+        step for step in dependency_save_drift["jobs"][AUDITED_JOB]["steps"]
+        if str(step.get("uses", "")).startswith(SAVE_ACTION_PREFIX)
+        and str((step.get("with") or {}).get("path", "")) == deps.path)
+    dependency_save["with"]["key"] = "deps-v3-other-image-Linux-plan"
+    dependency_save_problems = check_wiring(dependency_save_drift)
+    check(any("dependency-cache save key differs" in problem
+              for problem in dependency_save_problems),
+          "dependency save image/key drift must fail, got "
+          f"{dependency_save_problems!r}")
     mutate(lambda steps: find(steps, dist.step_id)["with"].__setitem__(
                "path", "somewhere-else"),
            "this report describes it as")
@@ -740,17 +855,17 @@ def _self_test() -> int:
     mutate(lambda steps: steps.append(
                dict(dist_save_step(_valid_wiring_document()["jobs"][WRITER_JOB]["steps"]))),
            "found ['test-and-audits', 'project-cache']")
-    mutate_job(LANE_JOB, lambda steps: steps[0]["with"].__setitem__(
+    mutate_job(LANE_JOB, lambda steps: find(steps, "dist-cache")["with"].__setitem__(
                    "key", "dist-v3-other"),
                "(job: headless-lanes): project-cache `key` differs")
-    mutate_job(WRITER_JOB, lambda steps: steps[0]["with"].__setitem__(
+    mutate_job(WRITER_JOB, lambda steps: find(steps, "dist-cache")["with"].__setitem__(
                    "restore-keys", "dist-v3-"),
                "(job: project-cache): project-cache `restore-keys` differs")
-    mutate_job(LANE_JOB, lambda steps: steps[0].__setitem__("id", "renamed"),
+    mutate_job(LANE_JOB, lambda steps: find(steps, "dist-cache").__setitem__("id", "renamed"),
                "(job: headless-lanes): expected exactly one step with `id: dist-cache`")
 
     image_drift = _valid_wiring_document()
-    image_drift["jobs"][PROBE_JOB]["steps"][0]["with"]["key"] = \
+    image_drift["jobs"][PROBE_JOB]["steps"][-1]["with"]["key"] = \
         "dist-v3-without-image"
     image_problems = check_wiring(image_drift)
     check(any("image-only change must invalidate both workers" in problem

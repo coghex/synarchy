@@ -329,7 +329,8 @@ the re-measurement is current.
 - The CI image has no scheduled refresh. Its immutable tag is the content hash
   of `.github/ci/Dockerfile` plus `.github/workflows/ci-image.yml`; a tag is
   published only once. The Dockerfile nevertheless resolves moving external
-  inputs (`ubuntu:22.04`, `apt-get`, and the ghcup download), and the image
+  inputs (`ubuntu:22.04` at the time; migrated to `ubuntu:26.04` in #2872,
+  `apt-get`, and the ghcup download), and the image
   workflow explicitly notes that identical instructions are not guaranteed to
   rebuild to identical bytes. Image refresh remains content-change-driven: an
   intentional recipe or base refresh must mint a new immutable identity, never
