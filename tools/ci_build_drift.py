@@ -69,6 +69,7 @@ PR_REF_RE = re.compile(r"git checkout --progress --force refs/remotes/pull/(\d+)
 MERGE_RE = re.compile(r"HEAD is now at (\w+) Merge (\w+) into (\w+)")
 REPORT_RE = re.compile(
     r"CI_CACHE_REPORT cache=(\S+) outcome=(\S+) primary_key=(\S+) matched_key=(\S*)")
+PUBLISHED_RE = re.compile(r"Cache saved with key: (dist-v3-\S+)")
 CACHE_SIZE_RE = re.compile(r"Cache Size: ~(\d+) MB \((\d+) B\)")
 RESTORED_RE = re.compile(r"Cache restored from key: (\S+)")
 COMPILING_RE = re.compile(r"^\[\s*(\d+) of (\d+)\] Compiling (\S+)")
@@ -118,6 +119,17 @@ def parse_log(text: str) -> dict:
     return out
 
 
+def parse_publication(text: str) -> str | None:
+    """The project-cache key this job's save step actually published, if its log says so.
+
+    A concurrent writer that loses the race for an immutable key finishes its
+    save step successfully after only a warning ("Unable to reserve cache with
+    key ..."), so a green step proves nothing: only "Cache saved with key" does.
+    """
+    match = PUBLISHED_RE.search(text)
+    return match.group(1) if match else None
+
+
 def split_key(key: str) -> dict | None:
     m = KEY_RE.match(key or "")
     return m.groupdict() if m else None
@@ -137,25 +149,24 @@ def job_seconds(job: dict) -> dict:
 WRITER_JOB = "project-cache"
 
 
-def writer_evidence(job: dict, all_jobs: list[dict]) -> dict:
-    """Whether this run could write the project cache, whether it did, and when it finished.
+def writer_evidence(job: dict, all_jobs: list[dict], writer_text: str = "") -> dict:
+    """Whether this run could write the project cache, whether it published, and when it finished.
 
     Since #2745 a separate ``project-cache`` job, after the verdict, saves the
     snapshot; before it, the ``test-and-audits`` job's own save step did.  Both
     workflows are read: the writer job is the ``project-cache`` job when the run
-    has one, otherwise the audit job.
+    has one, otherwise the audit job, and ``writer_text`` is that job's log.
+    Publication needs the log's "Cache saved with key" line, not just a green step.
     """
-    writer = next((j for j in all_jobs if j["name"] == WRITER_JOB), None)
-    if writer is not None:
-        ran = writer.get("conclusion") == "success"
-        saved = any(s["name"] == STEP_SAVE and s.get("conclusion") == "success" for s in writer["steps"])
-        return {"writer_ran": ran, "saved_project_cache": saved, "writer_completed_at": writer.get("completed_at")}
-    saved = any(s["name"] == STEP_SAVE and s.get("conclusion") == "success" for s in job["steps"])
-    return {"writer_ran": job.get("conclusion") == "success", "saved_project_cache": saved,
-            "writer_completed_at": job.get("completed_at")}
+    writer = next((j for j in all_jobs if j["name"] == WRITER_JOB), job)
+    published = parse_publication(writer_text)
+    return {"writer_ran": writer.get("conclusion") == "success",
+            "published_key": published, "saved_project_cache": published is not None,
+            "writer_completed_at": writer.get("completed_at")}
 
 
-def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = None) -> dict:
+def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = None,
+               writer_text: str | None = None) -> dict:
     steps = {s["name"]: s for s in job["steps"]}
     facts = parse_log(text)
     return {
@@ -172,7 +183,7 @@ def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = No
         "job_completed_at": job["completed_at"],
         "lib_exe_seconds": step_seconds(steps.get(STEP_LIB)),
         "test_suite_seconds": step_seconds(steps.get(STEP_TESTS)),
-        **writer_evidence(job, all_jobs or [job]),
+        **writer_evidence(job, all_jobs or [job], text if writer_text is None else writer_text),
         **facts,
     }
 
@@ -211,7 +222,15 @@ def collect(repo: str, since: str, until: str, cache_dir: Path, jobs_only: bool 
         log_path = log_cache_path(cache_dir, run["databaseId"], job["id"])
         if not log_path.exists():
             log_path.write_text(gh_api(f"repos/{repo}/actions/jobs/{job['id']}/logs"))
-        records.append(run_record(run, job, log_path.read_text(), jobs["jobs"]))
+        # since #2745 the project-cache job, not the audit job, publishes: read its log too
+        writer = next((j for j in jobs["jobs"] if j["name"] == WRITER_JOB), None)
+        writer_text = None
+        if writer is not None:
+            writer_path = log_cache_path(cache_dir, run["databaseId"], writer["id"])
+            if writer.get("conclusion") == "success" and not writer_path.exists():
+                writer_path.write_text(gh_api(f"repos/{repo}/actions/jobs/{writer['id']}/logs"))
+            writer_text = writer_path.read_text() if writer_path.exists() else ""
+        records.append(run_record(run, job, log_path.read_text(), jobs["jobs"], writer_text))
     return records
 
 
@@ -220,7 +239,7 @@ def snapshot_writers(records: list[dict]) -> dict[str, list[dict]]:
     writers: dict[str, list[dict]] = {}
     for rec in records:
         if rec["event"] == "push" and rec["saved_project_cache"] and rec["dist"]:
-            writers.setdefault(rec["dist"]["primary_key"], []).append(
+            writers.setdefault(rec["published_key"], []).append(
                 {"run_id": rec["run_id"], "sha": rec["head_sha"],
                  "completed_at": rec["writer_completed_at"]})
     # by publication time, not run creation: a re-run of an old push publishes later than newer runs
@@ -363,25 +382,6 @@ def key_tuple(primary_key: str) -> tuple | None:
     return (key["os"], key["image"], key["ghc"], key["cabal"], key["plan"]) if key else None
 
 
-def key_floor(count: int, key_by_count: dict[int, tuple]) -> int:
-    """Oldest relevant count from which the key family and plan are unchanged up to ``count``.
-
-    The restore ladder's exact key and its same-plan prefix both need the image,
-    toolchain and plan to match; only the last prefix may cross a plan, and
-    only within one image and toolchain.
-    """
-    known = sorted(c for c in key_by_count if c <= count)
-    if not known:
-        return 0
-    current = key_by_count[known[-1]]
-    floor = known[-1]
-    for c in reversed(known[:-1]):
-        if key_by_count[c] != current:
-            break
-        floor = c
-    return floor
-
-
 def writer_entries(records: list[dict], chain: dict) -> list[dict]:
     """Every successful master writer job: position, relevant count, key family and finish time."""
     position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
@@ -403,75 +403,52 @@ def key_at(entries: list[dict], base_position: int) -> tuple | None:
     return before[-1]["key"] if before else None
 
 
-def writer_completion(entries: list[dict], key: tuple) -> dict[int, dt.datetime]:
-    """When the first successful writer of ``key``'s family and plan finished, per relevant count.
-
-    A key is written by the first eligible successful job that finds it absent,
-    so any push at a count (the commit that made it or a later one with no
-    build-relevant change) can seed it; the earliest finish wins.  Writers of
-    another image, toolchain or plan write keys this policy never restores.
-    """
-    done: dict[int, dt.datetime] = {}
-    for e in entries:
-        if e["key"] == key:
-            done[e["count"]] = min(done.get(e["count"], e["completed"]), e["completed"])
-    return done
-
-
-def prefix_fallback(entries: list[dict], key: tuple, started_at: str) -> int | None:
-    """Count of the newest ready snapshot of the same image and toolchain under another plan.
-
-    The last restore-key accepts any plan of the same image and toolchain; the
-    most recently written such key wins.  Another image or toolchain is
-    never restored.
-    """
-    started = parse_time(started_at)
-    ready = [e for e in entries if e["key"][:4] == key[:4] and e["key"] != key and e["completed"] <= started]
-    return max(ready, key=lambda e: e["completed"])["count"] if ready else None
-
-
-def every_push_snapshot(base_position: int, started_at: str, floor: int,
-                        entries: list[dict], key: tuple) -> int | None:
-    """Relevant count of the newest snapshot 'a snapshot per successful master push' has ready.
-
-    Each push writes its own snapshot, whether or not it changed anything
-    build-relevant.  A pull request restores the newest one of its own key
-    family and plan written at or before its base commit that finished before
-    the run started, else (explicit fallback) the newest of another plan of
-    the same image and toolchain.
-    """
-    started = parse_time(started_at)
-    ready = [e["count"] for e in entries if e["key"] == key and e["position"] <= base_position
-             and e["completed"] <= started and e["count"] >= floor]
-    return max(ready) if ready else prefix_fallback(entries, key, started_at)
-
-
 POLICY_SIZES = (1, 2, 4, 8)
 
 
-def policy_snapshot(size: int, base: int, started_at: str, floor: int,
-                    written: dict[int, dt.datetime], fallback: int | None = None) -> int | None:
-    """Relevant count of the snapshot an EPOCH_SIZE=``size`` policy restores.
+def published_snapshots(entries: list[dict], size: int | None) -> list[dict]:
+    """The snapshots a policy publishes, derived from the writers before any restore is chosen.
 
-    A group of ``size`` relevant changes shares one key.  The first
-    successful master job in the group whose key is absent writes it, so the
-    snapshot is the earliest-finished job at a count in the group (up to the
-    run's base, finished before the run started).  A group none of whose jobs
-    has finished writing, a cancelled writer for example, falls back to the
-    newest earlier group that has one.  ``floor`` is the oldest count sharing
-    the base's key family and plan: an exact key never crosses one.  With no
-    ready group the explicit fallback is the restore ladder's last prefix, the
-    newest snapshot of another plan of the same image and toolchain (``fallback``).
+    A policy's key names (family, plan, group of ``size`` relevant changes), or
+    a single commit when ``size`` is None ('a snapshot per successful push').  An
+    immutable key is published by the first eligible successful job to finish
+    saving it; a job that finishes later (or restored it at start) publishes
+    nothing.  Writers of another image, toolchain or plan publish keys of their
+    own, kept apart by the key tuple.
+    """
+    first: dict[tuple, dict] = {}
+    for e in entries:
+        ident = (e["key"], e["position"] if size is None else e["count"] // size)
+        if ident not in first or e["completed"] < first[ident]["completed"]:
+            first[ident] = {**e, "group": ident[1]}
+    return sorted(first.values(), key=lambda p: p["completed"])
+
+
+def restore_snapshot(published: list[dict], key: tuple, group: int, started_at: str,
+                     base_count: int) -> int | None:
+    """Relevant count of the snapshot the restore ladder picks from a policy's published snapshots.
+
+    The ladder, over snapshots finished before the run started: the exact key
+    (family, plan, group); else the newest-created key of the same family and
+    plan (the same-plan prefix); else the newest-created key of the same image
+    and toolchain under another plan (the last prefix).  A key of another image or
+    toolchain is never restored.  Newest means last to finish saving, which is
+    GitHub's choice among prefix matches, not the one nearest the base.
     """
     started = parse_time(started_at)
-    group = base // size
-    while group * size + size > floor:
-        counts = [c for c in range(max(group * size, floor), min(base, group * size + size - 1) + 1)
-                  if c in written and written[c] <= started]
-        if counts:
-            return min(counts, key=lambda c: written[c])
-        group -= 1
-    return fallback
+    ready = [p for p in published if p["completed"] <= started]
+    for tier in (
+        [p for p in ready if p["key"] == key and p["group"] == group],
+        [p for p in ready if p["key"] == key],
+        [p for p in ready if p["key"][:4] == key[:4]],
+    ):
+        if tier:
+            chosen = max(tier, key=lambda p: p["completed"])
+            if chosen["count"] > base_count:
+                raise ValueError(f"the restore picks a snapshot of change {chosen['count']}, newer than the "
+                                 f"base {base_count}; restoring from the future is not modelled")
+            return chosen["count"]
+    return None
 
 
 def make_plan(records: list[dict], chain: dict, run_ids: list[int],
@@ -480,10 +457,8 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
     """Sample plan: per run, the restored snapshot, base, head, tested tree and policy snapshots."""
     writers = snapshot_writers(records)
     entries = writer_entries(records, chain)
-    key_by_count: dict[int, tuple] = {}
-    for e in entries:
-        key_by_count[e["count"]] = e["key"]
     position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
+    published = {size: published_snapshots(entries, size) for size in (*POLICY_SIZES, None)}
     by_id = {r["run_id"]: r for r in records}
     runs = []
     for run_id in run_ids:
@@ -497,12 +472,10 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
         bkey = key_at(entries, position[full_base])
         if bkey is None:
             raise RuntimeError(f"run {run_id}: no master writer at or before its base {full_base[:9]}")
-        floor = key_floor(base_count, key_by_count)
-        written = writer_completion(entries, bkey)
-        fallback = prefix_fallback(entries, bkey, rec["job_started_at"])
-        policies = {str(size): policy_snapshot(size, base_count, rec["job_started_at"], floor, written, fallback)
+        started = rec["job_started_at"]
+        policies = {str(size): restore_snapshot(published[size], bkey, base_count // size, started, base_count)
                     for size in POLICY_SIZES}
-        policies["every"] = every_push_snapshot(position[full_base], rec["job_started_at"], floor, entries, bkey)
+        policies["every"] = restore_snapshot(published[None], bkey, position[full_base], started, base_count)
         runs.append({"run_id": run_id, "attempt": rec["attempt"], "snapshot": chain["index"][snap["sha"]],
                      "snapshot_sha": snap["sha"], "snapshot_writer_run": snap["run_id"], "base": full_base,
                      "base_count": chain["index"][full_base], "head": rec["merge"]["head"],
@@ -510,6 +483,11 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
                                      .splitlines()[0] if repo else None),
                      "restored_key": rec["dist"]["matched_key"], "primary_key": rec["dist"]["primary_key"],
                      "policy_snapshot": policies})
+    unreconciled = [(r["run_id"], r["snapshot"], r["policy_snapshot"]["8"]) for r in runs
+                    if r["policy_snapshot"]["8"] != r["snapshot"]]
+    if unreconciled:
+        raise RuntimeError("today's policy does not reproduce the restored snapshot for (run, observed, "
+                           f"modelled): {unreconciled}; the baseline would not be the observed builds")
     missing = [(r["run_id"], k) for r in runs for k, v in r["policy_snapshot"].items() if v is None]
     if missing:
         raise RuntimeError(f"no snapshot available under some policy (cold build): {missing}; "
@@ -733,18 +711,65 @@ Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0..
 """
 
 
-def check_policy_snapshot() -> None:
-    def when(hour: int) -> dt.datetime:
-        return dt.datetime(2026, 9, 27, hour, tzinfo=dt.timezone.utc)
-    written = {414: when(1), 415: when(2), 417: when(6), 418: when(7), 419: when(20)}  # 416's writer was cancelled
-    start = "2026-09-27T12:00:00Z"
-    assert policy_snapshot(8, 418, start, 412, written) == 417   # first writer of the group after the cancelled seed
-    assert policy_snapshot(1, 419, start, 412, written) == 418   # 419 had not finished writing yet
-    assert policy_snapshot(2, 418, start, 412, written) == 418
-    assert policy_snapshot(4, 419, start, 412, written) == 417
-    assert policy_snapshot(8, 419, "2026-09-27T21:00:00Z", 412, written) == 417
-    assert policy_snapshot(8, 415, start, 412, written) == 414   # earliest writer in group 408-415
-    assert policy_snapshot(8, 413, start, 413, written) is None  # nothing written at or after the plan floor
+KEY_A = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "a" * 64)
+KEY_B = ("Linux", "ghcr.io/x/ci:ci-bbbb", "9.12.2", "3.16.1.0", "a" * 64)    # same plan, rotated image
+KEY_A2 = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "c" * 64)   # same image, new plan
+
+
+def _when(hour: int) -> dt.datetime:
+    return dt.datetime(2026, 9, 27, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hour)
+
+
+def _entry(position: int, count: int, hour: int, key: tuple = KEY_A) -> dict:
+    return {"position": position, "count": count, "completed": _when(hour), "key": key}
+
+
+def check_restore_model() -> None:
+    start = _when(12).isoformat()
+    # 416's writer was cancelled: it never appears; 417 seeds epoch 52 three days late
+    entries = [_entry(0, 414, 1), _entry(1, 415, 2), _entry(3, 417, 6), _entry(4, 418, 7), _entry(5, 419, 20)]
+    def ask(size, base, key=KEY_A, group=None):
+        pub = published_snapshots(entries, size)
+        return restore_snapshot(pub, key, base // size if group is None else group, start, base)
+    assert ask(8, 418) == 417        # the group's key is published by the first writer to finish (417)
+    assert ask(1, 419) == 418        # 419 had not finished: the same-plan prefix restores the newest ready
+    assert ask(2, 418) == 418
+    assert ask(4, 419) == 417
+    assert ask(8, 415) == 414        # earliest writer of the group 408-415
+    # a writer that lost the race to publish an immutable key publishes nothing
+    twin = entries + [_entry(6, 417, 9)]   # a second job at count 417, finishing later
+    assert [p["completed"] for p in published_snapshots(twin, 8) if p["group"] == 52] == [_when(6)]
+    # the published set, not the latest writer, feeds the ladder: count 416 seeds plan A, 417 hits that
+    # key (publishes nothing), 418 builds plan B and has not finished when the run starts
+    plan_change = [_entry(0, 416, 1, KEY_A), _entry(1, 417, 5, KEY_A), _entry(2, 418, 20, KEY_A2)]
+    pub8 = published_snapshots(plan_change, 8)
+    assert sorted(p["count"] for p in pub8) == [416, 418]
+    assert restore_snapshot(pub8, KEY_A2, 418 // 8, start, 418) == 416     # not 417, which published nothing
+    assert restore_snapshot(published_snapshots(plan_change, 1), KEY_A2, 418, start, 418) == 417
+    # image rotation with the same plan hash: only the base's own image family is exact; another image is never restored
+    rotated = [_entry(0, 416, 1, KEY_A), _entry(1, 417, 3, KEY_B)]
+    pub = published_snapshots(rotated, 8)
+    assert restore_snapshot(pub, KEY_B, 418 // 8, start, 418) == 417
+    assert restore_snapshot(published_snapshots([_entry(0, 416, 1, KEY_A)], 8), KEY_B, 52, start, 418) is None
+    # the last prefix: same image and toolchain, older plan
+    replan = [_entry(0, 410, 1, KEY_A), _entry(1, 417, 30, KEY_A2)]
+    assert restore_snapshot(published_snapshots(replan, 8), KEY_A2, 52, start, 417) == 410
+    # a restore from the future is refused, not modelled
+    try:
+        restore_snapshot(published_snapshots([_entry(0, 420, 1)], 8), KEY_A, 52, start, 417)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a snapshot newer than the base must not be restored silently")
+    # 'every successful push': a key per commit; the base's own commit when ready, else the newest-created ready one
+    pushes = [_entry(1, 417, 2), _entry(2, 418, 7), _entry(3, 419, 20)]
+    assert restore_snapshot(published_snapshots(pushes, None), KEY_A, 3, start, 419) == 418   # own push not finished
+    later = pushes + [_entry(5, 419, 9)]   # a later push at the same count, finished before the run started
+    pub = published_snapshots(later, None)
+    assert restore_snapshot(pub, KEY_A, 3, start, 419) == 419    # newest-created ready key, same compiled content
+    assert restore_snapshot(pub, KEY_A, 5, start, 419) == 419    # exact key of the base commit itself
+    assert key_at(rotated, 1) == KEY_B
+    assert key_tuple("dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-" + "a" * 64 + "-epoch-52") == KEY_A
 
 
 class StubReplay:
@@ -824,60 +849,73 @@ def check_plan_invariants() -> None:
         assert json.loads(results.read_text())["state:417"] == {"counts": {"old": 1}}
 
 
+def check_plan_change_writer_lag() -> None:
+    """End to end: make_plan across a plan change whose writer is still running."""
+    def key(plan: str, epoch: int) -> str:
+        return f"dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-{plan * 64}-epoch-{epoch}"
+    chain = {"commits": [{"sha": f"s{n}"} for n in (416, 417, 418)],
+             "index": {"s416": 416, "s417": 417, "s418": 418}, "at": {416: "s416", 417: "s417", 418: "s418"}}
+    def push(run_id: int, sha: str, plan: str, done: str, saved: bool) -> dict:
+        k = key(plan, 52)
+        return {"run_id": run_id, "event": "push", "head_sha": sha, "dist": {"primary_key": k, "matched_key": k},
+                "writer_ran": True, "saved_project_cache": saved, "published_key": k if saved else None,
+                "writer_completed_at": done}
+    records = [push(1, "s416", "a", "2026-09-27T01:00:00Z", True),    # seeds plan A
+               push(2, "s417", "a", "2026-09-27T02:00:00Z", False),   # exact hit: publishes nothing
+               push(3, "s418", "b", "2026-09-27T20:00:00Z", True)]    # plan B, still running at the run's start
+    pr = {"run_id": 9, "event": "pull_request", "attempt": 1, "job_started_at": "2026-09-27T12:00:00Z",
+          "merge": {"base": "s418", "head": "headsha"},
+          "dist": {"primary_key": key("b", 52), "matched_key": key("a", 52)}}
+    plan = make_plan(records + [pr], chain, [9])
+    run = plan["runs"][0]
+    assert run["snapshot"] == 416 and run["policy_snapshot"]["8"] == 416, run     # the observed restore, reconciled
+    assert run["policy_snapshot"]["1"] == 417 and run["policy_snapshot"]["every"] == 417, run
+    # an unreconciled baseline is refused rather than projected from a snapshot nobody restored
+    wrong = {**pr, "dist": {"primary_key": key("b", 52), "matched_key": key("a", 52)}}
+    wrong_records = [push(1, "s416", "a", "2026-09-27T01:00:00Z", True), push(2, "s417", "a", "2026-09-27T02:00:00Z", True)]
+    try:
+        make_plan(wrong_records + [wrong], chain, [9])
+    except RuntimeError as error:
+        assert "does not reproduce" in str(error) or "no identifiable" in str(error), error
+    else:
+        raise AssertionError("the baseline must reconcile with the restored snapshot")
+
+
 def check_writer_evidence() -> None:
     def job(name: str, conclusion: str, done: str, saved: bool = False) -> dict:
         steps = [{"name": STEP_SAVE, "conclusion": "success" if saved else "skipped"}]
         return {"name": name, "conclusion": conclusion, "completed_at": done, "steps": steps}
+    published = "dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-" + "a" * 64 + "-epoch-52"
+    won = f"2026-09-27T13:00:00Z Cache saved with key: {published}\n"
+    lost = ("##[warning]Failed to save: Unable to reserve cache with key "
+            f"{published}, another job may be creating this cache.\n")
+    assert parse_publication(won) == published and parse_publication(lost) is None
     audit = job(JOB_NAME, "success", "2026-09-27T13:00:00Z", saved=True)
-    # historical workflow: the audit job wrote the snapshot
-    old = writer_evidence(audit, [audit])
-    assert old == {"writer_ran": True, "saved_project_cache": True, "writer_completed_at": "2026-09-27T13:00:00Z"}
-    # current workflow: the separate project-cache job writes it, later
+    # historical workflow: the audit job wrote the snapshot, and its own log says so
+    old = writer_evidence(audit, [audit], won)
+    assert old == {"writer_ran": True, "published_key": published, "saved_project_cache": True,
+                   "writer_completed_at": "2026-09-27T13:00:00Z"}, old
+    # a green save step whose log shows the lost race published nothing
+    loser = writer_evidence(audit, [audit], lost)
+    assert loser["writer_ran"] is True and loser["saved_project_cache"] is False and loser["published_key"] is None
+    # current workflow: the separate project-cache job publishes, later; its log, not the audit job's, decides
     audit2 = job(JOB_NAME, "success", "2026-10-20T13:00:00Z", saved=False)
     writer = job(WRITER_JOB, "success", "2026-10-20T13:12:00Z", saved=True)
-    new = writer_evidence(audit2, [audit2, writer])
-    assert new == {"writer_ran": True, "saved_project_cache": True, "writer_completed_at": "2026-10-20T13:12:00Z"}, new
-    skipped = writer_evidence(audit2, [audit2, job(WRITER_JOB, "skipped", "2026-10-20T13:13:00Z")])
+    new = writer_evidence(audit2, [audit2, writer], won)
+    assert new["saved_project_cache"] and new["writer_completed_at"] == "2026-10-20T13:12:00Z", new
+    assert writer_evidence(audit2, [audit2, writer], lost)["saved_project_cache"] is False
+    skipped = writer_evidence(audit2, [audit2, job(WRITER_JOB, "skipped", "2026-10-20T13:13:00Z")], "")
     assert skipped["writer_ran"] is False and skipped["saved_project_cache"] is False
     assert job_seconds({"name": "x", "started_at": "2026-10-20T13:00:00Z", "completed_at": "2026-10-20T13:01:00Z",
                         "steps": []})["completed_at"] == "2026-10-20T13:01:00Z"
     assert log_cache_path(Path("c"), 5, 7) != log_cache_path(Path("c"), 5, 8)  # a rerun is a different job
-
-
-KEY_A = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "a" * 64)
-KEY_B = ("Linux", "ghcr.io/x/ci:ci-bbbb", "9.12.2", "3.16.1.0", "a" * 64)    # same plan, rotated image
-KEY_A2 = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "c" * 64)   # same image, new plan
-
-
-def check_every_push() -> None:
-    def when(hour: int) -> dt.datetime:
-        return dt.datetime(2026, 9, 27, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hour)
-
-    def entry(position: int, count: int, hour: int, key: tuple = KEY_A) -> dict:
-        return {"position": position, "count": count, "completed": when(hour), "key": key}
-    # positions are first-parent order; count 419 has a later push (position 5) with no relevant change
-    entries = [entry(1, 417, 2), entry(2, 418, 7), entry(3, 419, 20), entry(5, 419, 9)]
-    start = "2026-09-27T12:00:00Z"
-    assert every_push_snapshot(3, start, 412, entries, KEY_A) == 418    # 419's own push finished after the run started
-    assert every_push_snapshot(5, start, 412, entries, KEY_A) == 419    # a later push at the same count had finished
-    assert every_push_snapshot(2, start, 419, entries, KEY_A) is None   # nothing at or after the plan floor
-
-    # image rotation with the same plan hash: counts 416 (image A) and 417 (image B); base 418 builds on B
-    rotated = [entry(0, 416, 1, KEY_A), entry(1, 417, 3, KEY_B), entry(2, 418, 30, KEY_B)]
-    assert key_at(rotated, 2) == KEY_B
-    written = writer_completion(rotated, KEY_B)
-    assert written == {417: when(3), 418: when(30)}
-    assert policy_snapshot(8, 418, start, 417, written) == 417          # never the incompatible image's 416
-    assert every_push_snapshot(2, start, 417, rotated, KEY_B) == 417
-    assert prefix_fallback(rotated, KEY_B, start) is None               # another image is never restored
-    assert policy_snapshot(8, 416, start, 416, writer_completion([entry(0, 416, 1, KEY_A)], KEY_B)) is None
-    # the permitted prefix: same image, older plan, when nothing of the base's plan is ready yet
-    replan = [entry(0, 410, 1, KEY_A), entry(1, 417, 30, KEY_A2)]
-    assert prefix_fallback(replan, KEY_A2, start) == 410
-    assert policy_snapshot(8, 417, start, 417, writer_completion(replan, KEY_A2), 410) == 410
-    assert every_push_snapshot(1, start, 417, replan, KEY_A2) == 410
-    assert key_floor(418, {410: KEY_A, 416: KEY_A, 417: KEY_B, 418: KEY_B}) == 417
-    assert key_tuple("dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-" + "a" * 64 + "-epoch-52") == KEY_A
+    # a publisher followed by a green no-op save: only the publisher is a writer of the key
+    def push_rec(run_id: int, done: str, saved: bool) -> dict:
+        return {"run_id": run_id, "event": "push", "head_sha": f"sha{run_id}", "saved_project_cache": saved,
+                "published_key": published if saved else None, "writer_completed_at": done,
+                "dist": {"primary_key": published}}
+    writers = snapshot_writers([push_rec(1, "2026-09-27T02:00:00Z", True), push_rec(2, "2026-09-27T02:05:00Z", False)])
+    assert [w["run_id"] for w in writers[published]] == [1]
 
 
 def self_test() -> int:
@@ -906,7 +944,8 @@ def self_test() -> int:
 
     def push(run_id: int, done: str, saved: bool) -> dict:
         return {"run_id": run_id, "event": "push", "created_at": done, "head_sha": f"sha{run_id}",
-                "saved_project_cache": saved, "writer_ran": True, "writer_completed_at": done,
+                "saved_project_cache": saved, "published_key": key if saved else None,
+                "writer_ran": True, "writer_completed_at": done,
                 "job_completed_at": done, "dist": {"primary_key": key}}
 
     records = [push(1, "2026-09-24T20:30:00Z", True), push(2, "2026-09-26T01:00:00Z", False),
@@ -935,10 +974,10 @@ def self_test() -> int:
         == ["Data.Map", "Prelude", "Foo.Bar"]
     assert source_module("src/World/Types.hs") == ("World.Types", "lib")
     assert source_module("test-headless/Spec.hs") == ("Spec", "test") and source_module("README.md") is None
-    check_policy_snapshot()
+    check_restore_model()
+    check_plan_change_writer_lag()
     check_plan_invariants()
     check_writer_evidence()
-    check_every_push()
     print("ci_build_drift self-test: ok")
     return 0
 
