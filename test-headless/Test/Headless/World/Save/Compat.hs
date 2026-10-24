@@ -25,7 +25,8 @@
 --   definition in "Test.Headless.World.Save.Compat.B1Fixture".
 --
 --   Composition is at describe-group granularity, and the order below
---   is the order these eight groups have always run in. The families
+--   is the order these eight groups have always run in (later ones are
+--   appended after them). The families
 --   INTERLEAVE — one baseline group, the two historical groups, three
 --   more baseline groups, then the two legacy groups — so composing
 --   one family after another would reorder the printed tree and move
@@ -42,6 +43,7 @@ import Test.Hspec
 import qualified Test.Headless.World.Save.Compat.Baselines as Baselines
 import qualified Test.Headless.World.Save.Compat.Historical as Historical
 import qualified Test.Headless.World.Save.Compat.Legacy as Legacy
+import qualified Test.Headless.World.Save.Compat.TagTargets as TagTargets
 
 spec ∷ Spec
 spec = do
@@ -57,3 +59,8 @@ spec = do
     -- the exact item path it has always had, which is what the ordering
     -- note in this module's haddock exists to protect.
     Baselines.floraSpeciesNameSpec
+    -- Appended (#2894), for the same reason: the v5 world-edits shape the
+    -- regenerated tag fixtures are written in. Its sibling, which stages
+    -- every tracked fixture and so needs an engine, is registered beside
+    -- this aggregate in test-headless/Spec.hs.
+    TagTargets.worldEditsDowngradeSpec

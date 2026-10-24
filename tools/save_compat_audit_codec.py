@@ -292,7 +292,8 @@ def set_fixture_timestamp(fixture_path: Path, timestamp: str,
 
 
 def seed_fixture_tags(fixture_path: Path, spec_path: Path,
-                      output_path: Path) -> tuple[bool, str]:
+                      output_path: Path,
+                      only: str | None = None) -> tuple[bool, str]:
     """Write the general gameplay-tag assignments `spec_path` names
     (#2701; JSON, see `app-save-codec/Main.hs`'s `seed-tags`, whose
     optional `relationCauses` list #2548 also writes live directed
@@ -301,10 +302,20 @@ def seed_fixture_tags(fixture_path: Path, spec_path: Path,
     the same path). The save is decoded and re-encoded through the real
     session codec, Lua components verbatim. Returns
     (ok, diagnostic-tail-on-failure).
+
+    `only` (`COMPONENT[@VERSION][,...]`) keeps every other component of
+    the fixture, bytes and version, verbatim and takes just the named
+    ones from the re-encode: a whole-session re-encode writes every
+    component at the CURRENT version, which would turn a fixture that is
+    the historical counterpart of one into a current-version copy.
+    `world-edits@5` additionally writes that component in its frozen v5
+    shape.
     """
-    return _run_codec(["seed-tags", "--fixture", str(fixture_path),
-                       "--spec", str(spec_path), "--output", str(output_path)],
-                      "SEED_OK")
+    args = ["seed-tags", "--fixture", str(fixture_path),
+            "--spec", str(spec_path), "--output", str(output_path)]
+    if only is not None:
+        args += ["--only", only]
+    return _run_codec(args, "SEED_OK")
 
 
 def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
