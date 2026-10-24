@@ -4184,7 +4184,7 @@ stdout output.
 The first use of this procedure, on the ten recorded `UI.ResponsiveMenus`-area
 hangs of 2026-08 to 2026-09, ended in `location unknown / not reproduced`;
 its runs, commands and excerpts are in
-`docs/ci_headless_hang_investigation_2747.md`.
+`docs/archive/ci_headless_hang_investigation_2747.md`.
 
 ### `headless_lane_measurement.py` — per-group headless timing on CI (#2743)
 
