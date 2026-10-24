@@ -840,8 +840,11 @@ wireSpec = describe "wire autotile parity (#1842)" $ do
                 \local k = {}; for name, _ in pairs(p.connections) do \
                 \k[#k+1] = name end; table.sort(k); \
                 \return table.concat(k, ',')"
+            -- the sixteen autotile shapes, plus the four riser appearances
+            -- (#2516) that are declared but never selected
             sort (T.splitOn "," declared)
-                `shouldBe` sort (map snd expectedWireShapes)
+                `shouldBe` sort (map snd expectedWireShapes
+                                   ⧺ ["riser_n", "riser_e", "riser_s", "riser_w"])
 
     it "resolves the art the builder places, for every neighbour \
        \combination" $ \(env, ls) →

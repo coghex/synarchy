@@ -119,7 +119,10 @@ wireRegistration = PackArtRegistration
     , parDestruction = []
     , parVariantFaces = []
     , parVariants = []
-    , parSizes   = HM.empty
+      -- #2516: Wire's static colour/facemap pair is measured at
+      -- registration whether or not it declares a sequence.
+    , parSizes   = HM.fromList [ ("wire.png", (96, 64))
+                               , ("wire_face.png", (96, 64)) ]
     }
 
 -- | One art slot. The paths and handles are arbitrary but must be
