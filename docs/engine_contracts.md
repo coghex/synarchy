@@ -5913,6 +5913,19 @@ Five rules the schema doc spells out and the gates hold:
   authoritative so the reused facemap's silhouette cannot clip it; the
   RGB/top-light path is untouched and an unflagged quad is unchanged.
 
+**Paired frames (#2516).** A pack MAY pair frames with facemaps of their
+own and Wire MUST: a paired frame is lit by its own facemap and the
+lifecycle alpha flag is NOT set (the ordinary `color.a * faceAlpha` rule
+applies), so the bullet above describes the UNPAIRED behaviour every other
+pack keeps. Wire's static art is flat colour with a dedicated facemap per
+connection; a Wire piece saved before #2516 (stored with the shared floor
+facemap) is lit through its shape's map at render time, with no save change
+(`Structure.ArtCatalog.placedWireArt`). Schema, refusals and the facemap
+convention: [structure_pack_schema.md](structure_pack_schema.md) §3b. Gates:
+hspec `--match "Wire structure lifecycle art"` and `--match "Wire facemap
+integration"`; offscreen `tools/wire_lighting_probe.py`; fresh-process
+`tools/wire_art_save_probe.py`.
+
 Saved designations carry no new field. Full schema, refusal table and
 ownership: [structure_pack_schema.md](structure_pack_schema.md). Gates:
 hspec `--match "structure construction frames"`, `--match "structure
@@ -5949,7 +5962,9 @@ state, so a chunk evicted mid-playback changes nothing.
 A pack declares a clip per authored APPEARANCE, keyed exactly as a
 construction sequence is, with one extra field — its own `fps`, since a
 teardown is timed by the game clock rather than driven by a site's
-progress. The rules:
+progress. Wire's clips are PAIRED with a facemap per frame (#2516, schema
+§3b): the captured piece facemap is not used, and the quad carries no
+lifecycle alpha flag. The rules:
 
 * the frame index is `floor (elapsed * fps)`, clamped, played ONCE and
   forward; the clip lasts `frames / fps` game seconds and the effect is

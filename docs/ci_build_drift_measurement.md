@@ -42,9 +42,10 @@ compile CPU, slows a lane and breaks an example (§6). The recommendation is in 
    succeeded. A push whose first attempt was cancelled and later re-run
    (36054401429, the case above) is recorded as attempt 2 with the re-run's
    completion time (2026-10-12), which correctly keeps it from counting as a
-   snapshot writer for any sampled run.
+   snapshot writer for any sampled run. Writers are ordered by when they
+   published, not by when their run was created.
 2. **Provenance**: the restored snapshot of a run is the last master push that
-   *saved* the matched key before the run's restore. Epoch positions, relevant
+   *published* the matched key (its log shows `Cache saved with key`) before the run's restore. Epoch positions, relevant
    counts and tested merges come from the logs; `master_chain` recomputes the
    relevant count of every first-parent commit with `ci_cache_epoch.py`'s own
    build-input globs and agrees with every logged `relevant_count`.
@@ -75,12 +76,15 @@ compile CPU, slows a lane and breaks an example (§6). The recommendation is in 
    recompiled modules (cabal planning, `Setup`, linking, restore interplay) and
    the slope the cost of one more recompiled module; both are fitted, not
    observed.
-6. **Policies** are projected against the writers' *real* outcomes: for
-   `EPOCH_SIZE = N` a group of N relevant changes shares a key, written by the
-   earliest-finished successful master job in the group that found it absent,
-   with fallback to the newest earlier group that has one (`policy_snapshot`).
-   For today's N = 8 this reproduces the restored snapshot in all 17 runs,
-   including the cancelled boundary push. Every projected module count is a
+6. **Policies** are projected against the writers' *real* outcomes. Each policy's published
+   snapshots are derived first: its key is (image, toolchain, dependency plan, group of N
+   relevant changes), published by the earliest-finished successful master job that writes it;
+   a job that finishes later publishes nothing. The restore ladder then runs over those
+   snapshots that finished before the run started: the exact key, else the newest-created key
+   of the same plan, else the newest-created key of another plan of the same image and
+   toolchain (`restore_snapshot`); another image or toolchain is never restored. For today's
+   N = 8 this reproduces the restored snapshot in all 17 runs (the planner refuses to
+   continue otherwise), including the cancelled boundary push. Every projected module count is a
    replayed build (`unsplit`, `own`, or a snapshot-to-tested build); only the
    seconds attached to the counts are modelled.
 
@@ -386,7 +390,11 @@ With a bimodal sample of 17 the median interval is wide and the 95th percentile
 is the second-largest run; treat both as indications.
 
 * **Writers and availability.** The projection uses the writers' real outcomes
-  (one master push in 33 in the window had a cancelled first attempt). 17 of 69
+  (one master push in 33 in the window had a cancelled first attempt). A snapshot counts as
+  published only when the writer's log says `Cache saved with key`, not when its save step is green: of
+  45 master pushes in the sample window 9 published one, and two more had a green save step without it
+  (36008105084 logged `Unable to reserve cache with key …, another job may be creating this cache`;
+  37031633313 logged nothing). A key is immutable, so only the first writer to finish publishes it. 17 of 69
   pull requests in the sample window started 9–42 minutes before the snapshot of
   their own base had finished writing (the writer was the push's whole
   `test-and-audits` job); since #2745 the writer is the separate `project-cache` job after
@@ -413,8 +421,8 @@ is the second-largest run; treat both as indications.
   prerequisite build scaled by the library estimate; static audits keep each
   run's own time. The `rest` lane is the critical job in every projection.
 * **Writer cost.** A snapshot is only written when the key is absent. Over the
-  22 days since #2745, 74 of 196 successful master pushes ran the writer job to success and 11 wrote a
-  snapshot (median 877 s rebuild plus 67 s save). `size 1` writes about 2.4–3.0 snapshots a day
+  22 days since #2745, 74 of 196 successful master pushes ran the writer job to success and 11 ran its save step
+  to success (median 877 s rebuild plus 67 s save; publication is not log-verified in this timing-only window). `size 1` writes about 2.4–3.0 snapshots a day
   (the relevant merges per day), versus 0.3–0.4 now.
 
 ### Cache storage and eviction against the 10 GB quota
