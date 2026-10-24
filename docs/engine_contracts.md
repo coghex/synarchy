@@ -462,13 +462,16 @@ pre-anchor or rewritten base emits a warning and uses epoch 0 rather than
 failing an otherwise valid older PR. Ordinary docs and runtime-resource changes
 do not count.
 
-Every v3 primary key and compatible restore prefix also carries the exact
-immutable image reference selected by `resolve-image`, in addition to the OS,
-GHC, Cabal and plan inputs. Therefore an image-only PR cannot exact-hit or
-prefix-restore project objects created in another image. The pre-v3 bootstrap
-prefix is enabled only when the resolved image equals the one known to have
-created those legacy entries; later image identities get a disabled prefix.
-That historical image constant must never be advanced with the image recipe.
+Every v3 project-cache primary key and compatible restore prefix carries the
+exact immutable image reference selected by `resolve-image`, in addition to
+the OS, GHC, Cabal and plan inputs. The Cabal dependency-store cache uses the
+same image identity in its `deps-v3` primary key and restore prefix, and no
+dependency-cache prefix matches the retired `deps-v2` family. Therefore an
+image-only PR starts both caches cold and no image can restore compiled data
+created under another image. The pre-v3 project-cache bootstrap prefix is
+enabled only when the resolved image equals the one known to have created
+those legacy entries; later image identities get a disabled prefix. That
+historical image constant must never be advanced with the image recipe.
 
 Old project caches are never deleted by CI. The maintainer command
 `python3 tools/ci_cache_cleanup.py` is a dry run unless `--delete` is present,
