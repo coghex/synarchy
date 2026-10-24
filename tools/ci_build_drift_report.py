@@ -162,11 +162,13 @@ def policy_sets(plan_run: dict, replay: dict, group: str) -> dict:
 
 def per_run_rows(runs: list[dict], plan: dict, replay: dict) -> list[dict]:
     by_id = {r["run_id"]: r for r in runs}
+    missing = [p["run_id"] for p in plan["runs"] if f"unsplit:{p['run_id']}" not in replay]
+    if missing:
+        # a skipped run would shift every later row against the plan: refuse instead
+        raise KeyError(f"replay has no unsplit build for sampled run(s) {missing}; replay or re-plan first")
     rows = []
     for plan_run in plan["runs"]:
         rid = plan_run["run_id"]
-        if f"unsplit:{rid}" not in replay:
-            continue
         rec = by_id[rid]
         row = {"run_id": rid, "snapshot": plan_run["snapshot"], "base": plan_run["base_count"],
                "position": rec["epoch"]["position"], "outcome": rec["dist"]["outcome"],
@@ -346,6 +348,14 @@ def self_test() -> int:
         pass
     else:
         raise AssertionError("an unavailable snapshot must stop the projection")
+
+    sample = {"runs": [{"run_id": 1}, {"run_id": 2}]}
+    try:
+        per_run_rows([], sample, {"unsplit:2": {"modules": {}}})
+    except KeyError as error:
+        assert "[1]" in str(error)
+    else:
+        raise AssertionError("an incomplete replay must not render a shifted table")
 
     res = {"modules": {"lib": ["A"], "synarchy-test-headless": ["T"]}}
     assert module_set(res, "lib_exe") == {("lib", "A")} and module_set(None, "tests") == frozenset()

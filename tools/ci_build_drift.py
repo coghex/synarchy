@@ -218,11 +218,14 @@ def collect(repo: str, since: str, until: str, cache_dir: Path, jobs_only: bool 
 def snapshot_writers(records: list[dict]) -> dict[str, list[dict]]:
     """Master pushes that saved each project-cache key, oldest first."""
     writers: dict[str, list[dict]] = {}
-    for rec in sorted(records, key=lambda r: r["created_at"]):
+    for rec in records:
         if rec["event"] == "push" and rec["saved_project_cache"] and rec["dist"]:
             writers.setdefault(rec["dist"]["primary_key"], []).append(
                 {"run_id": rec["run_id"], "sha": rec["head_sha"],
                  "completed_at": rec["writer_completed_at"]})
+    # by publication time, not run creation: a re-run of an old push publishes later than newer runs
+    for entries in writers.values():
+        entries.sort(key=lambda w: parse_time(w["completed_at"]))
     return writers
 
 
@@ -236,9 +239,9 @@ def restored_snapshot(rec: dict, writers: dict[str, list[dict]]) -> dict | None:
     dist = rec.get("dist")
     if not dist or not dist["matched_key"]:
         return None
-    before = [w for w in writers.get(dist["matched_key"], [])
-              if w["completed_at"] <= rec["job_started_at"]]
-    return before[-1] if before else None
+    started = parse_time(rec["job_started_at"])
+    before = [w for w in writers.get(dist["matched_key"], []) if parse_time(w["completed_at"]) <= started]
+    return max(before, key=lambda w: parse_time(w["completed_at"])) if before else None
 
 
 # --- plan -------------------------------------------------------------------
@@ -354,68 +357,100 @@ def build_steps(runs: list[dict], chain: dict, chain_runs: frozenset[int] = froz
     return steps
 
 
-def plan_floor(count: int, plan_by_count: dict[int, str]) -> int:
-    """Oldest relevant count from which the dependency plan is unchanged up to ``count``."""
-    known = sorted(c for c in plan_by_count if c <= count)
+def key_tuple(primary_key: str) -> tuple | None:
+    """(os, image, ghc, cabal, plan): what makes two dist-v3 keys the same family and plan."""
+    key = split_key(primary_key)
+    return (key["os"], key["image"], key["ghc"], key["cabal"], key["plan"]) if key else None
+
+
+def key_floor(count: int, key_by_count: dict[int, tuple]) -> int:
+    """Oldest relevant count from which the key family and plan are unchanged up to ``count``.
+
+    The restore ladder's exact key and its same-plan prefix both need the image,
+    toolchain and plan to match; only the last prefix may cross a plan, and
+    only within one image and toolchain.
+    """
+    known = sorted(c for c in key_by_count if c <= count)
     if not known:
         return 0
-    current = plan_by_count[known[-1]]
+    current = key_by_count[known[-1]]
     floor = known[-1]
     for c in reversed(known[:-1]):
-        if plan_by_count[c] != current:
+        if key_by_count[c] != current:
             break
         floor = c
     return floor
 
 
-def writer_completion(records: list[dict], chain: dict) -> dict[int, dt.datetime]:
-    """When the first successful master writer job finished, per relevant count.
-
-    A key is written by the first eligible successful job that finds it absent,
-    so any push at a count (the commit that made it or a later one with no
-    build-relevant change) can seed it; the earliest finish wins.
-    """
-    done: dict[int, dt.datetime] = {}
-    for rec in records:
-        count = chain["index"].get(rec["head_sha"])
-        if rec["event"] != "push" or not rec["dist"] or not rec["writer_ran"] or count is None:
-            continue
-        when = parse_time(rec["writer_completed_at"])
-        done[count] = min(done.get(count, when), when)
-    return done
-
-
-def push_snapshots(records: list[dict], chain: dict) -> list[tuple[int, int, dt.datetime]]:
-    """Every successful master writer job as (first-parent position, relevant count, finish)."""
+def writer_entries(records: list[dict], chain: dict) -> list[dict]:
+    """Every successful master writer job: position, relevant count, key family and finish time."""
     position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
     out = []
     for rec in records:
-        if rec["event"] == "push" and rec["dist"] and rec["writer_ran"] and rec["head_sha"] in position:
-            out.append((position[rec["head_sha"]], chain["index"][rec["head_sha"]],
-                        parse_time(rec["writer_completed_at"])))
-    return sorted(out)
+        if rec["event"] != "push" or not rec["dist"] or not rec["writer_ran"] or rec["head_sha"] not in position:
+            continue
+        key = key_tuple(rec["dist"]["primary_key"])
+        if key is None:
+            continue
+        out.append({"position": position[rec["head_sha"]], "count": chain["index"][rec["head_sha"]],
+                    "key": key, "completed": parse_time(rec["writer_completed_at"])})
+    return sorted(out, key=lambda e: (e["position"], e["completed"]))
+
+
+def key_at(entries: list[dict], base_position: int) -> tuple | None:
+    """The key family and plan the base commit's own build used (newest writer at or before it)."""
+    before = [e for e in entries if e["position"] <= base_position]
+    return before[-1]["key"] if before else None
+
+
+def writer_completion(entries: list[dict], key: tuple) -> dict[int, dt.datetime]:
+    """When the first successful writer of ``key``'s family and plan finished, per relevant count.
+
+    A key is written by the first eligible successful job that finds it absent,
+    so any push at a count (the commit that made it or a later one with no
+    build-relevant change) can seed it; the earliest finish wins.  Writers of
+    another image, toolchain or plan write keys this policy never restores.
+    """
+    done: dict[int, dt.datetime] = {}
+    for e in entries:
+        if e["key"] == key:
+            done[e["count"]] = min(done.get(e["count"], e["completed"]), e["completed"])
+    return done
+
+
+def prefix_fallback(entries: list[dict], key: tuple, started_at: str) -> int | None:
+    """Count of the newest ready snapshot of the same image and toolchain under another plan.
+
+    The last restore-key accepts any plan of the same image and toolchain; the
+    most recently written such key wins.  Another image or toolchain is
+    never restored.
+    """
+    started = parse_time(started_at)
+    ready = [e for e in entries if e["key"][:4] == key[:4] and e["key"] != key and e["completed"] <= started]
+    return max(ready, key=lambda e: e["completed"])["count"] if ready else None
 
 
 def every_push_snapshot(base_position: int, started_at: str, floor: int,
-                        pushes: list[tuple[int, int, dt.datetime]]) -> int | None:
+                        entries: list[dict], key: tuple) -> int | None:
     """Relevant count of the newest snapshot 'a snapshot per successful master push' has ready.
 
     Each push writes its own snapshot, whether or not it changed anything
-    build-relevant.  A pull request restores the newest one written at or before
-    its base commit that finished before the run started and shares the base's
-    dependency plan.
+    build-relevant.  A pull request restores the newest one of its own key
+    family and plan written at or before its base commit that finished before
+    the run started, else (explicit fallback) the newest of another plan of
+    the same image and toolchain.
     """
     started = parse_time(started_at)
-    ready = [count for position, count, when in pushes
-             if position <= base_position and when <= started and count >= floor]
-    return max(ready) if ready else None
+    ready = [e["count"] for e in entries if e["key"] == key and e["position"] <= base_position
+             and e["completed"] <= started and e["count"] >= floor]
+    return max(ready) if ready else prefix_fallback(entries, key, started_at)
 
 
 POLICY_SIZES = (1, 2, 4, 8)
 
 
 def policy_snapshot(size: int, base: int, started_at: str, floor: int,
-                    written: dict[int, dt.datetime]) -> int | None:
+                    written: dict[int, dt.datetime], fallback: int | None = None) -> int | None:
     """Relevant count of the snapshot an EPOCH_SIZE=``size`` policy restores.
 
     A group of ``size`` relevant changes shares one key.  The first
@@ -424,7 +459,9 @@ def policy_snapshot(size: int, base: int, started_at: str, floor: int,
     run's base, finished before the run started).  A group none of whose jobs
     has finished writing, a cancelled writer for example, falls back to the
     newest earlier group that has one.  ``floor`` is the oldest count sharing
-    the base's dependency plan: a key never crosses a plan change.
+    the base's key family and plan: an exact key never crosses one.  With no
+    ready group the explicit fallback is the restore ladder's last prefix, the
+    newest snapshot of another plan of the same image and toolchain (``fallback``).
     """
     started = parse_time(started_at)
     group = base // size
@@ -434,7 +471,7 @@ def policy_snapshot(size: int, base: int, started_at: str, floor: int,
         if counts:
             return min(counts, key=lambda c: written[c])
         group -= 1
-    return None
+    return fallback
 
 
 def make_plan(records: list[dict], chain: dict, run_ids: list[int],
@@ -442,14 +479,10 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
               existing: frozenset[str] = frozenset(), repo: Path | None = None) -> dict:
     """Sample plan: per run, the restored snapshot, base, head, tested tree and policy snapshots."""
     writers = snapshot_writers(records)
-    plan_by_count: dict[int, str] = {}
-    for rec in records:
-        if rec["event"] == "push" and rec["dist"] and rec["head_sha"] in chain["index"]:
-            key = split_key(rec["dist"]["primary_key"])
-            if key and chain["commits"][0]:
-                plan_by_count[chain["index"][rec["head_sha"]]] = key["plan"]
-    written = writer_completion(records, chain)
-    pushes = push_snapshots(records, chain)
+    entries = writer_entries(records, chain)
+    key_by_count: dict[int, tuple] = {}
+    for e in entries:
+        key_by_count[e["count"]] = e["key"]
     position = {c["sha"]: i for i, c in enumerate(chain["commits"])}
     by_id = {r["run_id"]: r for r in records}
     runs = []
@@ -460,10 +493,16 @@ def make_plan(records: list[dict], chain: dict, run_ids: list[int],
             raise RuntimeError(f"run {run_id}: no identifiable restored snapshot")
         base = rec["merge"]["base"]
         full_base = next(c["sha"] for c in chain["commits"] if c["sha"].startswith(base))
-        floor = plan_floor(chain["index"][full_base], plan_by_count)
-        policies = {str(size): policy_snapshot(size, chain["index"][full_base], rec["job_started_at"],
-                                               floor, written) for size in POLICY_SIZES}
-        policies["every"] = every_push_snapshot(position[full_base], rec["job_started_at"], floor, pushes)
+        base_count = chain["index"][full_base]
+        bkey = key_at(entries, position[full_base])
+        if bkey is None:
+            raise RuntimeError(f"run {run_id}: no master writer at or before its base {full_base[:9]}")
+        floor = key_floor(base_count, key_by_count)
+        written = writer_completion(entries, bkey)
+        fallback = prefix_fallback(entries, bkey, rec["job_started_at"])
+        policies = {str(size): policy_snapshot(size, base_count, rec["job_started_at"], floor, written, fallback)
+                    for size in POLICY_SIZES}
+        policies["every"] = every_push_snapshot(position[full_base], rec["job_started_at"], floor, entries, bkey)
         runs.append({"run_id": run_id, "attempt": rec["attempt"], "snapshot": chain["index"][snap["sha"]],
                      "snapshot_sha": snap["sha"], "snapshot_writer_run": snap["run_id"], "base": full_base,
                      "base_count": chain["index"][full_base], "head": rec["merge"]["head"],
@@ -805,15 +844,40 @@ def check_writer_evidence() -> None:
     assert log_cache_path(Path("c"), 5, 7) != log_cache_path(Path("c"), 5, 8)  # a rerun is a different job
 
 
+KEY_A = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "a" * 64)
+KEY_B = ("Linux", "ghcr.io/x/ci:ci-bbbb", "9.12.2", "3.16.1.0", "a" * 64)    # same plan, rotated image
+KEY_A2 = ("Linux", "ghcr.io/x/ci:ci-aaaa", "9.12.2", "3.16.1.0", "c" * 64)   # same image, new plan
+
+
 def check_every_push() -> None:
     def when(hour: int) -> dt.datetime:
-        return dt.datetime(2026, 9, 27, hour, tzinfo=dt.timezone.utc)
-    # positions are first-parent order; count 418 has a later docs-free push (position 5) at the same count
-    pushes = [(1, 417, when(2)), (2, 418, when(7)), (3, 419, when(20)), (5, 419, when(9))]
+        return dt.datetime(2026, 9, 27, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hour)
+
+    def entry(position: int, count: int, hour: int, key: tuple = KEY_A) -> dict:
+        return {"position": position, "count": count, "completed": when(hour), "key": key}
+    # positions are first-parent order; count 419 has a later push (position 5) with no relevant change
+    entries = [entry(1, 417, 2), entry(2, 418, 7), entry(3, 419, 20), entry(5, 419, 9)]
     start = "2026-09-27T12:00:00Z"
-    assert every_push_snapshot(3, start, 412, pushes) == 418    # 419's own push finished after the run started
-    assert every_push_snapshot(5, start, 412, pushes) == 419    # a later push at the same count had finished
-    assert every_push_snapshot(2, start, 419, pushes) is None   # nothing at or after the plan floor
+    assert every_push_snapshot(3, start, 412, entries, KEY_A) == 418    # 419's own push finished after the run started
+    assert every_push_snapshot(5, start, 412, entries, KEY_A) == 419    # a later push at the same count had finished
+    assert every_push_snapshot(2, start, 419, entries, KEY_A) is None   # nothing at or after the plan floor
+
+    # image rotation with the same plan hash: counts 416 (image A) and 417 (image B); base 418 builds on B
+    rotated = [entry(0, 416, 1, KEY_A), entry(1, 417, 3, KEY_B), entry(2, 418, 30, KEY_B)]
+    assert key_at(rotated, 2) == KEY_B
+    written = writer_completion(rotated, KEY_B)
+    assert written == {417: when(3), 418: when(30)}
+    assert policy_snapshot(8, 418, start, 417, written) == 417          # never the incompatible image's 416
+    assert every_push_snapshot(2, start, 417, rotated, KEY_B) == 417
+    assert prefix_fallback(rotated, KEY_B, start) is None               # another image is never restored
+    assert policy_snapshot(8, 416, start, 416, writer_completion([entry(0, 416, 1, KEY_A)], KEY_B)) is None
+    # the permitted prefix: same image, older plan, when nothing of the base's plan is ready yet
+    replan = [entry(0, 410, 1, KEY_A), entry(1, 417, 30, KEY_A2)]
+    assert prefix_fallback(replan, KEY_A2, start) == 410
+    assert policy_snapshot(8, 417, start, 417, writer_completion(replan, KEY_A2), 410) == 410
+    assert every_push_snapshot(1, start, 417, replan, KEY_A2) == 410
+    assert key_floor(418, {410: KEY_A, 416: KEY_A, 417: KEY_B, 418: KEY_B}) == 417
+    assert key_tuple("dist-v3-Linux-ghcr.io/x/ci:ci-aaaa-ghc-9.12.2-cabal-3.16.1.0-" + "a" * 64 + "-epoch-52") == KEY_A
 
 
 def self_test() -> int:
@@ -855,6 +919,16 @@ def self_test() -> int:
     assert restored_snapshot(pr, writers)["run_id"] == 3
     pr["job_started_at"] = "2026-09-20T12:00:00Z"
     assert restored_snapshot(pr, writers) is None
+    # an old run re-run later republishes the key after newer runs did: the restore picks the
+    # latest publication before the restore, not the latest-created run
+    reseed = [push(1, "2026-10-12T19:57:00Z", True), push(3, "2026-09-27T01:40:00Z", True)]
+    reseed[0]["created_at"], reseed[1]["created_at"] = "2026-09-24T20:22:00Z", "2026-09-27T01:32:00Z"
+    writers2 = snapshot_writers(reseed)
+    assert [w["run_id"] for w in writers2[key]] == [3, 1]
+    pr["job_started_at"] = "2026-10-13T12:00:00Z"
+    assert restored_snapshot(pr, writers2)["run_id"] == 1
+    pr["job_started_at"] = "2026-10-01T12:00:00Z"
+    assert restored_snapshot(pr, writers2)["run_id"] == 3
     graph = {"A": {"B"}, "B": {"C"}, "C": set(), "D": {"C"}}
     assert reverse_closure(graph, "C") == {"A", "B", "D"} and reverse_closure(graph, "A") == set()
     assert IMPORT_RE.findall('import qualified Data.Map as M\nimport "base" Prelude\nimport safe Foo.Bar (x)\n') \
