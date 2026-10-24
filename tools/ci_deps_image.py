@@ -15,8 +15,8 @@ Ubuntu 24.04: the sha256 of `plan.json`, resolved at the fixed workspace
 `/src/synarchy` with `CABAL_DIR=/usr/local/cabal` so that the absolute paths
 plan.json records are the same on every run. Its immutable tag carries a
 platform marker, `ubuntu24.04-x86_64-ghc9.12.2-<sha256>`, so it cannot be
-confused with an Actions cache key (`deps-v2-Linux-...`, resolved inside the
-22.04 CI image, whose plan differs). An unseen identity is built and pushed
+confused with an Actions cache key (`deps-v3-<image>-Linux-...`, resolved inside
+the 26.04 CI image, whose plan differs). An unseen identity is built and pushed
 exactly once; a seen one is never rebuilt or overwritten, so it keeps its
 original provenance; `master` names master's current identity, so an
 A -> B -> A rollback reuses A and moves `master` back to it.
@@ -82,7 +82,7 @@ the registry's scheme. `check` compares a checkout's resolved
 plan with the image's metadata by compiler, platform and non-local unit
 IDs, which do not contain local paths, unlike plan.json's raw hash.
 
-Standard library only: it runs on the 22.04 CI image's Python 3.10 (where
+Standard library only: it runs on the 26.04 CI image's Python (where
 its tests run), on the 24.04 runner and in a consumer's sandbox.
 """
 from __future__ import annotations

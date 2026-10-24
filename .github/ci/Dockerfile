@@ -7,23 +7,10 @@
 # content-derived tag is what makes a published tag safe to treat as
 # immutable (a later edit always produces a new tag, never overwrites
 # this one).
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-# git comes from the git-core PPA, not from jammy. Ubuntu 22.04 ships
-# git 2.34, and `tools/review_gate_decision.py` replays a pull request's
-# approved head with `git merge-tree --write-tree`, which needs 2.38
-# (#2591). Without this the review gate's self-test fails here with
-# `fatal: unknown rev --write-tree` while passing on any developer's
-# machine. Nothing else in the toolchain moves: the PPA carries git
-# alone.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    gnupg \
-    software-properties-common \
- && add-apt-repository -y ppa:git-core/ppa \
- && apt-get update \
  && apt-get install -y --no-install-recommends \
     bash \
     build-essential \
@@ -73,10 +60,15 @@ ENV LC_ALL=en_US.UTF-8
 # of the three is optional here: each absence is one reported error and
 # a non-zero exit rather than a skipped check, so a CI image missing one
 # fails loudly instead of validating nothing.
-RUN python3 -m pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir --target=/opt/ci-python-packages \
       "PyYAML==6.0.2" \
       "Pillow==11.3.0" \
       "jsonschema==4.26.0"
+# Keep the PEP 668-safe target importable by ordinary `python3` processes,
+# including subprocesses that deliberately clear PYTHONPATH. Install a .pth
+# file into the interpreter's global site directories rather than exporting
+# PYTHONPATH, which some CI audits intentionally remove.
+RUN python3 -c 'import site; from pathlib import Path; [(Path(p).mkdir(parents=True, exist_ok=True), Path(p, "ci-python-packages.pth").write_text("/opt/ci-python-packages\n")) for p in site.getsitepackages()]'
 
 # Toolchain baked into the image (#671): the ghcup-cache approach in
 # ci.yml never hit once the job moved into this container (the action

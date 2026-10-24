@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       tag: ${{ steps.hash.outputs.tag }}
     steps:
@@ -52,7 +52,7 @@ jobs:
 
   resolve:
     needs: tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Keyed on the candidate tag (see header comment): serializes any
     # two runs that would otherwise race to check-then-push the SAME
@@ -157,6 +157,21 @@ jobs:
           echo "$CABAL_OUT"
           echo "$GHC_OUT" | grep -qF "$GHC_EXPECTED" || { echo "::error::candidate image's baked GHC does not match Dockerfile ARG GHC_VERSION=$GHC_EXPECTED"; exit 1; }
           echo "$CABAL_OUT" | grep -qF "$CABAL_EXPECTED" || { echo "::error::candidate image's baked Cabal does not match Dockerfile ARG CABAL_VERSION=$CABAL_EXPECTED"; exit 1; }
+
+      # Ubuntu 26.04 marks the system Python as externally managed. Verify the
+      # ordinary python3 commands used by CI can import every pinned package
+      # from the image even with the container job's HOME value.
+      - name: Validate candidate Python packages
+        if: steps.build.outcome == 'success'
+        run: |
+          docker run --rm -e HOME=/github/home synarchy-ci:candidate env -u PYTHONPATH python3 -c '
+          import importlib.metadata, jsonschema, PIL, yaml
+          expected = {"PyYAML": "6.0.2", "Pillow": "11.3.0", "jsonschema": "4.26.0"}
+          for package, version in expected.items():
+              actual = importlib.metadata.version(package)
+              assert actual == version, f"{package}: expected {version}, got {actual}"
+          print("Pinned Python packages import with HOME=/github/home and no PYTHONPATH")
+          '
 
       # First (and only) publish of this content's tag. Gated on
       # can_publish: a fork PR's GITHUB_TOKEN can't push regardless (see
