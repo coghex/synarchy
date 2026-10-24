@@ -411,31 +411,24 @@ def _spoke_point(d: str, frac: float) -> tuple[int, int]:
 
 # -- risers ------------------------------------------------------------
 
-def riser_parts(d: str, frac_flat: float = 1.0, frac_rise: float = 1.0,
-                tip: bool = False) -> list[Part]:
-    """A flat foot from the centre to the edge, then the rise."""
-    parts = [Part("disc", radius=HALF_WIDTH),
-             Part("spoke", d=d, a=0.0, b=SPOKE_LENGTH * frac_flat,
-                  tip=tip and frac_rise <= 0.0 and frac_flat < 1.0)]
-    if frac_rise > 0.0:
-        parts.append(Part("rise", d=d, a=0.0, b=frac_rise,
-                          tip=tip and frac_rise < 1.0))
-    return parts
+def riser_parts(d: str, frac_rise: float = 1.0, tip: bool = False) -> list[Part]:
+    """A riser is ONLY the vertical cable on its wall face, one level high:
+    no flat foot and no pad (owner verdict, #2516). A flat run on the tile
+    comes from the existing flat appearances."""
+    return [Part("rise", d=d, a=0.0, b=frac_rise, tip=tip and frac_rise < 1.0)]
 
 
 def riser_construction_parts(d: str, k: int) -> list[Part]:
-    """Lay the foot outward to the wall, then run the cable up it."""
+    """Run the cable up the wall: a quarter, half, three quarters, done."""
     if k == CONSTRUCTION_FRAMES - 1:
         return riser_parts(d)
-    plan = [(0.45, 0.0), (1.0, 0.3), (1.0, 0.7)]
-    flat, rise = plan[k]
-    return riser_parts(d, flat, rise, tip=True)
+    return riser_parts(d, (k + 1) / CONSTRUCTION_FRAMES, tip=True)
 
 
 def riser_destruction_parts(name: str, d: str, k: int) -> list[Part]:
     """Independently authored teardown of a riser: the cable is cut on the
-    wall, the upper run drops away from the wall, the foot breaks up, and
-    soot specks mark where it ran."""
+    wall and sparks, the upper run drops away from the wall in pieces,
+    debris scatters, and soot specks mark where it ran."""
     if k == 0:
         return riser_parts(d)
     rng = _hash_ints("wire-break", name, k)
@@ -445,39 +438,35 @@ def riser_destruction_parts(name: str, d: str, k: int) -> list[Part]:
         return (next(pick) % (2 * n + 1)) - n
 
     ex, ey = _spoke_point(d, 1.0)
-    parts: list[Part] = [Part("disc", radius=HALF_WIDTH * 0.8)]
+    parts: list[Part] = []
     if k == 1:
-        # Cut halfway up the wall: the upper half sags sideways, sparks.
-        parts.append(Part("spoke", d=d, a=0.0, b=SPOKE_LENGTH))
+        # Cut about halfway up the wall: the upper half sags sideways.
         parts.append(Part("rise", d=d, a=0.0, b=0.4))
-        parts.append(Part("rise", d=d, a=0.55, b=1.0, off=(1 if jitter(1) >= 0 else -1, 1)))
-        for i in range(3):
+        parts.append(Part("rise", d=d, a=0.55, b=1.0,
+                          off=(1 if jitter(1) >= 0 else -1, 1)))
+        for _ in range(3):
             parts.append(Part("speck", at=(ex + jitter(3), ey - 7 + jitter(2)),
                               colour=SPARK))
         return parts
     if k == 2:
-        # The upper run has fallen: pieces on the wall's foot and the
-        # tile, the flat foot in lifted fragments.
-        for i, (a, b) in enumerate(((0.05, 0.17), (0.24, 0.36), (0.40, 0.49))):
-            parts.append(Part("spoke", d=d, a=a, b=b, lift=1 + 2 * i,
-                              off=(jitter(2), -1 - 2 * i + jitter(1))))
+        # The upper run has fallen and broken into pieces.
         parts.append(Part("rise", d=d, a=0.0, b=0.2, off=(jitter(1), 0)))
-        parts.append(Part("rise", d=d, a=0.3, b=0.45, off=(jitter(2) + 3, 6)))
+        parts.append(Part("rise", d=d, a=0.3, b=0.45,
+                          off=(jitter(2) + 3, 5 + jitter(1))))
+        parts.append(Part("rise", d=d, a=0.6, b=0.75,
+                          off=(jitter(2) - 3, 9 + jitter(1))))
+        parts.append(Part("rise", d=d, a=0.85, b=1.0,
+                          off=(jitter(2) + 5, 12)))
         return parts
     if k == 3:
-        parts.append(Part("spoke", d=d, a=0.2, b=0.28, lift=5,
-                          off=(jitter(3), -5)))
-        parts.append(Part("rise", d=d, a=0.0, b=0.1, off=(jitter(3), 5)))
+        parts.append(Part("rise", d=d, a=0.0, b=0.1, off=(jitter(3), 4)))
+        parts.append(Part("rise", d=d, a=0.5, b=0.6, off=(jitter(3), 10)))
         for i in range(3):
             parts.append(Part("speck", at=(ex + jitter(5), ey - 4 + jitter(4)),
                               colour=SOOT if i else CABLE))
         return parts
-    # Final frame: soot specks along the foot and the wall, by riser.
-    for frac in (0.3, 0.7):
-        sx, sy = _spoke_point(d, frac)
-        parts.append(Part("speck", at=(sx + jitter(1), sy + jitter(1)),
-                          colour=SOOT))
-    for i in range(3):
+    # Final frame: soot specks up the wall where the cable ran.
+    for i in range(4):
         parts.append(Part("speck", at=(ex + jitter(2), ey - 2 - 4 * i + jitter(1)),
                           colour=SOOT))
     return parts

@@ -393,9 +393,9 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
         pinMismatches pins (exchange (("end_n", "facemap"), ("end_e", "facemap")) imgs)
             `shouldBe` [("end_e", "facemap"), ("end_n", "facemap")]
 
-    it "authors the four risers up their wall faces: a flat foot at the \
-       \tile centre, then a vertical rise of at least twelve pixels on the \
-       \wall plane, with a top face and a side face" $ do
+    it "authors the four risers as ONLY the vertical cable on their wall \
+       \face (no flat foot): at least twelve pixels tall and at most three \
+       \wide, with a top face and a side face" $ do
         imgs ← loadAll
         forM_ riserNames $ \s → do
             let ci = imgs M.! (s, "colour")
@@ -403,6 +403,8 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
                 ys = [ y | ((_, y), _) ← visible ci ]
                 faces = S.fromList [ (r, g, b) | (_, (r, g, b, _)) ← visible fi ]
             (s, maximum ys - minimum ys) `shouldSatisfy` \(_, h) → h ≥ 12
+            let xs = [ x | ((x, _), _) ← visible ci ]
+            (s, maximum xs - minimum xs) `shouldSatisfy` \(_, w) → w ≤ 2
             S.member (0, 255, 0) faces `shouldBe` True
             S.size (S.delete (0, 255, 0) faces) `shouldSatisfy` (≥ 1)
             length [ () | (_, (r, g, b, _)) ← visible fi
