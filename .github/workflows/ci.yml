@@ -405,15 +405,10 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
-            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
-            # TEMPORARY #2872 migration validation; reverted after this run.
-            if [ "${{ github.head_ref }}" = 'issue-2872-ubuntu-26-04' ]; then
-              WORLDGEN=true
-              GRAPHICAL=true
-            fi
-            printf 'worldgen=%s\n' "$WORLDGEN"
-            printf 'graphical=%s\n' "$GRAPHICAL"
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
@@ -776,15 +771,10 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
-            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
-            # TEMPORARY #2872 migration validation; reverted after this run.
-            if [ "${{ github.head_ref }}" = 'issue-2872-ubuntu-26-04' ]; then
-              WORLDGEN=true
-              GRAPHICAL=true
-            fi
-            printf 'worldgen=%s\n' "$WORLDGEN"
-            printf 'graphical=%s\n' "$GRAPHICAL"
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
