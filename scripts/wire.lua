@@ -151,6 +151,10 @@ local WIRE_SHAPES = {
     "straight_ns", "straight_ew",
     "corner_ne", "corner_nw", "corner_se", "corner_sw",
     "tee_n", "tee_e", "tee_s", "tee_w", "cross",
+    -- #2516: the four riser appearances. Declared and registered like
+    -- any other, required with no fallback, and never chosen by
+    -- shapeFor: nothing places them yet.
+    "riser_n", "riser_e", "riser_s", "riser_w",
 }
 
 -- Declare the wire pack's per-shape art for UNPLACED pieces (#1842), so

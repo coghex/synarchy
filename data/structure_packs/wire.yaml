@@ -456,3 +456,111 @@ connections:
         - assets/textures/facemap/wire/break/cross_2.png
         - assets/textures/facemap/wire/break/cross_3.png
         - assets/textures/facemap/wire/break/cross_4.png
+  riser_n:
+    texture: assets/textures/structures/wire/riser_n.png
+    facemap: assets/textures/facemap/wire/riser_n.png
+    construction:
+      - assets/textures/structures/wire/build/riser_n_0.png
+      - assets/textures/structures/wire/build/riser_n_1.png
+      - assets/textures/structures/wire/build/riser_n_2.png
+      - assets/textures/structures/wire/build/riser_n_3.png
+    construction_facemaps:
+      - assets/textures/facemap/wire/build/riser_n_0.png
+      - assets/textures/facemap/wire/build/riser_n_1.png
+      - assets/textures/facemap/wire/build/riser_n_2.png
+      - assets/textures/facemap/wire/build/riser_n_3.png
+    destruction:
+      fps: 10
+      frames:
+        - assets/textures/structures/wire/break/riser_n_0.png
+        - assets/textures/structures/wire/break/riser_n_1.png
+        - assets/textures/structures/wire/break/riser_n_2.png
+        - assets/textures/structures/wire/break/riser_n_3.png
+        - assets/textures/structures/wire/break/riser_n_4.png
+      facemaps:
+        - assets/textures/facemap/wire/break/riser_n_0.png
+        - assets/textures/facemap/wire/break/riser_n_1.png
+        - assets/textures/facemap/wire/break/riser_n_2.png
+        - assets/textures/facemap/wire/break/riser_n_3.png
+        - assets/textures/facemap/wire/break/riser_n_4.png
+  riser_e:
+    texture: assets/textures/structures/wire/riser_e.png
+    facemap: assets/textures/facemap/wire/riser_e.png
+    construction:
+      - assets/textures/structures/wire/build/riser_e_0.png
+      - assets/textures/structures/wire/build/riser_e_1.png
+      - assets/textures/structures/wire/build/riser_e_2.png
+      - assets/textures/structures/wire/build/riser_e_3.png
+    construction_facemaps:
+      - assets/textures/facemap/wire/build/riser_e_0.png
+      - assets/textures/facemap/wire/build/riser_e_1.png
+      - assets/textures/facemap/wire/build/riser_e_2.png
+      - assets/textures/facemap/wire/build/riser_e_3.png
+    destruction:
+      fps: 10
+      frames:
+        - assets/textures/structures/wire/break/riser_e_0.png
+        - assets/textures/structures/wire/break/riser_e_1.png
+        - assets/textures/structures/wire/break/riser_e_2.png
+        - assets/textures/structures/wire/break/riser_e_3.png
+        - assets/textures/structures/wire/break/riser_e_4.png
+      facemaps:
+        - assets/textures/facemap/wire/break/riser_e_0.png
+        - assets/textures/facemap/wire/break/riser_e_1.png
+        - assets/textures/facemap/wire/break/riser_e_2.png
+        - assets/textures/facemap/wire/break/riser_e_3.png
+        - assets/textures/facemap/wire/break/riser_e_4.png
+  riser_s:
+    texture: assets/textures/structures/wire/riser_s.png
+    facemap: assets/textures/facemap/wire/riser_s.png
+    construction:
+      - assets/textures/structures/wire/build/riser_s_0.png
+      - assets/textures/structures/wire/build/riser_s_1.png
+      - assets/textures/structures/wire/build/riser_s_2.png
+      - assets/textures/structures/wire/build/riser_s_3.png
+    construction_facemaps:
+      - assets/textures/facemap/wire/build/riser_s_0.png
+      - assets/textures/facemap/wire/build/riser_s_1.png
+      - assets/textures/facemap/wire/build/riser_s_2.png
+      - assets/textures/facemap/wire/build/riser_s_3.png
+    destruction:
+      fps: 10
+      frames:
+        - assets/textures/structures/wire/break/riser_s_0.png
+        - assets/textures/structures/wire/break/riser_s_1.png
+        - assets/textures/structures/wire/break/riser_s_2.png
+        - assets/textures/structures/wire/break/riser_s_3.png
+        - assets/textures/structures/wire/break/riser_s_4.png
+      facemaps:
+        - assets/textures/facemap/wire/break/riser_s_0.png
+        - assets/textures/facemap/wire/break/riser_s_1.png
+        - assets/textures/facemap/wire/break/riser_s_2.png
+        - assets/textures/facemap/wire/break/riser_s_3.png
+        - assets/textures/facemap/wire/break/riser_s_4.png
+  riser_w:
+    texture: assets/textures/structures/wire/riser_w.png
+    facemap: assets/textures/facemap/wire/riser_w.png
+    construction:
+      - assets/textures/structures/wire/build/riser_w_0.png
+      - assets/textures/structures/wire/build/riser_w_1.png
+      - assets/textures/structures/wire/build/riser_w_2.png
+      - assets/textures/structures/wire/build/riser_w_3.png
+    construction_facemaps:
+      - assets/textures/facemap/wire/build/riser_w_0.png
+      - assets/textures/facemap/wire/build/riser_w_1.png
+      - assets/textures/facemap/wire/build/riser_w_2.png
+      - assets/textures/facemap/wire/build/riser_w_3.png
+    destruction:
+      fps: 10
+      frames:
+        - assets/textures/structures/wire/break/riser_w_0.png
+        - assets/textures/structures/wire/break/riser_w_1.png
+        - assets/textures/structures/wire/break/riser_w_2.png
+        - assets/textures/structures/wire/break/riser_w_3.png
+        - assets/textures/structures/wire/break/riser_w_4.png
+      facemaps:
+        - assets/textures/facemap/wire/break/riser_w_0.png
+        - assets/textures/facemap/wire/break/riser_w_1.png
+        - assets/textures/facemap/wire/break/riser_w_2.png
+        - assets/textures/facemap/wire/break/riser_w_3.png
+        - assets/textures/facemap/wire/break/riser_w_4.png

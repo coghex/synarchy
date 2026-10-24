@@ -117,6 +117,36 @@ SHAPES = {
     "cross": "nesw",
 }
 
+# The four RISERS (#2516 requirement 11): a cable that runs up one tile
+# side's wall face to the level above and joins a flat run at its foot,
+# named after the wall face it climbs (the same cardinal as the flat
+# shapes: n = the NE edge / gy-1, e = SE / gx+1, s = SW / gy+1,
+# w = NW / gx-1). Art and declaration only: nothing places them and the
+# autotile never selects them.
+RISERS = {"riser_n": "n", "riser_e": "e", "riser_s": "s", "riser_w": "w"}
+ALL_SHAPES = {**SHAPES, **RISERS}
+
+# The two risers whose wall faces the camera. At the default camera
+# (FaceSouth) the screen-front edges are SE and SW
+# (Structure.Render.isScreenFrontWall), which are the east (gx+1) and south
+# (gy+1) sides, so riser_e and riser_s are the owner's "two risers running
+# up the south walls". The camera sees their cable's UNDERSIDE, painted a
+# slightly darker dark orange into the colour texture (not a tint); the
+# facemap still marks those pixels as a side face.
+UNDERSIDE_RISERS = ("riser_e", "riser_s")
+CABLE_UNDER = (134, 62, 16, 255)
+
+RISE_HEIGHT = 16        # px: one level, the same as a wall (tileSideHeight)
+# Which column of the two-pixel rise is the SIDE face, and its facemap.
+# The other column is the top face. Column offsets are from the edge
+# midpoint's x.
+RISE_SIDE = {
+    "e": (0, FACE_RIGHT),    # SE wall: the outer face looks right
+    "w": (0, FACE_RIGHT),    # NW wall: its inner face looks right
+    "s": (-1, FACE_LEFT),    # SW wall: the outer face looks left
+    "n": (-1, FACE_LEFT),    # NE wall: its inner face looks left
+}
+
 # Spoke geometry. `axis` is the ground axis the spoke runs along ("u" =
 # east/west, "v" = north/south) and `sign` its direction; `side` is the
 # facemap of the extrusion under it.
@@ -186,7 +216,21 @@ def _side_hit(part: Part, x: int, y: int) -> bool:
     return False
 
 
-def render(parts: list[Part]) -> tuple[Image.Image, Image.Image]:
+def _rise_cells(part: Part):
+    """((x, y), is_side) for a rise part: a two-pixel-wide vertical cable
+    on the wall plane at the edge midpoint, from `a` to `b` of its
+    height (0 = foot, 1 = the level above)."""
+    ex, ey = _spoke_point(part.d, 1.0)
+    side_dx, _ = RISE_SIDE[part.d]
+    ox, oy = part.off
+    y_hi = ey - round(part.b * RISE_HEIGHT)
+    y_lo = ey - round(part.a * RISE_HEIGHT)
+    for y in range(y_hi, y_lo + (1 if part.b >= 1.0 and part.a <= 0.0 else 0)):
+        for dx in (-1, 0):
+            yield (ex + dx + ox, y - part.lift + oy), dx == side_dx
+
+
+def render(parts: list[Part], under: bool = False) -> tuple[Image.Image, Image.Image]:
     """Rasterise parts (painter order) into a colour/facemap pair. Every
     visible pixel is flat cable colour (or a tip, spark or soot override);
     there is no outline."""
@@ -196,6 +240,16 @@ def render(parts: list[Part]) -> tuple[Image.Image, Image.Image]:
             x, y = part.at
             if 0 <= x < W and 0 <= y < H:
                 cells[(x, y)] = (FACE_TOP, part.colour)
+            continue
+        if part.kind == "rise":
+            face_side = RISE_SIDE[part.d][1]
+            for (x, y), is_side in _rise_cells(part):
+                if 0 <= x < W and 0 <= y < H:
+                    cells[(x, y)] = (face_side if is_side else FACE_TOP, None)
+            if part.tip:
+                tx, ty = min(_rise_cells(part), key=lambda c: c[0][1])[0]
+                if 0 <= tx < W and 0 <= ty < H:
+                    cells[(tx, ty)] = (FACE_TOP, TIP)
             continue
         for y in range(H):
             for x in range(W):
@@ -221,7 +275,12 @@ def render(parts: list[Part]) -> tuple[Image.Image, Image.Image]:
     face = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     cpx, fpx = colour.load(), face.load()
     for (x, y), (fmap, override) in cells.items():
-        cpx[x, y] = override if override is not None else CABLE
+        if override is not None:
+            cpx[x, y] = override
+        elif under and fmap != FACE_TOP:
+            cpx[x, y] = CABLE_UNDER
+        else:
+            cpx[x, y] = CABLE
         fpx[x, y] = fmap
     return colour, face
 
@@ -350,6 +409,80 @@ def _spoke_point(d: str, frac: float) -> tuple[int, int]:
     return (round(CX + (u + v) * 48), round(CY + (u - v) * 24))
 
 
+# -- risers ------------------------------------------------------------
+
+def riser_parts(d: str, frac_flat: float = 1.0, frac_rise: float = 1.0,
+                tip: bool = False) -> list[Part]:
+    """A flat foot from the centre to the edge, then the rise."""
+    parts = [Part("disc", radius=HALF_WIDTH),
+             Part("spoke", d=d, a=0.0, b=SPOKE_LENGTH * frac_flat,
+                  tip=tip and frac_rise <= 0.0 and frac_flat < 1.0)]
+    if frac_rise > 0.0:
+        parts.append(Part("rise", d=d, a=0.0, b=frac_rise,
+                          tip=tip and frac_rise < 1.0))
+    return parts
+
+
+def riser_construction_parts(d: str, k: int) -> list[Part]:
+    """Lay the foot outward to the wall, then run the cable up it."""
+    if k == CONSTRUCTION_FRAMES - 1:
+        return riser_parts(d)
+    plan = [(0.45, 0.0), (1.0, 0.3), (1.0, 0.7)]
+    flat, rise = plan[k]
+    return riser_parts(d, flat, rise, tip=True)
+
+
+def riser_destruction_parts(name: str, d: str, k: int) -> list[Part]:
+    """Independently authored teardown of a riser: the cable is cut on the
+    wall, the upper run drops away from the wall, the foot breaks up, and
+    soot specks mark where it ran."""
+    if k == 0:
+        return riser_parts(d)
+    rng = _hash_ints("wire-break", name, k)
+    pick = iter(rng * 8)
+
+    def jitter(n: int) -> int:
+        return (next(pick) % (2 * n + 1)) - n
+
+    ex, ey = _spoke_point(d, 1.0)
+    parts: list[Part] = [Part("disc", radius=HALF_WIDTH * 0.8)]
+    if k == 1:
+        # Cut halfway up the wall: the upper half sags sideways, sparks.
+        parts.append(Part("spoke", d=d, a=0.0, b=SPOKE_LENGTH))
+        parts.append(Part("rise", d=d, a=0.0, b=0.4))
+        parts.append(Part("rise", d=d, a=0.55, b=1.0, off=(1 if jitter(1) >= 0 else -1, 1)))
+        for i in range(3):
+            parts.append(Part("speck", at=(ex + jitter(3), ey - 7 + jitter(2)),
+                              colour=SPARK))
+        return parts
+    if k == 2:
+        # The upper run has fallen: pieces on the wall's foot and the
+        # tile, the flat foot in lifted fragments.
+        for i, (a, b) in enumerate(((0.05, 0.17), (0.24, 0.36), (0.40, 0.49))):
+            parts.append(Part("spoke", d=d, a=a, b=b, lift=1 + 2 * i,
+                              off=(jitter(2), -1 - 2 * i + jitter(1))))
+        parts.append(Part("rise", d=d, a=0.0, b=0.2, off=(jitter(1), 0)))
+        parts.append(Part("rise", d=d, a=0.3, b=0.45, off=(jitter(2) + 3, 6)))
+        return parts
+    if k == 3:
+        parts.append(Part("spoke", d=d, a=0.2, b=0.28, lift=5,
+                          off=(jitter(3), -5)))
+        parts.append(Part("rise", d=d, a=0.0, b=0.1, off=(jitter(3), 5)))
+        for i in range(3):
+            parts.append(Part("speck", at=(ex + jitter(5), ey - 4 + jitter(4)),
+                              colour=SOOT if i else CABLE))
+        return parts
+    # Final frame: soot specks along the foot and the wall, by riser.
+    for frac in (0.3, 0.7):
+        sx, sy = _spoke_point(d, frac)
+        parts.append(Part("speck", at=(sx + jitter(1), sy + jitter(1)),
+                          colour=SOOT))
+    for i in range(3):
+        parts.append(Part("speck", at=(ex + jitter(2), ey - 2 - 4 * i + jitter(1)),
+                          colour=SOOT))
+    return parts
+
+
 # -- output ------------------------------------------------------------
 
 def paths(shape: str) -> list[tuple[str, int | None, Path, Path]]:
@@ -367,6 +500,15 @@ def paths(shape: str) -> list[tuple[str, int | None, Path, Path]]:
 
 
 def images(shape: str):
+    if shape in RISERS:
+        d = RISERS[shape]
+        under = shape in UNDERSIDE_RISERS
+        yield "static", None, render(riser_parts(d), under)
+        for k in range(CONSTRUCTION_FRAMES):
+            yield "build", k, render(riser_construction_parts(d, k), under)
+        for k in range(DESTRUCTION_FRAMES):
+            yield "break", k, render(riser_destruction_parts(shape, d, k), under)
+        return
     dirs = SHAPES[shape]
     yield "static", None, render(static_parts(dirs))
     for k in range(CONSTRUCTION_FRAMES):
@@ -411,7 +553,7 @@ def yaml_text() -> str:
         "# sequence and destruction clip, each frame paired with its facemap.",
         "connections:",
     ]
-    for shape in SHAPES:
+    for shape in ALL_SHAPES:
         out.append(f"  {shape}:")
         out.append(f"    texture: {posix(COLOR_DIR / (shape + '.png'))}")
         out.append(f"    facemap: {posix(FACE_DIR / (shape + '.png'))}")
@@ -447,7 +589,7 @@ def main():
                     help="write the approved-content digest manifest")
     args = ap.parse_args()
     pins = []
-    for shape in SHAPES:
+    for shape in ALL_SHAPES:
         by_key = {(s, i): (c, f) for s, i, (c, f) in images(shape)}
         for stage, idx, cpath, fpath in paths(shape):
             colour, face = by_key[(stage, idx)]

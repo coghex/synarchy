@@ -45,7 +45,7 @@ import Data.Char (ord)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.ArtCatalog
 import Structure.Facing (WallCaps(..), WallEdge(..), wallCapsCode)
-import Structure.Wire (allWireShapes, wireShapeName)
+import Structure.Wire (allWireArtShapes, wireShapeName)
 import Structure.WallCatalog
     ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
     , registerWallFamily )
@@ -194,7 +194,7 @@ parseWirePack = withObject "wire pack" $ \o → do
     -- #2516: every connection declares its OWN texture and facemap and
     -- pairs every lifecycle frame with one; the shipped declaration is
     -- kept whole so the real pack is what the ghost examples register.
-    decls ← forM allWireShapes $ \s → do
+    decls ← forM allWireArtShapes $ \s → do
         c ← conns .: fromText (wireShapeName s)
         withObject "wire connection" (\e → do
             tex  ← e .: "texture"

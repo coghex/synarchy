@@ -31,7 +31,7 @@ import Engine.Core.State (EngineEnv, structureArtCatalogRef)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemManager(..))
 import Structure.ArtCatalog
 import Structure.Facing (WallCaps(..), WallEdge(..))
-import Structure.Wire (allWireShapes)
+import Structure.Wire (allWireArtShapes)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -114,7 +114,7 @@ wireRegistration ∷ PackArtRegistration
 wireRegistration = PackArtRegistration
     { parPack = fixtureWirePack
     , parKinds = [(KWire, True, Just fixtureWireCost)]
-    , parEntries = [ (AkWire s, art "wire") | s ← allWireShapes ]
+    , parEntries = [ (AkWire s, art "wire") | s ← allWireArtShapes ]
     , parFrames  = []
     , parDestruction = []
     , parVariantFaces = []

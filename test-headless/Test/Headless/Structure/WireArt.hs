@@ -63,7 +63,9 @@ import Structure.Render
 import Structure.Types (StructurePieceData(..), StructureSlot(..))
 import Structure.WallCatalog (emptyStructureWallCatalog)
 import Structure.Facing (WallEdge(..))
-import Structure.Wire (WireShape(..), allWireShapes, wireShapeName)
+import Structure.Wire
+    ( WireShape(..), allWireArtShapes, allWireNeighbors
+    , allWireRisers, allWireShapes, isWireRiser, wireShapeFor, wireShapeName )
 
 import Test.Headless.Render.StructureGhostFixture
     ( PackFixture(..), handleForPath, loadShippedPacks, packCatalog )
@@ -79,7 +81,17 @@ buildFrames = 4
 breakFrames = 5
 
 shapeNames ∷ [Text]
-shapeNames = map wireShapeName allWireShapes
+shapeNames = map wireShapeName allWireArtShapes
+
+-- | The sixteen shapes the autotile can select, and the four risers.
+riserNames ∷ [Text]
+riserNames = map wireShapeName allWireRisers
+
+-- | The two risers whose wall faces the camera at the default facing
+--   (FaceSouth: the SE and SW edges are the screen-front ones, which are
+--   the east and south sides), and so show the cable's UNDERSIDE.
+undersideRisers ∷ [Text]
+undersideRisers = ["riser_e", "riser_s"]
 
 colourPath, facePath ∷ Text → Text
 colourPath s = "assets/textures/structures/wire/" <> s <> ".png"
@@ -181,7 +193,7 @@ spec = do
 
 lifecycleArtSpec ∷ Spec
 lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
-    it "declares exactly the sixteen appearances, each with its own colour \
+    it "declares exactly the twenty appearances (sixteen autotile shapes and four risers), each with its own colour \
        \sprite, facemap, four paired construction frames and five paired \
        \destruction frames, at the paths this suite states" $ do
         top ← loadPackYaml
@@ -214,10 +226,10 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
         -- no pack-level shared facemap any more
         KM.member "facemap" top `shouldBe` False
 
-    it "names 320 distinct existing PNG files" $ do
+    it "names 400 distinct existing PNG files" $ do
         let paths = concat [ [c, f] | (_, c, f) ← inventory ]
-        length paths `shouldBe` 320
-        S.size (S.fromList paths) `shouldBe` 320
+        length paths `shouldBe` 400
+        S.size (S.fromList paths) `shouldBe` 400
         forM_ paths $ \p → (BS.length <$> BS.readFile (T.unpack p))
             ⌦ (`shouldSatisfy` (> 0))
 
@@ -246,8 +258,10 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
             highlight = (230, 150, 84)
         forM_ shapeNames $ \s → do
             let img = imgs M.! (s, "colour")
+                allowed | s `elem` undersideRisers = S.insert (134, 62, 16) flat
+                        | otherwise = flat
             S.fromList [ (r, g, b) | (_, (r, g, b, _)) ← visible img ]
-                `shouldSatisfy` (`S.isSubsetOf` flat)
+                `shouldSatisfy` (`S.isSubsetOf` allowed)
         forM_ (M.toList imgs) $ \((k, half), img) →
             when (half ≡ "colour") $
                 (k, [ () | (_, (r, g, b, _)) ← visible img
@@ -356,7 +370,7 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
        \of the files' names" $ do
         pins ← loadPins
         imgs ← loadAll
-        M.size pins `shouldBe` 320
+        M.size pins `shouldBe` 400
         pinMismatches pins imgs `shouldBe` []
 
     it "FAILS the approved-content check when two appearances' contents \
@@ -378,6 +392,54 @@ lifecycleArtSpec = describe "Wire structure lifecycle art" $ do
         -- a facemap exchanged with another appearance's facemap
         pinMismatches pins (exchange (("end_n", "facemap"), ("end_e", "facemap")) imgs)
             `shouldBe` [("end_e", "facemap"), ("end_n", "facemap")]
+
+    it "authors the four risers up their wall faces: a flat foot at the \
+       \tile centre, then a vertical rise of at least twelve pixels on the \
+       \wall plane, with a top face and a side face" $ do
+        imgs ← loadAll
+        forM_ riserNames $ \s → do
+            let ci = imgs M.! (s, "colour")
+                fi = imgs M.! (s, "facemap")
+                ys = [ y | ((_, y), _) ← visible ci ]
+                faces = S.fromList [ (r, g, b) | (_, (r, g, b, _)) ← visible fi ]
+            (s, maximum ys - minimum ys) `shouldSatisfy` \(_, h) → h ≥ 12
+            S.member (0, 255, 0) faces `shouldBe` True
+            S.size (S.delete (0, 255, 0) faces) `shouldSatisfy` (≥ 1)
+            length [ () | (_, (r, g, b, _)) ← visible fi
+                        , (r, g, b) ≡ (0, 0, 255) ∨ (r, g, b) ≡ (255, 0, 0) ]
+                `shouldSatisfy` (> 12)
+
+    it "paints the cable's UNDERSIDE a slightly darker orange on exactly the \
+       \two camera-facing risers (east and south at the default facing), \
+       \baked into the colour, with its facemap still a side face" $ do
+        imgs ← loadAll
+        forM_ riserNames $ \s → forM_ ([ "" ] ⧺ [ "/build" <> tshow k | k ← [0 .. buildFrames - 1] ]) $ \stage → do
+            let key = s <> stage
+                ci = imgs M.! (key, "colour")
+                fi = imgs M.! (key, "facemap")
+                sideColours = S.fromList
+                    [ (r, g, b)
+                    | ((_, (r, g, b, _)), (_, (fr, fg, fb, _))) ←
+                          zip (visible ci) (visible fi)
+                    , (fr, fg, fb) ≢ (0, 255, 0), (r, g, b) ≢ (168, 170, 178) ]
+                topColours = S.fromList
+                    [ (r, g, b)
+                    | ((_, (r, g, b, _)), (_, (fr, fg, fb, _))) ←
+                          zip (visible ci) (visible fi)
+                    , (fr, fg, fb) ≡ (0, 255, 0), (r, g, b) ≢ (168, 170, 178) ]
+            when (s `elem` undersideRisers) $
+                (key, sideColours) `shouldBe` (key, S.fromList [(134, 62, 16)])
+            when (s `notElem` undersideRisers) $
+                (key, sideColours) `shouldBe` (key, S.fromList [(166, 78, 22)])
+            (key, topColours) `shouldBe` (key, S.fromList [(166, 78, 22)])
+
+    it "keeps the underside darker only slightly: the same orange hue, \
+       \under 30 % darker in every channel" $ do
+        let (r0, g0, b0) = (166, 78, 22) ∷ (Int, Int, Int)
+            (r1, g1, b1) = (134, 62, 16)
+        forM_ [(r0, r1), (g0, g1), (b0, b1)] $ \(a, b) → do
+            b `shouldSatisfy` (< a)
+            fromIntegral (a - b) / fromIntegral a `shouldSatisfy` (< (0.3 ∷ Double))
 
     it "does NOT count RGB beneath zero alpha as a difference" $ do
         imgs ← loadAll
@@ -405,24 +467,24 @@ distinctArt imgs = S.size (S.fromList (map visible' imgs)) ≡ length imgs
 integrationSpec ∷ Spec
 integrationSpec = describe "Wire facemap integration" $ do
     it "registers the shipped pack and resolves each shape's OWN colour and \
-       \facemap — sixteen distinct facemaps, none of them the floor's" $ do
+       \facemap — twenty distinct facemaps, none of them the floor's" $ do
         cat ← shippedCatalog
-        forM_ allWireShapes $ \w → do
+        forM_ allWireArtShapes $ \w → do
             let s = wireShapeName w
                 art = resolveUnplacedArt cat "wire" "wire" Nothing
                           (defaultPieceArtContext { pacWireShape = w })
             fmap (aaPath ∘ paTexture) art `shouldBe` Just (colourPath s)
             fmap (aaPath ∘ paFacemap) art `shouldBe` Just (facePath s)
         S.size (S.fromList [ aaPath (paFacemap a)
-                           | w ← allWireShapes
+                           | w ← allWireArtShapes
                            , Just a ← [resolveUnplacedArt cat "wire" "wire" Nothing
                                           (defaultPieceArtContext { pacWireShape = w })] ])
-            `shouldBe` 16
+            `shouldBe` 20
 
     it "selects the construction frame AND its facemap together at every \
        \progress, for every shape" $ do
         cat ← shippedCatalog
-        forM_ allWireShapes $ \w → forM_ [0, 0.1, 0.25, 0.49, 0.5, 0.74, 0.99, 1.0] $ \p → do
+        forM_ allWireArtShapes $ \w → forM_ [0, 0.1, 0.25, 0.49, 0.5, 0.74, 0.99, 1.0] $ \p → do
             let s = wireShapeName w
                 k = constructionFrameIndex buildFrames p
                 got = resolveConstructionFramePair cat "wire"
@@ -433,7 +495,7 @@ integrationSpec = describe "Wire facemap integration" $ do
     it "pairs every destruction frame with its facemap and declares the \
        \authored rate" $ do
         cat ← shippedCatalog
-        forM_ allWireShapes $ \w → do
+        forM_ allWireArtShapes $ \w → do
             let s = wireShapeName w
                 ds = must (resolveDestructionSequence cat "wire"
                               (AppearanceKey Nothing (ApWire w)))
@@ -525,6 +587,22 @@ integrationSpec = describe "Wire facemap integration" $ do
         place "isolated" `shouldBe` [slotOf (facePath "isolated")]
         place "end_e" `shouldBe` [slotOf (facePath "end_e")]
         place "straight_ew" `shouldBe` [slotOf (facePath "straight_ew")]
+
+    it "never lets the autotile select a riser, yet requires all four as \
+       \art with no fallback" $ do
+        cat ← shippedCatalog
+        forM_ allWireNeighbors $ \n →
+            isWireRiser (wireShapeFor n) `shouldBe` False
+        length allWireShapes `shouldBe` 16
+        forM_ allWireRisers $ \w → do
+            let s = wireShapeName w
+                art = resolveUnplacedArt cat "wire" "wire" Nothing
+                          (defaultPieceArtContext { pacWireShape = w })
+            fmap (aaPath ∘ paFacemap) art `shouldBe` Just (facePath s)
+        reg ← shippedWire
+        refused (reg { parEntries = [ e | e@(k, _) ← parEntries reg
+                                        , k ≢ AkWire WireRiserE ] })
+            ["wire", "riser_e", "no art for this slot"]
 
     it "never overrides a non-Wire piece or an unknown sprite" $ do
         cat ← shippedCatalog

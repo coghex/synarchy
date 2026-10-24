@@ -239,7 +239,7 @@ spec = do
                         `shouldBe` "assets/textures/buildings/dungeon_1/damaged/wall_ne.png"
                 other → expectationFailure (show other)
 
-        it "wire: 16 connections in declared order, each with its OWN facemap" $ do
+        it "wire: 20 connections (16 autotile + 4 risers) in declared order, each with its OWN facemap" $ do
             loadStructurePack "wire" ⌦ \case
                 Right (Just p) → do
                     let apps = pspkAppearances p
@@ -247,7 +247,8 @@ spec = do
                         [ "isolated", "end_n", "end_e", "end_s", "end_w"
                         , "straight_ns", "straight_ew", "corner_ne", "corner_nw"
                         , "corner_se", "corner_sw", "tee_n", "tee_e", "tee_s"
-                        , "tee_w", "cross" ]
+                        , "tee_w", "cross"
+                        , "riser_n", "riser_e", "riser_s", "riser_w" ]
                     nub (map psaGroup apps) `shouldBe` ["wire"]
                     [ fmap pstPath (psfFile f) | a ← apps, f ← psaFacemaps a ]
                         `shouldBe`
@@ -255,7 +256,8 @@ spec = do
                         | c ← [ "isolated", "end_n", "end_e", "end_s", "end_w"
                               , "straight_ns", "straight_ew", "corner_ne"
                               , "corner_nw", "corner_se", "corner_sw", "tee_n"
-                              , "tee_e", "tee_s", "tee_w", "cross" ] ]
+                              , "tee_e", "tee_s", "tee_w", "cross"
+                              , "riser_n", "riser_e", "riser_s", "riser_w" ] ]
                     pspkDefault p `shouldBe` "wire:isolated"
                 other → expectationFailure (show other)
 

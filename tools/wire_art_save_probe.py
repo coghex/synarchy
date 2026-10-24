@@ -338,12 +338,17 @@ def verify_once(port: int, root: str, fx: dict, label: str,
         check(published, "load transaction published", status)
         send(port, f"world.show('{fx['page']}'); return 'ok'")
         check(wait_active(port, fx["page"]), "page active after the load")
-        send(port, "engine.setPaused(false); return 'ok'")
+        # The clock is frozen for the whole check: a running clock would
+        # charge the battery between the save and the comparison.
+        send(port, f"world.setTimeScale('{fx['page']}', 0); return 'ok'")
 
         chunk = tuple(fx["chunk"])
-        check(chunk_loaded(port, chunk) is False,
-              "the Wire chunk is NOT loaded in the fresh process",
-              chunk_loaded(port, chunk))
+        if label.endswith("A"):
+            # Only the first load is from a save taken with the chunk
+            # evicted; the resave below is taken at home, with it resident.
+            check(chunk_loaded(port, chunk) is False,
+                  "the Wire chunk is NOT loaded in the fresh process",
+                  chunk_loaded(port, chunk))
 
         # The resident run first: its chunk is whatever the camera held.
         rx, ry = fx["residentRun"][0]
@@ -402,7 +407,6 @@ def verify_once(port: int, root: str, fx: dict, label: str,
 
         if label.endswith("A"):
             name2 = f"wire_art_resave_{uuid.uuid4().hex[:8]}"
-            send(port, "engine.setPaused(false); return 'ok'")
             saved = send(port, f"return engine.saveWorld('{fx['page']}', '{name2}')")
             check(saved.strip() == "true", "resave accepted", saved)
             sfile = os.path.join(root, "saves", name2, "world.synworld")

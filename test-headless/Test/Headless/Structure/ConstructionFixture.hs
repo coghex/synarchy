@@ -61,7 +61,7 @@ import Structure.Facing (WallCaps(..), WallEdge(..), wallCapsCode)
 import Structure.WallCatalog
     ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
     , registerWallFamily )
-import Structure.Wire (WireShape(..), allWireShapes, wireShapeName)
+import Structure.Wire (WireShape(..), allWireArtShapes, wireShapeName)
 
 import Test.Headless.Render.StructureGhostFixture (handleForPath)
 
@@ -167,7 +167,7 @@ allAppearances =
     | v ← [Nothing, Just damagedVariant]
     , s ← [ApFloor, ApCeiling, ApPost]
             ⧺ map ApWall allWallEdges
-            ⧺ map ApWire allWireShapes ]
+            ⧺ map ApWire allWireArtShapes ]
 
 -- * The registrations
 
@@ -207,7 +207,7 @@ fixtureWireRegistration = PackArtRegistration
     , parEntries = [ ( AkWire w
                      , asset ("fx/wire_" <> wireShapeName w <> ".png")
                              (wireFaceFor w) )
-                   | w ← allWireShapes ]
+                   | w ← allWireArtShapes ]
     , parFrames  = declaredSequences [KWire]
     , parDestruction = []
     , parVariantFaces = []
@@ -228,7 +228,7 @@ fixtureSizes = HM.fromList
     [ (path, canvas)
     | ak ← allAppearances
     , path ← staticPathFor ak : framePathsFor ak ⧺ faceFramePathsFor ak ]
-    `HM.union` HM.fromList [ (wireFaceFor w, canvas) | w ← allWireShapes ]
+    `HM.union` HM.fromList [ (wireFaceFor w, canvas) | w ← allWireArtShapes ]
 
 -- | Both packs, registered through the production entry point — so a
 --   fixture that violated the all-or-nothing rule fails here rather than

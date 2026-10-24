@@ -48,7 +48,7 @@ import Structure.Facing (WallCaps(..), WallEdge(..), screenWallEdge)
 import Structure.Palette (TexPalette, emptyTexPalette, internPath, lookupPath)
 import Structure.Render (structurePieceQuads)
 import Structure.Types (StructurePieceData(..), StructureSlot(..))
-import Structure.Wire (WireShape(..), allWireShapes)
+import Structure.Wire (WireShape(..), allWireArtShapes)
 import World.Chunk.Types (ChunkCoord, chunkSize)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk, tileAliasStep)
@@ -299,7 +299,7 @@ declarationSpec = describe "a declared clip" $ do
     it "resolves nothing for an appearance that declares none" $
         forM_ ( AppearanceKey Nothing ApCeiling
                   : [ AppearanceKey Nothing (ApWire w)
-                    | w ← allWireShapes
+                    | w ← allWireArtShapes
                     , isNothing (wreckFrameCount
                                     (AppearanceKey Nothing (ApWire w))) ] )
               $ \ak →

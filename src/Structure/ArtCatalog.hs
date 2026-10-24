@@ -132,7 +132,7 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Facing (WallEdge(..), WallCaps(..), wallCapsCode)
 import Structure.Types (StructureSlot(..))
-import Structure.Wire (WireShape(..), wireShapeName, allWireShapes)
+import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
 
 -- * Vocabulary
 
@@ -200,7 +200,7 @@ requiredArtKeys k = case k of
     KWall    → [ AkWall e c | e ← [minBound .. maxBound]
                             , c ← [ WallCaps l r | l ← [False, True]
                                                  , r ← [False, True] ] ]
-    KWire    → [ AkWire s | s ← allWireShapes ]
+    KWire    → [ AkWire s | s ← allWireArtShapes ]
 
 -- * Art
 

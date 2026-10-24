@@ -58,7 +58,7 @@ import Engine.Asset.Handle (TextureHandle)
 
 import Structure.ArtCatalog
 import Structure.Facing (WallEdge(..))
-import Structure.Wire (WireShape(..), wireShapeName, allWireShapes)
+import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
 
 import Test.Headless.Structure.ConstructionFixture
     ( allAppearances, artAsset, damagedVariant, fixtureRegistration
@@ -189,7 +189,7 @@ wreckWireRegistration = fixtureWireRegistration
     { parDestruction = declaredWrecks [KWire]
     , parSizes = HM.union (parSizes fixtureWireRegistration) $ HM.fromList
         [ (aaPath a, (96, 64))
-        | ak ← wreckAppearances, apSlot ak `elem` map ApWire allWireShapes
+        | ak ← wreckAppearances, apSlot ak `elem` map ApWire allWireArtShapes
         , Just ds ← [wreckSequenceFor ak]
         , a ← V.toList (dsFrames ds) ⧺ maybe [] V.toList (dsFacemaps ds) ] }
 

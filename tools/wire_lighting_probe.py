@@ -47,7 +47,7 @@ from probelib import (boot, pin_camera_to_tile, poll_until, quit_engine, send,
                       send_json, set_paused, viewport)
 
 COLOUR = "assets/textures/structures/wire/straight_ew.png"
-SUN_ANGLES = [0.12, 0.20, 0.25, 0.32, 0.40]
+SUN_ANGLES = [7, 9, 12, 15, 17]   # world hours; the clock is frozen
 failures = 0
 
 
@@ -86,15 +86,26 @@ def capture(port: int, path: str, settle: float = 1.2) -> bool:
     return os.path.exists(path) and os.path.getsize(path) > 4096
 
 
+def warm(px) -> bool:
+    """Cable-coloured, whatever the sun: a lit dark orange keeps red well
+    above green and blue, which grass and the HUD never do."""
+    return px[0] > 8 and px[0] > 1.6 * px[1] and px[0] > 2.2 * px[2]
+
+
+def page_of(port: int) -> str:
+    return active_page(port) or ""
+
+
 def diff_pixels(base, shot, threshold: int = 6):
-    """{(x, y): (r, g, b)} for pixels of `shot` that differ from `base`."""
+    """{(x, y): (r, g, b)} for cable-coloured pixels of `shot` that differ
+    from `base`."""
     out = {}
     w, h = base.size
     bp, sp = base.load(), shot.load()
     for y in range(h):
         for x in range(w):
             a, b = bp[x, y], sp[x, y]
-            if max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2])) > threshold:
+            if warm(b) and max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2])) > threshold:
                 out[(x, y)] = b
     return out
 
@@ -122,6 +133,17 @@ def faces(pixels, keep):
     return sum(tops) / len(tops), sum(sides) / len(sides)
 
 
+def wait_content_loaded(port: int, seconds: float = 90.0) -> bool:
+    probe = ("return {units = #unit.listDefs(),"
+             " buildings = #building.listDefs()}")
+
+    def ready():
+        got = send_json(port, probe)
+        return (isinstance(got, dict) and got.get("units", 0) > 0
+                and got.get("buildings", 0) > 0)
+    return bool(poll_until(seconds, ready))
+
+
 def active_page(port: int):
     got = send_json(port, "local id = world.getActiveWorldId();"
                           " return id and {page = tostring(id)} or nil")
@@ -133,13 +155,13 @@ def measure(port: int, out: str, name: str, setup, teardown, anchor, zoom):
     (mean brightness, top, side) for the pixels common to all angles."""
     shots = {}
     for ang in SUN_ANGLES:
-        send(port, f"world.setSunAngle({ang}); return 'ok'")
+        send(port, f"world.setTime('{page_of(port)}', {ang}, 0); return 'ok'")
         base = os.path.join(out, f"{name}_{ang}_base.png")
         assert capture(port, base), f"capture {base}"
         shots[ang] = {"base": load(base)}
     setup()
     for ang in SUN_ANGLES:
-        send(port, f"world.setSunAngle({ang}); return 'ok'")
+        send(port, f"world.setTime('{page_of(port)}', {ang}, 0); return 'ok'")
         subj = os.path.join(out, f"{name}_{ang}_subject.png")
         assert capture(port, subj), f"capture {subj}"
         shots[ang]["subject"] = load(subj)
@@ -166,6 +188,9 @@ def main() -> int:
     proc = boot(args.port, args=["--size", args.size], label="offscreen",
                 mode=("--offscreen",))
     try:
+        if not check(wait_content_loaded(args.port),
+                     "unit/building defs populated"):
+            return 1
         send(args.port, "package.loaded['scripts.ui_manager'].onOpenArena();"
                         " return 'ok'", timeout=20.0)
         page = poll_until(90.0, lambda: active_page(args.port))
@@ -189,14 +214,14 @@ def main() -> int:
         def show(label, rows, common):
             print(f"\n  {label}: {len(common)} subject pixels common to all "
                   "sun angles")
-            print("    sun    mean    top    side   side/top")
+            print("    hour   mean    top    side   side/top")
             for ang in SUN_ANGLES:
                 mean, f = rows[ang]
                 t, s = f if f else (0.0, 0.0)
                 ratio = (s / t) if t else 0.0
                 print(f"    {ang:<5} {mean:6.1f} {t:6.1f} {s:6.1f}   {ratio:5.2f}")
 
-        def judge(label, rows, common):
+        def judge(label, rows, common, faces_split=True):
             show(label, rows, common)
             check(len(common) >= 6, f"{label}: the subject is on screen at "
                   "every sun angle", f"{len(common)} common pixels")
@@ -204,6 +229,8 @@ def main() -> int:
             check(max(means) - min(means) > 0.05 * max(means),
                   f"{label}: brightness changes with the sun",
                   f"{min(means):.1f}..{max(means):.1f}")
+            if not faces_split:
+                return      # scattered fragments have no top/side columns
             ratios = [(rows[a][1][1] / rows[a][1][0])
                       for a in SUN_ANGLES if rows[a][1] and rows[a][1][0]]
             check(len(ratios) == len(SUN_ANGLES)
@@ -213,7 +240,7 @@ def main() -> int:
                   f"{min(ratios):.2f}..{max(ratios):.2f}" if ratios else "n/a")
 
         # --- static: a three-tile straight run along gx
-        run = [(ax + 1, ay + 3), (ax + 2, ay + 3), (ax + 3, ay + 3)]
+        run = [(ax, ay), (ax + 1, ay), (ax + 2, ay)]
         rows, common = measure(
             args.port, args.out, "static",
             lambda: [send(args.port, f"require('scripts.wire').place({x}, {y});"
@@ -222,28 +249,59 @@ def main() -> int:
             anchor, args.zoom)
         judge("static", rows, common)
 
-        # --- construction: a paid site at 50 % (frame 3 of 4)
-        w = page
-        sx, sy = ax + 2, ay - 3
+        # --- construction: a paid run at 50 % (frame 3 of 4)
+        sites = [(ax, ay - 2), (ax + 1, ay - 2), (ax + 2, ay - 2)]
 
         def build_site():
-            send(args.port, f"construction.designate('{w}', {sx}, {sy}, {sx},"
-                            f" {sy}, 'structure', 'wire', 'wire'); return 'ok'")
-            job = poll_until(30.0, lambda: send_json(
-                args.port, f"return construction.getDesignationAt('{w}', {sx}, {sy})"))
-            uid = send(args.port, "local d = unit.listDefs(); "
-                       f"return unit.spawn(d[1], {sx}, {sy})")
-            send(args.port, f"construction.payMaterials('{w}', {sx}, {sy},"
-                            f" {int(job['attempt'])}, {int(float(uid))});"
-                            " return 'ok'")
-            send(args.port, f"construction.addJobProgress('{w}', {sx}, {sy},"
-                            f" 0.5, {int(job['attempt'])}); return 'ok'")
-        rows, common = measure(
-            args.port, args.out, "construction", build_site,
-            lambda: send(args.port, f"construction.cancelDesignation({sx},"
-                                    f" {sy}); return 'ok'"),
-            anchor, args.zoom)
+            # A three-tile run, so each tile draws a straight_ew frame
+            # rather than a lone pad too small to measure.
+            uid = int(float(send(args.port, "local d = unit.listDefs(); "
+                             f"return unit.spawn(d[1], {sites[0][0]}, {sites[0][1]})")))
+            for sx, sy in sites:
+                send(args.port, f"construction.designate('{w}', {sx}, {sy},"
+                                f" {sx}, {sy}, 'structure', 'wire', 'wire');"
+                                " return 'ok'")
+            for sx, sy in sites:
+                job = poll_until(30.0, lambda: send_json(
+                    args.port,
+                    f"return construction.getDesignationAt('{w}', {sx}, {sy})"))
+                send(args.port, f"construction.payMaterials('{w}', {sx}, {sy},"
+                                f" {int(job['attempt'])}, {uid}); return 'ok'")
+                send(args.port, f"construction.addJobProgress('{w}', {sx},"
+                                f" {sy}, 0.5, {int(job['attempt'])});"
+                                " return 'ok'")
+
+        def clear_sites():
+            for sx, sy in sites:
+                send(args.port, f"construction.cancelDesignation({sx}, {sy});"
+                                " return 'ok'")
+        w = page
+        rows, common = measure(args.port, args.out, "construction",
+                               build_site, clear_sites, anchor, args.zoom)
         judge("construction (50 %)", rows, common)
+
+        # --- destruction: a cleared run caught part-way through its clip.
+        # The game clock advances for a moment at a slow time scale, then
+        # freezes, so the effect holds one intermediate frame while the
+        # sun is moved.
+        wrun = [(ax, ay + 2), (ax + 1, ay + 2), (ax + 2, ay + 2)]
+
+        def tear_down():
+            for x, y in wrun:
+                send(args.port, f"require('scripts.wire').place({x}, {y});"
+                                " return 'ok'")
+            time.sleep(0.5)
+            for x, y in wrun:
+                send(args.port, f"structure.clear({x}, {y}, 'wire');"
+                                " return 'ok'")
+            send(args.port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
+            set_paused(args.port, False, settle=0.0)
+            time.sleep(0.35)
+            set_paused(args.port, True)
+            send(args.port, f"world.setTimeScale('{w}', 0); return 'ok'")
+        rows, common = measure(args.port, args.out, "destruction",
+                               tear_down, lambda: None, anchor, args.zoom)
+        judge("destruction (mid-clip)", rows, common, faces_split=False)
 
         # --- the colour image never moved
         check(digest(COLOUR) == before,

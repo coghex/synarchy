@@ -61,7 +61,7 @@ import Structure.Types
     , StructureSlot(..), StructureStage(..), StructureStageToken(..)
     , emptyChunkStructures, emptyStructureStage )
 import Structure.Wire
-    (WireNeighbors(..), WireShape(..), allWireShapes, wireShapeFor
+    (WireNeighbors(..), WireShape(..), allWireArtShapes, wireShapeFor
     , wireShapeName)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
@@ -172,7 +172,7 @@ appearanceSpec = describe "an appearance" $ do
 
     it "resolves nothing when it declares nothing" $
         forM_ [ AppearanceKey Nothing (ApWire w)
-              | w ← allWireShapes, w `notElem` framedWireShapes ] $ \ak →
+              | w ← allWireArtShapes, w `notElem` framedWireShapes ] $ \ak →
             resolveConstructionSequence fixtureCatalog fixtureWirePack ak
                 `shouldBe` Nothing
 
@@ -284,7 +284,7 @@ appearanceSpec = describe "an appearance" $ do
                                   (sacPacks fixtureCatalog))
         undeclaredConstructionAppearances stored `shouldMatchList`
             [ AppearanceKey Nothing (ApWire w)
-            | w ← allWireShapes, w `notElem` framedWireShapes ]
+            | w ← allWireArtShapes, w `notElem` framedWireShapes ]
 
     it "names the pack and the appearance in the once-per-appearance \
        \report" $ do
@@ -741,7 +741,7 @@ absenceSpec ∷ Spec
 absenceSpec = describe "a paid designation whose appearance declares no \
                        \frames" $ do
     it "draws nothing at all, at every progress and every facing" $
-        forM_ [ w | w ← allWireShapes, w `notElem` framedWireShapes ] $ \shape →
+        forM_ [ w | w ← allWireArtShapes, w `notElem` framedWireShapes ] $ \shape →
             forM_ allFacings $ \facing →
                 forM_ [0.0, 0.5, 1.0] $ \progress → do
                     let sp = StructurePiece fixtureWirePack "wire" Nothing
