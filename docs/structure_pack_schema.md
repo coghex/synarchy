@@ -35,8 +35,10 @@ There are two schemas, because there are two loaders.
 `post`, a `walls:` block for the four authored edges, and an optional
 `variants:` block whose entries override any subset of either.
 
-**The wire pack** (`scripts/wire.lua`) declares one `build:` entry, one
-shared `facemap:`, and a `connections:` map of sixteen autotile shapes.
+**The wire pack** (`scripts/wire.lua`) declares one `build:` entry and a
+`connections:` map of sixteen autotile shapes. Since #2516 every
+connection declares its OWN `facemap:` and pairs every lifecycle frame with
+one (§3b); there is no pack-level shared facemap.
 
 Both loaders resolve their pack through a module field
 (`structures.packDir` + `structures.pack`, `wire.packPath`) rather than a
@@ -53,7 +55,7 @@ the `ArtKey` the static art catalogue is keyed by:
 |---|---|---|
 | floor / ceiling / post | 1 each | 1 each |
 | wall | 16 (4 edges × 4 cap facemaps) | 4 (one per edge) |
-| wire | 16 (one per connection shape) | 16 |
+| wire | 20 (sixteen autotile shapes + four risers, #2516) | 20 |
 
 A wall's four cap facemaps all draw the SAME sprite, so a pack declares
 one sequence per edge and not one per cap. `Structure.ArtCatalog`'s
@@ -90,21 +92,22 @@ variants:
           - assets/textures/buildings/dungeon_1/damaged/build/floor_0.png
 ```
 
-The wire pack's `connections:` entries accept either form:
+The wire pack's `connections:` entries are the declaring form (§3b):
 
 ```yaml
 connections:
-  isolated: assets/textures/structures/wire/isolated.png   # legacy scalar
-  cross:                                                    # declaring form
+  cross:
     texture: assets/textures/structures/wire/cross.png
+    facemap: assets/textures/facemap/wire/cross.png
     construction:
       - assets/textures/structures/wire/build/cross_0.png
+    construction_facemaps:
+      - assets/textures/facemap/wire/build/cross_0.png
 ```
 
-The scalar form is not deprecated. A connection with no sequence has
-nothing to say beyond its texture, and every shipped connection is in
-exactly that state.
-
+The legacy scalar form (`cross: <texture path>`) declares no facemap, and
+Wire has no shared-map fallback, so the engine refuses a pack that uses
+it (§4).
 The shipped Dungeon pilot declares four construction stages for its default
 floor and two for its default post. Its `weathered`, `broken`, and `ruined`
 floor/post variants are independently placed static appearances, with matching
@@ -204,8 +207,67 @@ each such sprite once
 authoring, not code — give the variant its own image for that
 appearance.
 
-Every shipped pack declares no `destruction:` today; authoring
-production frames is BDA-15/BDA-16.
+Wire (#2516) is the one shipped pack that declares `destruction:`; the
+Dungeon declares none (BDA-15 authors it).
+
+## 3b. Paired facemaps: a frame lit by its own map (#2516)
+
+By default a lifecycle frame is lit through its appearance's FINISHED
+facemap with the lifecycle alpha flag (§8). A pack MAY instead PAIR an
+appearance's frames with facemaps of their own, which makes every frame a
+colour/facemap pair drawn as one:
+
+```yaml
+cross:
+  texture: …/cross.png
+  facemap: …/facemap/wire/cross.png              # the static pair
+  construction:            [ …/build/cross_0.png, … ]
+  construction_facemaps:   [ …/facemap/wire/build/cross_0.png, … ]
+  destruction:
+    fps: 10
+    frames:   [ …/break/cross_0.png, … ]
+    facemaps: [ …/facemap/wire/break/cross_0.png, … ]
+```
+
+`scripts/structure_frames.lua` hands each facemap to the engine on its
+frame entry (`facemap` + `faceHandle`) and preserves the declaration's
+shape exactly as it does the frame list, so a malformed paired list is
+refused by the engine rather than quietly dropped.
+
+* a sequence pairs EVERY frame or NONE, and the facemap list is exactly as
+  long as the frame list;
+* Wire MUST pair every frame of every sequence it declares, and its static
+  facemap is its own; an unpaired Wire frame is refused. No other pack is
+  required to, and a pack that pairs nothing keeps the shared-facemap plus
+  lifecycle-alpha behaviour bit for bit (Dungeon floor and post);
+* a wall MAY NOT pair: its facemap is one of four cap masks chosen by the
+  camera (#1712), so one map per frame has no defined meaning there;
+* every frame/facemap pair, and a default appearance's static pair, is the
+  same pixel size, measured from the files like the handoff canvas rule
+  (`Engine.Scripting.Lua.API.StructureArt.measureSequences`); Wire's static
+  pairs are measured whether or not the appearance declares a sequence;
+* a paired frame is drawn WITHOUT the lifecycle alpha flag. The pair obeys
+  the ordinary `color.a * faceAlpha` rule, so a facemap silhouette that
+  disagrees with its colour image clips visibly instead of being hidden by
+  the flag. This is tested (`Wire facemap integration`), not implicit;
+* a paired frame or facemap that terminally fails to load invalidates the
+  pack like any other declared asset.
+
+**Facemap convention.** Red = right face, green = top face, blue = left
+face; the fragment shader falls through to top light where the RGB sums to
+about zero. For Wire "intentional coverage" therefore means every visible
+colour pixel has pure red, green or blue facemap RGB and the facemap's alpha
+equals the colour image's alpha exactly.
+
+**Legacy Wire in saves.** A placed piece persists palette ids, so every
+Wire piece saved before #2516 stores the shared `floorface.png` facemap.
+The render pass re-derives the facemap from the piece's SHAPE instead
+(`Structure.ArtCatalog.placedWireArt`, applied by
+`Structure.Render.structurePieceQuadsWith`; the same rule backs
+`structure.drawnFacemap`). Nothing is rewritten, no save field changes, and
+a piece in an evicted chunk regenerated from the edit log resolves exactly
+as a resident one does. `floorface.png` stays resolvable (Dungeon floors use
+it) and a legacy palette id is never rejected.
 
 ## 4. What the engine refuses
 
@@ -223,6 +285,10 @@ leaves the catalogue exactly as it was.
 | a sequence whose static sprite is not the one the pack declares for that appearance (default art only) | the handoff would land on a different sprite |
 | a LAST frame whose pixel dimensions differ from that static sprite's | the handoff would jump size — see §6 |
 | an image that cannot be measured | an unmeasurable image is a fault, not a check to skip |
+| a Wire sequence whose frames are not all paired, or a paired list of the wrong length (#2516) | no shared-map fallback; a half-lit sequence is wrong |
+| a paired facemap that is not a loaded, non-escaping asset, or whose size differs from its colour image (#2516) | the pair is drawn as one |
+| a paired list on a wall appearance (#2516) | wall facemaps are camera-chosen cap masks |
+| a Wire connection that declares no facemap (the legacy scalar form) | there is no shared facemap to fall back to |
 | a wall family whose declared directions run to different lengths | one progress value would select different stages at different facings — see §5 |
 | the same appearance declared twice | registration order would decide what the pack means |
 | frames for a kind the pack does not declare | the appearance does not exist |
@@ -337,9 +403,10 @@ blueprint, no fade, no other appearance's frames, no static sprite scaled
 by progress.
 
 The Dungeon default floor and post declare construction frames. Its ceiling,
-walls and variants, and every Wire connection, remain in the undeclared
-state. Remaining production art belongs to BDA-15/BDA-16; enforcing that
-every shipped appearance declares frames is BDA-13.
+walls and variants remain in the undeclared state; every Wire connection
+declares paired construction and destruction (#2516). Remaining production
+art belongs to BDA-15; enforcing that every shipped appearance declares
+frames is BDA-13.
 
 The gap is reported once per (pack, appearance) at REGISTRATION, at info
 level, by
@@ -372,7 +439,9 @@ the alpha term changes: the RGB path, including the existing
 fall-through to top light where the facemap's RGB sums to ~0, is
 untouched, and an unflagged quad keeps `color.a * faceAlpha` exactly.
 
-No per-frame facemap may be declared or required.
+This is the UNPAIRED behaviour, which every pack except Wire keeps. A
+pack MAY pair frames with facemaps of their own (§3b); such a frame is lit
+by its own map and the flag is NOT set.
 
 ## 9. What this does not touch
 
@@ -397,3 +466,50 @@ or Wire shape resolution, and are never interned into the saved palette.
 Requirement 4's "never read from the palette" is satisfied by reading
 only EXISTING entries: capture resolves the two ids the piece already
 stored and interns nothing.
+
+## 9b. Wire risers: art and declaration only (#2516)
+
+`wire.yaml` declares twenty connections: the sixteen autotile shapes and
+four RISERS, `riser_n`, `riser_e`, `riser_s`, `riser_w`, each a thin cable
+climbing one tile side's wall face one level (16 px) with NO flat segment
+(a flat run comes from the flat appearances). The cardinal is the wire
+vocabulary's own: `n` = the NE edge (gy-1), `e` = SE (gx+1), `s` = SW
+(gy+1), `w` = NW (gx-1).
+
+* They are declared, loaded (`scripts/wire.lua`'s shape list), registered in
+  the art catalogue and visible in `--preview structures/wire`, and they are
+  REQUIRED art with no fallback (`Structure.Wire.allWireArtShapes`, which
+  `requiredArtKeys` uses): a pack that omits one is refused.
+* Nothing places them. `Structure.Wire.wireShapeFor` never returns one,
+  `allWireShapes` stays the sixteen the autotile can select, so existing
+  autotiling, the power network's adjacency and saves are unchanged;
+  vertical connection is future work.
+* At the default camera (FaceSouth) the screen-front edges are SE and SW
+  (`Structure.Render.isScreenFrontWall`), so `riser_e` and `riser_s` face
+  the camera. They show the cable's UNDERSIDE, painted a slightly darker
+  dark orange (134,62,16 against 166,78,22) into the colour texture, not a
+  tint; their facemap still marks those pixels as a side face. `riser_n`
+  and `riser_w` do not carry it. The darker shade is part of the approved
+  content and is pinned.
+
+## 10. Coordination with the other lifecycle-art issues (#2516)
+
+Nothing below weakens another issue's requirement; each is the interface
+Wire's art leaves behind.
+
+* **#2491 (destruction).** Its "no static handoff" wording is the default
+  for a clip; Wire's clips deliberately BEGIN on the static pair (frame 0 is
+  pixel-identical to it) and end on a visibly distinct near-empty frame, and
+  a clip may carry paired facemaps (§3b). Its all-or-nothing, never-
+  inherited and fps rules are unchanged.
+* **#2495 (preview).** The structure viewer reports a PAIRED lifecycle's
+  facemap per frame (`faceFrames`, `facemapPaired`) instead of the
+  appearance's own, and `F` swaps the displayed image for that facemap. A
+  Wire connection that declares no facemap is refused by the viewer exactly
+  as the game refuses it.
+* **#2519 (complete constructible-asset contract).** Its enforcement of
+  "every appearance has paired lifecycle art" should treat Wire's paired
+  facemaps as REQUIRED and Dungeon's unpaired frames as valid; the
+  inventory test `Wire structure lifecycle art` and the approved-content
+  pins (`test-headless/fixtures/wire_art_pins.txt`) are the Wire half of
+  that matrix.
