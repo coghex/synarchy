@@ -3949,6 +3949,35 @@ log framing, probe/cache diagnostics, the estimator, the aggregates),
 `tools/test_ci_timing_report.py` (every check, reached through
 `--self-test`).
 
+### `ci_build_drift.py`, `ci_build_drift_report.py` — build drift versus the change under test (#2746)
+
+An on-demand measurement, run from a developer machine on the `gh`
+authentication already there. It adds **no CI step and no secret** and is
+deliberately absent from `.github/workflows/ci.yml` and `tools/ci-local.sh`
+(a measurement, not a gate), so `ci_parity_audit.py` needs no exemption.
+
+A pull request restores one project-cache snapshot and recompiles everything
+that differs from it: master changes between the snapshot and the PR's base
+(drift) plus the PR's own diff. CI builds run with `-v0`, so the logs carry
+seconds but no module lists; these tools recover the lists by replaying the
+builds locally and join them to the seconds the runs recorded.
+
+```bash
+python3 tools/ci_build_drift.py collect --since 2026-09-24 --until 2026-10-02 --cache-dir DIR --out runs.json
+python3 tools/ci_build_drift.py plan --runs runs.json --worktree . --ids RUN [RUN ...] --out plan.json
+python3 tools/ci_build_drift.py replay --plan plan.json --worktree REPLAY_WT --state-dir STATES --out replay.json
+python3 tools/ci_build_drift.py fan-out --worktree . BEFORE AFTER
+python3 tools/ci_build_drift_report.py --runs runs.json --plan plan.json --replay replay.json --lanes lanes.json
+python3 tools/ci_build_drift.py --self-test && python3 tools/ci_build_drift_report.py --self-test
+```
+
+`replay` builds in a worktree you name (never the one you work in), swaps
+`dist-newstyle` between saved states (`cp -Rpc` clones), and resumes: re-run
+`plan --resume replay.json --state-dir STATES` after an interruption and only
+the missing steps remain. Module identity is `(component, module)`. Method,
+sampled runs, results and recommendation:
+`docs/ci_build_drift_measurement.md`.
+
 ### The headless suite's CI test options (#2277, #1916)
 
 Both of the conditional headless invocations in `.github/workflows/ci.yml`'s
