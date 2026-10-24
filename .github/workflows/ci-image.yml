@@ -164,22 +164,14 @@ jobs:
       - name: Validate candidate Python packages
         if: steps.build.outcome == 'success'
         run: |
-          docker run --rm -i -e HOME=/github/home synarchy-ci:candidate python3 - <<'PY'
-          import importlib.metadata
-          import jsonschema
-          import PIL
-          import yaml
-
-          expected = {
-              "PyYAML": "6.0.2",
-              "Pillow": "11.3.0",
-              "jsonschema": "4.26.0",
-          }
+          docker run --rm -e HOME=/github/home synarchy-ci:candidate env -u PYTHONPATH python3 -c '
+          import importlib.metadata, jsonschema, PIL, yaml
+          expected = {"PyYAML": "6.0.2", "Pillow": "11.3.0", "jsonschema": "4.26.0"}
           for package, version in expected.items():
               actual = importlib.metadata.version(package)
               assert actual == version, f"{package}: expected {version}, got {actual}"
-          print("Pinned Python packages import with HOME=/github/home")
-          PY
+          print("Pinned Python packages import with HOME=/github/home and no PYTHONPATH")
+          '
 
       # First (and only) publish of this content's tag. Gated on
       # can_publish: a fork PR's GITHUB_TOKEN can't push regardless (see

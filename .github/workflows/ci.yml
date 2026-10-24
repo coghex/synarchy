@@ -41,9 +41,6 @@
 #     (#1364, #2745), so they run and block on exactly the runs
 #     world_check --quick does. See the `Headless lane` step for why it
 #     is not a conditional `env:`.
-#   - CI-image migration: changes to the image recipe additionally exercise
-#     the graphical-suite build, worldgen quick check and full-tier examples
-#     once under the candidate image; other path selections are unchanged.
 #     Worldgen float math proved bit-stable across architectures on the
 #     first run (6/6 exact-match against the macOS/aarch64-captured
 #     baselines from #421, PR #449) — if it ever flakes cross-arch,
@@ -408,14 +405,10 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
-            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
-            if printf '%s\n' "$CHANGED" | grep -Fxq -e '.github/ci/Dockerfile' -e '.github/workflows/ci-image.yml'; then
-              WORLDGEN=true
-              GRAPHICAL=true
-            fi
-            printf 'worldgen=%s\n' "$WORLDGEN"
-            printf 'graphical=%s\n' "$GRAPHICAL"
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
@@ -778,14 +771,10 @@ jobs:
             CHANGED="$(git ls-files)"
           fi
           {
-            WORLDGEN="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen)"
-            GRAPHICAL="$(printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical)"
-            if printf '%s\n' "$CHANGED" | grep -Fxq -e '.github/ci/Dockerfile' -e '.github/workflows/ci-image.yml'; then
-              WORLDGEN=true
-              GRAPHICAL=true
-            fi
-            printf 'worldgen=%s\n' "$WORLDGEN"
-            printf 'graphical=%s\n' "$GRAPHICAL"
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
