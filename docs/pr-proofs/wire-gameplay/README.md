@@ -24,6 +24,18 @@ The destruction clip runs on `engine.gameTime()`, which pause freezes and
 measured real-time step inside one console call, so the frame it holds is
 the one named in `captures.json`.
 
+## Correction (round 1 of the review, owner-approved)
+
+The first set's `neighbour_1_neighbour_half_built` drew the designation
+GHOST, not a construction frame: the capture's payer unit carried no wiring,
+so the site was never paid, and an unpaid site draws the ghost. The capture
+now gives its payer wiring, asserts that `construction.payMaterials`
+succeeded and that the site reads back paid at progress 0.5, and so draws the
+real paid construction frame (frame 3 of 4). The completed-neighbour frame
+no longer shows the payer unit. The owner approved the corrected frame
+("Approve corrected frame"). Every other capture is pixel-identical to the
+first set outside the arena's wandering bear.
+
 ## Findings to read before signing off
 
 1. **Wire art does not rotate with the camera.** At the default facing

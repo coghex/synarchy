@@ -52,23 +52,23 @@ then RESAVES, restarts in a fresh process and repeats every check.
   PASS  static: the subject is on screen at every sun angle
   PASS  static: brightness changes with the sun
   PASS  static: the side/top ratio changes with the sun — per-face shading from the facemap, not one global factor
-  construction (50 %): 972 subject pixels common to all sun angles
+  construction (50 %): 754 subject pixels common to all sun angles
     hour   mean    top    side   side/top
-    7       55.8   63.7   48.1    0.76
-    9       51.0   58.0   44.3    0.76
-    12      30.4   32.6   28.2    0.86
-    15      15.4   16.5   14.3    0.87
-    17       9.9   10.6    9.2    0.87
+    7       78.0   90.0   65.4    0.73
+    9       70.9   81.8   59.5    0.73
+    12      42.7   45.9   39.3    0.86
+    15      21.9   23.5   20.2    0.86
+    17      14.1   15.2   13.0    0.85
   PASS  construction (50 %): the subject is on screen at every sun angle
   PASS  construction (50 %): brightness changes with the sun
   PASS  construction (50 %): the side/top ratio changes with the sun — per-face shading from the facemap, not one global factor
-  destruction (mid-clip): 8 subject pixels common to all sun angles
+  destruction (mid-clip): 754 subject pixels common to all sun angles
     hour   mean    top    side   side/top
-    7      106.3   88.6  124.1    1.40
-    9       96.4   80.3  112.5    1.40
-    12      53.3   44.4   62.1    1.40
-    15      27.2   22.5   32.0    1.43
-    17      17.5   14.6   20.5    1.40
+    7       78.4   90.8   65.4    0.72
+    9       71.4   82.5   59.5    0.72
+    12      42.8   46.1   39.3    0.85
+    15      21.9   23.6   20.2    0.86
+    17      14.2   15.3   13.0    0.85
   PASS  destruction (mid-clip): the subject is on screen at every sun angle
   PASS  destruction (mid-clip): brightness changes with the sun
   PASS  the colour image is byte-for-byte what it was at the start
