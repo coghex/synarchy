@@ -1,0 +1,122 @@
+{
+  "zoom": "0.5",
+  "anchor": [
+    -9,
+    -9
+  ],
+  "run": [
+    "end_e",
+    "end_w"
+  ],
+  "completed": [
+    "end_e",
+    "end_w"
+  ],
+  "captures": [
+    {
+      "file": "facing_south_hour07.png",
+      "crop": "facing_south_hour07_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing south, sun hour 7"
+    },
+    {
+      "file": "facing_south_hour12.png",
+      "crop": "facing_south_hour12_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing south, sun hour 12"
+    },
+    {
+      "file": "facing_south_hour17.png",
+      "crop": "facing_south_hour17_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing south, sun hour 17"
+    },
+    {
+      "file": "facing_west_hour07.png",
+      "crop": "facing_west_hour07_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing west, sun hour 7"
+    },
+    {
+      "file": "facing_west_hour12.png",
+      "crop": "facing_west_hour12_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing west, sun hour 12"
+    },
+    {
+      "file": "facing_west_hour17.png",
+      "crop": "facing_west_hour17_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing west, sun hour 17"
+    },
+    {
+      "file": "facing_north_hour07.png",
+      "crop": "facing_north_hour07_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing north, sun hour 7"
+    },
+    {
+      "file": "facing_north_hour12.png",
+      "crop": "facing_north_hour12_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing north, sun hour 12"
+    },
+    {
+      "file": "facing_north_hour17.png",
+      "crop": "facing_north_hour17_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing north, sun hour 17"
+    },
+    {
+      "file": "facing_east_hour07.png",
+      "crop": "facing_east_hour07_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing east, sun hour 7"
+    },
+    {
+      "file": "facing_east_hour12.png",
+      "crop": "facing_east_hour12_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing east, sun hour 12"
+    },
+    {
+      "file": "facing_east_hour17.png",
+      "crop": "facing_east_hour17_x4.png",
+      "shows": "two-tile run ['end_e', 'end_w'], camera facing east, sun hour 17"
+    },
+    {
+      "file": "neighbour_0_lone_tile.png",
+      "crop": "neighbour_0_lone_tile_x4.png",
+      "shows": "a lone wire tile (isolated)"
+    },
+    {
+      "file": "neighbour_1_neighbour_half_built.png",
+      "crop": "neighbour_1_neighbour_half_built_x4.png",
+      "shows": "the next tile paid and half built: its construction frame is drawn, the first tile is still a lone tile"
+    },
+    {
+      "file": "neighbour_2_completed.png",
+      "crop": "neighbour_2_completed_x4.png",
+      "shows": "construction completed: the first tile re-capped to end_e, the new tile is end_w"
+    },
+    {
+      "file": "teardown_0_before_clear.png",
+      "crop": "teardown_0_before_clear_x4.png",
+      "shows": "a three-tile straight run before the middle tile is cleared"
+    },
+    {
+      "file": "teardown_1_clip.png",
+      "crop": "teardown_1_clip_x4.png",
+      "shows": "the cleared middle tile, 0.00 game s into its 0.5 s destruction clip (frame 1 of 5)"
+    },
+    {
+      "file": "teardown_2_clip.png",
+      "crop": "teardown_2_clip_x4.png",
+      "shows": "the cleared middle tile, 0.15 game s into its 0.5 s destruction clip (frame 2 of 5)"
+    },
+    {
+      "file": "teardown_3_clip.png",
+      "crop": "teardown_3_clip_x4.png",
+      "shows": "the cleared middle tile, 0.25 game s into its 0.5 s destruction clip (frame 3 of 5)"
+    },
+    {
+      "file": "teardown_4_clip.png",
+      "crop": "teardown_4_clip_x4.png",
+      "shows": "the cleared middle tile, 0.35 game s into its 0.5 s destruction clip (frame 4 of 5)"
+    },
+    {
+      "file": "teardown_5_clip.png",
+      "crop": "teardown_5_clip_x4.png",
+      "shows": "the cleared middle tile, 0.45 game s into its 0.5 s destruction clip (frame 5 of 5)"
+    }
+  ]
+}
