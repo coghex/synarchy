@@ -23,6 +23,7 @@ module Engine.Scripting.Lua.API.Structure
     , structureFloorZAtFn
     , structureHasAtFn
     , structureGetAtFn
+    , structureDrawnFacemapFn
     , structureLoadedCountFn
     , structureUnresolvedPaletteIdsFn
     , structureSetPaletteHandleFn
@@ -45,6 +46,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Facing (WallEdge(..), WallCaps, wallCapsFromCode)
+import Structure.ArtCatalog (ArtAsset(..), placedWireArt, placedFacemapPath)
 import Structure.Palette (internPath, lookupPath, TexPalette(..))
 import Structure.WallCatalog (WallArtEntry(..), registerWallFamily)
 import World.Types
@@ -534,6 +536,48 @@ structureGetAtFn env = do
                                         Lua.pushstring (TE.encodeUtf8 p)
                                         Lua.setfield (-2) k
                                     Nothing → pure ()
+                            return 1
+        _ → Lua.pushnil >> return 1
+
+-- | structure.drawnFacemap(gx, gy, slot[, page]) → path|nil — the facemap
+--   the render pass lights the piece at this (tile, slot) with (#2516).
+--
+--   Differs from @structure.getAt(...).face@ exactly where the two are
+--   allowed to: that is the facemap id the piece was STORED with, this is
+--   the one it is DRAWN with. For a Wire piece placed before the Wire
+--   art change the stored id names the shared floor facemap and the
+--   drawn one is its shape's dedicated map. Computed by the render
+--   pass's own 'placedFacemapPath', so a headless probe asserts the
+--   renderer's answer rather than a restatement of it.
+structureDrawnFacemapFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+structureDrawnFacemapFn env = do
+    gxA   ← Lua.tointeger 1
+    gyA   ← Lua.tointeger 2
+    slotA ← Lua.tostring 3
+    pageA ← Lua.tostring 4
+    case (gxA, gyA, slotA) of
+        (Just gx, Just gy, Just slotBS) →
+            case slotFromText (TE.decodeUtf8Lenient slotBS) of
+                Nothing → Lua.pushnil >> return 1
+                Just slot → do
+                    mSpd ← Lua.liftIO $
+                        lookupStructure env (TE.decodeUtf8Lenient <$> pageA)
+                                        (fromIntegral gx) (fromIntegral gy) slot
+                    case mSpd of
+                        Nothing → Lua.pushnil >> return 1
+                        Just spd → do
+                            let handoff = toRenderHandoffCapability env
+                            pal ← Lua.liftIO $ readIORef (rhTexPaletteRef handoff)
+                            art ← Lua.liftIO $
+                                readIORef (rhStructureArtCatalogRef handoff)
+                            let texPath = lookupPath (spdTexId spd) pal
+                                drawn = maybe (lookupPath (spdFaceId spd) pal)
+                                              (Just ∘ aaPath)
+                                              (placedFacemapPath (placedWireArt art)
+                                                                 slot texPath)
+                            case drawn of
+                                Just p  → Lua.pushstring (TE.encodeUtf8 p)
+                                Nothing → Lua.pushnil
                             return 1
         _ → Lua.pushnil >> return 1
 

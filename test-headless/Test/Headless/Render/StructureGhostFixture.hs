@@ -45,7 +45,7 @@ import Data.Char (ord)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.ArtCatalog
 import Structure.Facing (WallCaps(..), WallEdge(..), wallCapsCode)
-import Structure.Wire (allWireShapes, wireShapeName)
+import Structure.Wire (allWireArtShapes, wireShapeName)
 import Structure.WallCatalog
     ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
     , registerWallFamily )
@@ -83,14 +83,25 @@ decodePack path parser = do
             Left err → fail (path ⧺ ": " ⧺ err)
             Right pf → do
                 let reg = pfRegistration pf
-                sizes ← forM [ a | (_, cs) ← parFrames reg
-                                 , a ← csStatic cs : V.toList (csFrames cs) ] $ \a → do
+                sizes ← forM (declaredImages reg) $ \a → do
                     JP.readImage (T.unpack (aaPath a)) ⌦ \case
                         Left err → fail (T.unpack (aaPath a) ⧺ ": " ⧺ err)
                         Right image → do
                             let rgba = JP.convertRGBA8 image
                             pure (aaPath a, (JP.imageWidth rgba, JP.imageHeight rgba))
                 pure pf { pfRegistration = reg { parSizes = HM.fromList sizes } }
+
+-- | Every image a registration names that the registration's own
+--   dimension rules measure: sequences (static sprite, frames and, since
+--   #2516, paired facemaps), teardown clips, and every static pair.
+declaredImages ∷ PackArtRegistration → [ArtAsset]
+declaredImages reg =
+    [ a | (_, cs) ← parFrames reg
+        , a ← csStatic cs : V.toList (csFrames cs)
+                          ⧺ maybe [] V.toList (csFacemaps cs) ]
+    ⧺ [ a | (_, ds) ← parDestruction reg
+          , a ← V.toList (dsFrames ds) ⧺ maybe [] V.toList (dsFacemaps ds) ]
+    ⧺ [ a | (_, art) ← parEntries reg, a ← [paTexture art, paFacemap art] ]
 
 -- | Every decoded pack, registered. 'registerPackArt' is the production
 --   entry point and refuses an incomplete pack, so a fixture that
@@ -177,13 +188,33 @@ parsePiecePack = withObject "structure pack" $ \o → do
 parseWirePack ∷ Value → Parser PackFixture
 parseWirePack = withObject "wire pack" $ \o → do
     name  ← o .: "name"
-    face  ← o .: "facemap"
     conns ← o .: "connections"
     build ← o .: "build"
     costs ← parseBuild build
-    entries ← forM allWireShapes $ \s → do
-        tex ← conns .: fromText (wireShapeName s)
-        pure (AkWire s, asset tex face)
+    -- #2516: every connection declares its OWN texture and facemap and
+    -- pairs every lifecycle frame with one; the shipped declaration is
+    -- kept whole so the real pack is what the ghost examples register.
+    decls ← forM allWireArtShapes $ \s → do
+        c ← conns .: fromText (wireShapeName s)
+        withObject "wire connection" (\e → do
+            tex  ← e .: "texture"
+            face ← e .: "facemap"
+            cons ← e .: "construction"
+            consF ← e .: "construction_facemaps"
+            wreck ← e .: "destruction"
+            fps ← wreck .: "fps"
+            wFrames ← wreck .: "frames"
+            wFaces ← wreck .: "facemaps"
+            let frame path = ArtAsset path (handleForPath path)
+                ak = AppearanceKey Nothing (ApWire s)
+                seqn = ConstructionSequence (frame tex)
+                    (V.fromList (map frame cons))
+                    (Just (V.fromList (map frame consF)))
+                clipn = DestructionSequence (frame tex)
+                    (V.fromList (map frame wFrames)) fps
+                    (Just (V.fromList (map frame wFaces)))
+            pure ((AkWire s, asset tex face), (ak, seqn), (ak, clipn))) c
+    let entries = [ e | (e, _, _) ← decls ]
     pure PackFixture
         { pfName = name
         , pfRegistration = PackArtRegistration
@@ -191,8 +222,8 @@ parseWirePack = withObject "wire pack" $ \o → do
             , parKinds   = [ (KWire, isJust (M.lookup KWire costs)
                             , M.lookup KWire costs) ]
             , parEntries = entries
-            , parFrames  = []
-            , parDestruction = []
+            , parFrames  = [ q | (_, q, _) ← decls ]
+            , parDestruction = [ w | (_, _, w) ← decls ]
             , parVariantFaces = []
             , parVariants = []
             , parSizes   = HM.empty
@@ -215,7 +246,7 @@ parseConstruction slot = withObject "construction owner" $ \o → do
             tex ← o .: "texture"
             let frame path = ArtAsset path (handleForPath path)
             pure [(AppearanceKey Nothing slot,
-                   ConstructionSequence (frame tex) (V.fromList (map frame frames)))]
+                   ConstructionSequence (frame tex) (V.fromList (map frame frames)) Nothing)]
 
 asset ∷ Text → Text → PieceArt
 asset tex face = PieceArt

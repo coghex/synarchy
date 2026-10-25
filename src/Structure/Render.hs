@@ -42,6 +42,10 @@ module Structure.Render
     , structureChunkQuads
     , structureChunkQuadsScanned
     , structurePieceQuads
+    , structurePieceQuadsWith
+    , structureChunkQuadsScannedWith
+    , PlacedArtOverride
+    , noPlacedArtOverride
     , ResolvedPieceArt(..)
     , structurePieceQuadsResolved
     , opaqueTint
@@ -85,6 +89,9 @@ import World.Types (WorldState, wsTilesRef, wsGenParamsRef
                    , WorldGenParams(..))
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
+import Structure.ArtCatalog
+    ( ArtAsset(..), PieceArt(..), placedFacemapPath
+    , placedWireArt )
 import Structure.Facing
 import Structure.Palette (TexPalette, lookupPath)
 import Structure.Types
@@ -135,6 +142,7 @@ renderStructureQuadsScanned env ws facing zSlice effDepth tileAlpha = do
             handles ← readIORef (rhTexPaletteHandlesRef handoff)
             palette ← readIORef (rhTexPaletteRef handoff)
             catalog ← readIORef (rhStructureWallCatalogRef handoff)
+            art     ← readIORef (rhStructureArtCatalogRef handoff)
             -- Chunks that hold no piece at all cost nothing further; the
             -- early-out also keeps a world with no structures off the
             -- camera / view-bounds reads entirely, as before.
@@ -157,7 +165,8 @@ renderStructureQuadsScanned env ws facing zSlice effDepth tileAlpha = do
                             vb = computeViewBounds camera fbW fbH effDepth
                             (camX, camY) = camPosition camera
                             (scanned, quads) =
-                                structureChunkQuadsScanned catalog palette
+                                structureChunkQuadsScannedWith
+                                    (placedWireArt art) catalog palette
                                     handles lookupSlot texSizes facing zSlice
                                     effDepth tileAlpha worldSize vb camX camY
                                     chunks
@@ -229,9 +238,26 @@ structureChunkQuadsScanned
     → Float → Float                            -- ^ camera screen position
     → [LoadedChunk]
     → (Int, [SortableQuad])
-structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
-                           facing zSlice effDepth tileAlpha worldSize vb
-                           camX camY chunks =
+structureChunkQuadsScanned = structureChunkQuadsScannedWith noPlacedArtOverride
+
+-- | 'structureChunkQuadsScanned' with a placed-art override (#2516), the
+--   form the render pass itself calls.
+structureChunkQuadsScannedWith
+    ∷ PlacedArtOverride
+    → StructureWallCatalog
+    → TexPalette
+    → HM.HashMap Int TextureHandle             -- ^ palette id → runtime handle
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int → Float
+    → Int                                      -- ^ world size in chunks
+    → ViewBounds
+    → Float → Float                            -- ^ camera screen position
+    → [LoadedChunk]
+    → (Int, [SortableQuad])
+structureChunkQuadsScannedWith override catalog palette handles lookupSlot
+                               texSizes facing zSlice effDepth tileAlpha
+                               worldSize vb camX camY chunks =
     go 0 chunks
   where
     -- The count is a strict argument, so it never builds a thunk chain,
@@ -249,7 +275,8 @@ structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
     chunkQuads off lc =
         [ translateQuad off sq
         | ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
-        , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
+        , sq ← structurePieceQuadsWith override catalog palette handles
+                   lookupSlot texSizes
                    facing zSlice effDepth tileAlpha gx gy
                    (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
         ]
@@ -302,6 +329,16 @@ data ResolvedPieceArt = ResolvedPieceArt
       --   Present only for a paid structure designation whose resolved
       --   appearance declares frames; every other producer leaves it
       --   'Nothing' and is bit-identical to before.
+    , rpaLifecycleFace ∷ !(Maybe TextureHandle)
+      -- ^ #2516: the facemap that goes WITH 'rpaLifecycle' when the
+      --   appearance pairs its frames. It replaces the (rotated)
+      --   appearance facemap for that frame, and the lifecycle alpha
+      --   flag is then NOT set: the pair is drawn by the ordinary rule
+      --   (@color.a * faceAlpha@), so a pair whose facemap silhouette
+      --   disagrees with its colour image clips visibly instead of being
+      --   hidden by the flag. 'Nothing' keeps the #2488 behaviour (the
+      --   appearance's own facemap plus the flag) bit for bit.
+      --   Meaningless without 'rpaLifecycle'.
     } deriving (Show, Eq)
 
 -- | The tint a fully opaque piece draws with at a given @tileAlpha@ —
@@ -328,19 +365,55 @@ structurePieceQuads
     → CameraFacing → Int → Int → Float
     → Int → Int → StructureSlot → StructurePieceData
     → [SortableQuad]
-structurePieceQuads catalog palette handles lookupSlot texSizes
-                    facing zSlice effDepth tileAlpha gx gy slot spd =
+structurePieceQuads = structurePieceQuadsWith noPlacedArtOverride
+
+-- | What art a PLACED piece is really drawn with, as a function of its
+--   texture path (#2516): 'Just' replaces the facemap its stored palette
+--   id names, 'Nothing' keeps it.
+--
+--   A placed piece persists palette ids and nothing else, so every Wire
+--   piece in a save written before the Wire art change carries the one
+--   shared @floorface.png@ facemap. The facemap Wire is lit with is a
+--   function of its SHAPE, which the persisted texture path identifies,
+--   so the catalogue re-derives it here instead of the save being
+--   rewritten: no component migration, and a piece in an evicted chunk,
+--   regenerated from the edit log, resolves the same way a resident one
+--   does.
+type PlacedArtOverride = Text → Maybe PieceArt
+
+-- | The override that never overrides: every placed piece is drawn with
+--   exactly the facemap it was stored with.
+noPlacedArtOverride ∷ PlacedArtOverride
+noPlacedArtOverride = const Nothing
+
+-- | 'structurePieceQuads' with a 'PlacedArtOverride'.
+structurePieceQuadsWith
+    ∷ PlacedArtOverride
+    → StructureWallCatalog
+    → TexPalette
+    → HM.HashMap Int TextureHandle             -- ^ palette id → runtime handle
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int → Float
+    → Int → Int → StructureSlot → StructurePieceData
+    → [SortableQuad]
+structurePieceQuadsWith override catalog palette handles lookupSlot texSizes
+                        facing zSlice effDepth tileAlpha gx gy slot spd =
     case ( HM.lookup (spdTexId spd) handles
          , HM.lookup (spdFaceId spd) handles ) of
         (Just th, Just fh) →
-            structurePieceQuadsResolved catalog lookupSlot texSizes facing
+            let texPath = lookupPath (spdTexId spd) palette
+                own     = placedFacemapPath override slot texPath
+            in structurePieceQuadsResolved catalog lookupSlot texSizes facing
                 zSlice effDepth (opaqueTint tileAlpha) gx gy slot
                 ResolvedPieceArt
                     { rpaTexture     = th
-                    , rpaFacemap     = fh
-                    , rpaTexturePath = lookupPath (spdTexId spd) palette
-                    , rpaFacemapPath = lookupPath (spdFaceId spd) palette
+                    , rpaFacemap     = maybe fh aaHandle own
+                    , rpaTexturePath = texPath
+                    , rpaFacemapPath = maybe (lookupPath (spdFaceId spd) palette)
+                                             (Just ∘ aaPath) own
                     , rpaLifecycle   = Nothing
+                    , rpaLifecycleFace = Nothing
                     }
                 (spdGridZ spd)
         _ → []
@@ -381,9 +454,15 @@ structurePieceQuadsResolved catalog lookupSlot texSizes facing zSlice effDepth
     -- nothing else. The facemap stays 'fh'' — the rotation's own cap
     -- mask — and the flag makes the frame's own alpha authoritative so
     -- no frame pixel is clipped by that mask's silhouette.
-    piece = StructurePiece (fromMaybe th' (rpaLifecycle art)) fh' gridZ
-    flags | isJust (rpaLifecycle art) = renderFlagLifecycleAlpha
-          | otherwise                 = 0
+    -- #2516: a frame that is PAIRED with its own facemap is lit by that
+    -- map and drawn by the ordinary alpha rule; an unpaired one keeps
+    -- the appearance's facemap and the lifecycle flag.
+    piece = StructurePiece (fromMaybe th' (rpaLifecycle art))
+                           (fromMaybe fh' paired) gridZ
+    paired = rpaLifecycle art ⌦ \_ → rpaLifecycleFace art
+    flags | isJust (rpaLifecycle art) ∧ isNothing paired
+                = renderFlagLifecycleAlpha
+          | otherwise = 0
     isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
     toList = maybe [] (:[])
     -- A wall's sprite + cap facemap travel together onto the screen edge

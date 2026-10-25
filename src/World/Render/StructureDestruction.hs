@@ -153,7 +153,10 @@ structureDestructionQuads art walls handles lookupSlot texSizes facing
         clip  ← resolveDestructionSequence art (sdePack eff) drawnAk
         let frames = dsFrames clip
         guard (not (V.null frames))
-        let frame = frames V.! min idx (V.length frames - 1)
+        let at = min idx (V.length frames - 1)
+            frame = frames V.! at
+            -- #2516: the paired facemap, when the clip pairs its frames.
+            frameFace = dsFacemaps clip ⌦ (V.!? at)
         off ← isChunkVisibleWrapped facing worldSize vb camX camY
                   (fst (globalToChunk (sdeGX eff) (sdeGY eff)))
         pure $ map (translateQuad off) $
@@ -166,6 +169,7 @@ structureDestructionQuads art walls handles lookupSlot texSizes facing
                     , rpaTexturePath = Just (sdeTexPath eff)
                     , rpaFacemapPath = sdeFacePath eff
                     , rpaLifecycle   = Just (aaHandle frame)
+                    , rpaLifecycleFace = aaHandle <$> frameFace
                     }
                 (sdeGridZ eff)
 

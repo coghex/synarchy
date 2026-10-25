@@ -287,8 +287,8 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
 
 wireLoadSpec ∷ SpecWith EngineEnv
 wireLoadSpec = describe "the wire pack" $ do
-    it "accepts a LEGACY scalar connection beside the new table form, and \
-       \gives each shape only its own frames" $ \env → do
+    it "gives each shape only its OWN paired frames, and every connection \
+       \its own facemap" $ \env → do
         writeWirePack
         ls ← newBareLuaBackend env
         runLua ls $ T.concat
@@ -302,8 +302,8 @@ wireLoadSpec = describe "the wire pack" $ do
             `shouldBe` Just (framesFor "wire_cross" 4)
         framePathsOf cat "wire" (appearance Nothing (ApWire WireStraightNS))
             `shouldBe` Just (framesFor "wire_straight_ns" 4)
-        -- …the legacy scalar form still registers its static art and
-        -- declares no sequence, which is exactly requirement 8.
+        -- …a connection that declares no sequence still registers its
+        -- static art and resolves none, which is exactly requirement 8.
         framePathsOf cat "wire" (appearance Nothing (ApWire WireIsolated))
             `shouldBe` Nothing
         resolveUnplacedArt cat "wire" "wire" Nothing
@@ -335,6 +335,29 @@ wireLoadSpec = describe "the wire pack" $ do
         after `shouldBe` before
         warningsOf entries `shouldSatisfy`
             any (namesAll ["wire", "not an array"])
+
+    it "refuses the LEGACY scalar form: a connection that declares no \
+       \facemap of its own is refused, never given a shared one (#2516)" $
+        \env → do
+            before ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                     <*> pure "wire"
+            writeWirePackWith $ T.unlines $
+                [ "name: wire_scalar"
+                , "build:"
+                , "  wire: { build_work: 1.5, materials: { wiring: 1 } }"
+                , "connections:" ]
+                ⧺ [ "  " <> shape <> ": " <> artDir <> "wire_" <> shape <> ".png"
+                  | shape ← map wireShapeName [minBound .. maxBound] ]
+            ls ← newBareLuaBackend env
+            (_, entries) ← withCapturedLog env $ runLua ls $ T.concat
+                [ "local w = require('scripts.wire'); "
+                , "w.packPath = '", fixtureDirText, "wire_false.yaml'; "
+                , "w.registerPackArt();" ]
+            after ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                    <*> pure "wire"
+            after `shouldBe` before
+            warningsOf entries `shouldSatisfy`
+                any (namesAll ["wire", "no art for this slot"])
 
 -- * Requirement 8's diagnostic
 
@@ -716,15 +739,12 @@ falseConnectionYaml = T.unlines $
     [ "name: wire_false"
     , "build:"
     , "  wire: { build_work: 1.5, materials: { wiring: 1 } }"
-    , "facemap: " <> artDir <> "face.png"
     , "connections:" ]
     ⧺ concat
-        [ if shape ≡ wireShapeName WireCross
-            then [ "  " <> shape <> ":"
-                 , "    texture: " <> artDir <> "wire_" <> shape <> ".png"
-                 , "    construction: false" ]
-            else [ "  " <> shape <> ": " <> artDir <> "wire_" <> shape
-                     <> ".png" ]
+        [ [ "  " <> shape <> ":"
+          , "    texture: " <> artDir <> "wire_" <> shape <> ".png"
+          , "    facemap: " <> artDir <> "wireface_" <> shape <> ".png" ]
+          ⧺ [ "    construction: false" | shape ≡ wireShapeName WireCross ]
         | shape ← map wireShapeName [minBound .. maxBound] ]
 
 writeWirePackWith ∷ Text → IO ()
@@ -732,8 +752,8 @@ writeWirePackWith body = do
     writeFixtureImages
     TIO.writeFile (fixtureDir </> "wire_false.yaml") body
 
--- | The wire fixture: two connections in the NEW table form with
---   sequences, and fourteen in the LEGACY scalar form.
+-- | The wire fixture: every connection in the table form with its OWN
+--   facemap (#2516), two of them with PAIRED construction sequences.
 writeWirePack ∷ IO ()
 writeWirePack = do
     writeFixtureImages
@@ -741,23 +761,30 @@ writeWirePack = do
         [ "name: wire_fx"
         , "build:"
         , "  wire: { build_work: 1.5, materials: { wiring: 1 } }"
-        , "facemap: " <> artDir <> "face.png"
         , "connections:" ]
         ⧺ concat
-            [ if shape `elem` tableFormShapes
-                then [ "  " <> shape <> ":"
-                     , "    texture: " <> artDir <> "wire_" <> shape <> ".png"
-                     , "    construction:" ]
-                     ⧺ [ "      - " <> p
-                       | p ← framesFor ("wire_" <> shape) 4 ]
-                else [ "  " <> shape <> ": " <> artDir <> "wire_" <> shape
-                         <> ".png" ]
+            [ [ "  " <> shape <> ":"
+              , "    texture: " <> artDir <> "wire_" <> shape <> ".png"
+              , "    facemap: " <> artDir <> "wireface_" <> shape <> ".png" ]
+              ⧺ (if shape `elem` tableFormShapes
+                  then [ "    construction:" ]
+                       ⧺ [ "      - " <> p
+                         | p ← framesFor ("wire_" <> shape) 4 ]
+                       ⧺ [ "    construction_facemaps:" ]
+                       ⧺ [ "      - " <> p
+                         | p ← faceFramesFor ("wire_" <> shape) 4 ]
+                  else [])
             | shape ← map wireShapeName [minBound .. maxBound] ]
 
 tableFormShapes ∷ [Text]
 tableFormShapes = [wireShapeName WireCross, wireShapeName WireStraightNS]
 
 -- | The frame paths a sequence of @n@ declares for @stem@.
+-- | #2516: the facemap paired with each construction frame.
+faceFramesFor ∷ Text → Int → [Text]
+faceFramesFor stem n = [ artDir <> stem <> "_buildface_" <> tshow i <> ".png"
+                       | i ← [0 .. n - 1] ]
+
 framesFor ∷ Text → Int → [Text]
 framesFor stem n = [ artDir <> stem <> "_build_" <> tshow i <> ".png"
                    | i ← [0 .. n - 1] ]
@@ -769,7 +796,8 @@ writeFixtureImages = do
     createDirectoryIfMissing True (fixtureDir </> "art")
     forM_ statics $ \stem → writeImageAt (artDir <> stem <> ".png")
                                         canvasW canvasH
-    forM_ (concat [ framesFor stem n | (stem, n) ← sequences ]) $ \path →
+    forM_ (concat [ framesFor stem n ⧺ faceFramesFor stem n
+                  | (stem, n) ← sequences ]) $ \path →
         writeImageAt path canvasW canvasH
     writeImageAt (artDir <> "odd_size.png") 48 32
   where
@@ -777,6 +805,7 @@ writeFixtureImages = do
               , "damaged_wall_ne" ]
               ⧺ [ "wall_" <> e | e ← wallEdges ]
               ⧺ [ "wire_" <> wireShapeName s | s ← [minBound .. maxBound] ]
+              ⧺ [ "wireface_" <> wireShapeName s | s ← [minBound .. maxBound] ]
     sequences = [ ("floor", 3), ("damaged_floor", 2), ("wall_ne", 3) ]
               ⧺ [ ("wall_" <> e, 2) | e ← wallEdges ]
               ⧺ [ ("wire_cross", 4), ("wire_straight_ns", 4) ]

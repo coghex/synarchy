@@ -965,6 +965,9 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `unified_transfer_probe.py` | #1255 | worldgen (size 64, fixed seed), `--offscreen` x2 (needs-gpu, manual-only), ~25 min | **The unified transfer arc's final integrated gate** (epic #1013, slice UIT-6): ONE fixed-seed session, eight independently-reported stages (`setup`, `knowledge`, `modeB`, `modeA`, `batch`, `widget`, `save`, `load`) so a failure names which part of the system broke. An exact item instance moves in BOTH directions between all three endpoint CLASSES - acolyte, technomule and built storage, two of which share the contract's `unit` endpoint KIND - through BOTH player modes: six directed legs as #1249 queued gestures that commit on arrival, and the same six as immediate commits inside three real #1250/#1251 escort sessions (one of which starts out of reach and has to walk). Every leg carries its OWN throwaway item def, so its row is single-membered and its gesture names an EXACT instance id that is checked against source ownership before the commit and destination ownership after it; each Mode B leg additionally asserts the endpoints were OUT of the contract's reach when the gesture fired, which is the whole promotion. D-1: twelve into a hold with room for exactly eight stores eight, reports the remainder once by the contract's own reason, and leaves every one of the twelve in exactly one endpoint. D-2: a never-inspected container reads unknown with its capacity still live, reveals nothing on being opened and interacted with, and is not revealed by eight seconds of a player unit standing beside it; a NON-player withdrawal then makes the record genuinely stale (every unit-driven reveal is player-gated), and a Mode A session OPENING is what refreshes it. Requirement 1d: every container view encountered - building endpoint, unit endpoint, unit-info inventory, never-inspected window, and both escort panes - is proved to be a live instance of the ONE item-list widget, from evidence collected as each view opened. D-3: a save taken with a Mode B order in flight AND a Mode A session open on a DIFFERENT pair is reloaded in a FRESH PROCESS, where the order returns with its exact id, endpoint identities and instance ids, still non-terminal, and completes exactly once, while the session is gone and both units it held take player orders again. Rendered UI is located through `ui.dumpWidgets()` and the widget's own dump; world entities through `building.hitTestAt` / `unit.hitTestInRect` + `unit.hitTestAt` after `probelib.focus_and_locate` pins the z-slice (#1286) - no coordinate is written down. Runs on an isolated resource root shared only by its two processes (`config/` COPIED, so no local settings leak between runs) and prints one deterministic `FINGERPRINT` line (fixture and order identities plus every stage outcome, no timings or sampled measurements) so two consecutive runs diff clean. An operational failure is recorded against the stage it interrupted, so no run can traceback past a PASS summary. |
 | `wander_hazard_probe.py` | #1217 | arena | Ambient wander never routes over a damaging drop: a sustained window of REAL `unit_ai` wander on a 5x5 3-high ledge (zero falls, at least one leg observed carrying the protected policy), then — all on the SAME unit — `unit.setMoveSpeed` on an in-flight protected request leaving its policy intact, a protected `unit.moveTo(..., 'avoid_falls')` over the edge that never falls and TERMINATES rather than replanning forever, and an ordinary `unit.moveTo` over that same edge that still does fall (so the policy is neither stochastic nor sticky). The acolyte's `find_water` goal is retired: `search_for_water` is purposeful movement and keeps the fall-permitted default by design. |
 | `wire_probe.py` | #359 | arena | Wire structure piece: connection-aware autotile shape derivation (adjacency → isolated/end/straight/corner/tee/cross) and the `construct_job` AI placing a real wire tile from a designation. |
+| `wire_art_save_probe.py` | #2516 | real world | Two-phase save-compat gate for the Wire art change: `make` builds a pre-change fixture save (run it from a pre-change binary via `SYNARCHY_PROBE_ENGINE_EXE`), `verify` loads it in a fresh process and proves existing Wire (resident, evicted-chunk, in-progress site) is DRAWN with the new facemaps via `structure.drawnFacemap`, keeps network/battery/receipt, then resaves, restarts and re-checks. Not in the probe registry; run by hand. |
+| `wire_lighting_probe.py` | #2516 | arena, offscreen | Needs a GPU, manual-only. Proves the cable is lit through its facemap: the colour image never changes yet brightness and the side/top ratio change with the sun, for a static run, a mid-construction run and a mid-clip destruction. |
+| `make_wire_textures.py` | #359/#2516 | — | Deterministic generator for ALL Wire art (flat colour images, facemaps, construction/destruction frames, the four risers), `data/structure_packs/wire.yaml`, and with `--pins` the approved-content digests `test-headless/fixtures/wire_art_pins.txt` (run `--pins` only after owner approval). Re-running it produces no tracked change. |
 
 Invocation is bare `python3 tools/<name>.py` for sane defaults; most accept
 `--port`/`--seed`/`--size` overrides and a handful have scenario-specific
@@ -3948,35 +3951,6 @@ log framing, probe/cache diagnostics, the estimator, the aggregates),
 `tools/ci_timing_report.py` (this facade — `gh`, the CLI, rendering),
 `tools/test_ci_timing_report.py` (every check, reached through
 `--self-test`).
-
-### `ci_build_drift.py`, `ci_build_drift_report.py` — build drift versus the change under test (#2746)
-
-An on-demand measurement, run from a developer machine on the `gh`
-authentication already there. It adds **no CI step and no secret** and is
-deliberately absent from `.github/workflows/ci.yml` and `tools/ci-local.sh`
-(a measurement, not a gate), so `ci_parity_audit.py` needs no exemption.
-
-A pull request restores one project-cache snapshot and recompiles everything
-that differs from it: master changes between the snapshot and the PR's base
-(drift) plus the PR's own diff. CI builds run with `-v0`, so the logs carry
-seconds but no module lists; these tools recover the lists by replaying the
-builds locally and join them to the seconds the runs recorded.
-
-```bash
-python3 tools/ci_build_drift.py collect --since 2026-09-24 --until 2026-10-02 --cache-dir DIR --out runs.json
-python3 tools/ci_build_drift.py plan --runs runs.json --worktree . --ids RUN [RUN ...] --out plan.json
-python3 tools/ci_build_drift.py replay --plan plan.json --worktree REPLAY_WT --state-dir STATES --out replay.json
-python3 tools/ci_build_drift.py fan-out --worktree . BEFORE AFTER
-python3 tools/ci_build_drift_report.py --runs runs.json --plan plan.json --replay replay.json --lanes lanes.json
-python3 tools/ci_build_drift.py --self-test && python3 tools/ci_build_drift_report.py --self-test
-```
-
-`replay` builds in a worktree you name (never the one you work in), swaps
-`dist-newstyle` between saved states (`cp -Rpc` clones), and resumes: re-run
-`plan --resume replay.json --state-dir STATES` after an interruption and only
-the missing steps remain. Module identity is `(component, module)`. Method,
-sampled runs, results and recommendation:
-`docs/ci_build_drift_measurement.md`.
 
 ### The headless suite's CI test options (#2277, #1916)
 

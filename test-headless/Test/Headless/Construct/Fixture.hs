@@ -31,7 +31,7 @@ import Engine.Core.State (EngineEnv, structureArtCatalogRef)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemManager(..))
 import Structure.ArtCatalog
 import Structure.Facing (WallCaps(..), WallEdge(..))
-import Structure.Wire (allWireShapes)
+import Structure.Wire (allWireArtShapes)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -114,12 +114,15 @@ wireRegistration ∷ PackArtRegistration
 wireRegistration = PackArtRegistration
     { parPack = fixtureWirePack
     , parKinds = [(KWire, True, Just fixtureWireCost)]
-    , parEntries = [ (AkWire s, art "wire") | s ← allWireShapes ]
+    , parEntries = [ (AkWire s, art "wire") | s ← allWireArtShapes ]
     , parFrames  = []
     , parDestruction = []
     , parVariantFaces = []
     , parVariants = []
-    , parSizes   = HM.empty
+      -- #2516: Wire's static colour/facemap pair is measured at
+      -- registration whether or not it declares a sequence.
+    , parSizes   = HM.fromList [ ("wire.png", (96, 64))
+                               , ("wire_face.png", (96, 64)) ]
     }
 
 -- | One art slot. The paths and handles are arbitrary but must be

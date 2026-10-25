@@ -182,8 +182,8 @@ variantLoadSpec = describe "a pack with an authored variant" $ do
 wireLoadSpec ∷ SpecWith EngineEnv
 wireLoadSpec = describe "the wire pack" $ do
 
-    it "registers a clip per declaring connection and none for a legacy \
-       \scalar one" $ \env → do
+    it "registers a PAIRED clip per declaring connection and none for a \
+       \connection that declares none" $ \env → do
         writeWirePack
         ls ← newBareLuaBackend env
         runLua ls (T.concat
@@ -195,8 +195,7 @@ wireLoadSpec = describe "the wire pack" $ do
             `shouldBe` Just (framesFor "wire_fx" "wire_cross" 4, 15)
         clipOf cat "wire" (appearance Nothing (ApWire WireStraightNS))
             `shouldBe` Just (framesFor "wire_fx" "wire_straight_ns" 3, 5)
-        -- A connection in the legacy scalar form declares nothing, which
-        -- is every shipped connection's state.
+        -- A connection that declares no clip resolves none.
         clipOf cat "wire" (appearance Nothing (ApWire WireTeeN))
             `shouldBe` Nothing
 
@@ -487,23 +486,30 @@ writeWirePack = do
         [ "name: wire_fx"
         , "build:"
         , "  wire: { build_work: 1.5, materials: { wiring: 1 } }"
-        , "facemap: " <> wireArt <> "face.png"
         , "connections:" ]
         ⧺ concat
-            [ case lookup shape wireClips of
+            [ [ "  " <> shape <> ":"
+              , "    texture: " <> wireArt <> "wire_" <> shape <> ".png"
+              , "    facemap: " <> wireArt <> "wireface_" <> shape <> ".png" ]
+              ⧺ case lookup shape wireClips of
                 Just (n, fps) →
-                    [ "  " <> shape <> ":"
-                    , "    texture: " <> wireArt <> "wire_" <> shape <> ".png" ]
-                    ⧺ destructionLines 4
-                          (Just (clip "wire_fx" ("wire_" <> shape) n fps))
-                Nothing →
-                    [ "  " <> shape <> ": " <> wireArt <> "wire_" <> shape
-                        <> ".png" ]
+                    destructionLines 4
+                        (Just (clip "wire_fx" ("wire_" <> shape) n fps))
+                    ⧺ [ "      facemaps:" ]
+                    ⧺ [ "        - " <> p | p ← faceFramesFor "wire_fx"
+                                                 ("wire_" <> shape) n ]
+                Nothing → []
             | shape ← map wireShapeName [minBound .. maxBound] ]
 
 wireClips ∷ [(Text, (Int, Text))]
 wireClips = [ (wireShapeName WireCross, (4, "15"))
             , (wireShapeName WireStraightNS, (3, "5")) ]
+
+-- | #2516: the facemap paired with each frame of a Wire clip.
+faceFramesFor ∷ Text → Text → Int → [Text]
+faceFramesFor pack stem n = [ artDirFor pack <> stem <> "_breakface_" <> tshow i
+                                <> ".png"
+                            | i ← [0 .. n - 1] ]
 
 framesFor ∷ Text → Text → Int → [Text]
 framesFor pack stem n = [ artDirFor pack <> stem <> "_break_" <> tshow i
@@ -514,7 +520,8 @@ writeFixtureImages ∷ Text → IO ()
 writeFixtureImages pack = do
     createDirectoryIfMissing True (fixtureDir </> T.unpack pack ⧺ "_art")
     forM_ statics $ \stem → writeImageAt (artDirFor pack <> stem <> ".png")
-    forM_ (concat [ framesFor pack stem n | (stem, n) ← sequences ])
+    forM_ (concat [ framesFor pack stem n ⧺ faceFramesFor pack stem n
+                  | (stem, n) ← sequences ])
           writeImageAt
   where
     statics = [ "floor", "ceiling", "post", "face", "damaged_floor"
@@ -522,6 +529,7 @@ writeFixtureImages pack = do
               ⧺ [ "wall_" <> e | e ← wallEdgeNames ]
               ⧺ [ "damaged_wall_" <> e | e ← wallEdgeNames ]
               ⧺ [ "wire_" <> wireShapeName s | s ← [minBound .. maxBound] ]
+              ⧺ [ "wireface_" <> wireShapeName s | s ← [minBound .. maxBound] ]
     sequences = [ ("floor", 3), ("damaged_floor", 2) ]
               ⧺ [ ("wall_" <> e, 3) | e ← wallEdgeNames ]
               ⧺ [ ("wire_cross", 4), ("wire_straight_ns", 3) ]

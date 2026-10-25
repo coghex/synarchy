@@ -90,9 +90,21 @@ end
 
 -- The facemap the displayed frame is lit with: the selected cap's for a
 -- wall edge, the appearance's single one otherwise. A lifecycle frame
--- REUSES the resolved appearance's facemap (D-10), so this does not
--- depend on the lifecycle.
+-- REUSES the resolved appearance's facemap (D-10) -- unless the lifecycle
+-- PAIRS its frames with facemaps of their own (#2516, Wire), in which
+-- case the displayed frame's own facemap is the answer and it changes
+-- with the frame.
 local function facemapOf(v)
+    local life = lifecycleOf(v.appearance, v.lifecycle)
+    local paired = life and life.declared == true and life.faceFrames
+    if paired and #paired > 0 then
+        local f = paired[math.min(#paired, v.frameIndex + 1)]
+        if f then
+            return { path = f.path, missing = f.missing == true,
+                     reason = f.reason, inherited = false, paired = true }
+        end
+        return nil
+    end
     local faces = (v.appearance or {}).facemaps or {}
     if isWall(v.appearance) then
         for _, f in ipairs(faces) do
@@ -356,6 +368,20 @@ function structurePackView.selectAdjacentLifecycle(id, step, now)
     return structurePackView.setLifecycle(id, LIFECYCLES[target], now)
 end
 
+-- #2516: swap the displayed image between the frame's colour and the
+-- facemap it is lit with. A display change like any other (the owner
+-- drops the previous image's handles), and nothing else: not the
+-- lifecycle, not the clock, not the zoom.
+function structurePackView.toggleFacemap(id)
+    local v = views[id]
+    if not v or not v.appearance then return false end
+    v.showFace = not v.showFace
+    v.ready = false
+    v.fitKey = nil
+    structurePackView.reflow(id)
+    return true
+end
+
 -- Select a wall cap. Deliberately touches NOTHING but the reported
 -- facemap: not the texture, not the lifecycle, not the clock, not zoom.
 function structurePackView.setCap(id, cap)
@@ -435,6 +461,7 @@ local function infoLines(v, frame, l)
     if f and f.missing then face = face .. " missing (" .. tostring(f.reason) .. ")" end
     if f and f.inherited then face = face .. " [inherited]" end
     local timing = "alpha: " .. tostring(l and l.alphaPolicy)
+    if v.showFace then timing = timing .. "  [showing facemap]" end
     if playsClock(l) then
         timing = timing .. string.format("  fps: %g (%s)", l.fps,
                                          tostring(l.fpsSource))
@@ -462,7 +489,7 @@ function structurePackView.reflow(id)
     -- Which frame is on screen, by identity. A cap change, a resize or a
     -- zoom step keeps it; anything else is a new frame for the owner.
     local shown = tostring(v.appearance.identity) .. "|" .. v.lifecycle
-        .. "|" .. tostring(v.frameIndex)
+        .. "|" .. tostring(v.frameIndex) .. "|" .. tostring(v.showFace)
     if shown ~= v.shownKey then
         v.shownKey = shown
         -- A failure describes the frame as it was displayed THEN; coming
@@ -487,13 +514,23 @@ function structurePackView.reflow(id)
     -- another frame, lifecycle or appearance -- which also resets the
     -- owner's readiness.
     local failed = v.failedKey ~= nil and v.failedKey == v.shownKey
-    if failed or not frame or frame.missing then
+    -- #2516: `F` swaps the colour image for the facemap the displayed
+    -- frame is lit with, so a reviewer can read the lighting coverage the
+    -- viewer otherwise only names. A missing facemap is a missing frame.
+    local drawn = frame
+    if v.showFace and frame then
+        local face = facemapOf(v)
+        drawn = face and { path = face.path, missing = face.missing,
+                           reason = face.reason }
+            or { path = "(no facemap)", missing = true, reason = "undeclared" }
+    end
+    if failed or not drawn or drawn.missing then
         -- Terminal: hide the sprite so nothing earlier lingers, and never
         -- request the path.
         v.handle = nil
         UI.setVisible(v.spriteId, false)
         UI.setText(v.missingId, failed and FAILED_MARK
-            or (frame and MISSING_MARK or UNDECLARED_MARK))
+            or (drawn and MISSING_MARK or UNDECLARED_MARK))
         UI.setVisible(v.missingId, true)
         UI.setPosition(v.missingId, centreX, centreY)
         v.ready = true
@@ -504,7 +541,7 @@ function structurePackView.reflow(id)
     end
 
     UI.setVisible(v.missingId, false)
-    local handle = v.requestTexture(frame.path)
+    local handle = v.requestTexture(drawn.path)
     v.handle = handle
     UI.setSpriteTexture(v.spriteId, handle)
     UI.setVisible(v.spriteId, true)
@@ -642,6 +679,8 @@ function structurePackView.dump(id)
         facemapReason = f and f.reason or (f == nil and "undeclared" or nil),
         facemapInherited = f ~= nil and f.inherited == true,
         alphaPolicy = l and l.alphaPolicy or nil,
+        showingFacemap = v.showFace == true,
+        facemapPaired = f ~= nil and f.paired == true,
         ready = v.ready,
         spriteElement = v.spriteId,
         missingElement = v.missingId,

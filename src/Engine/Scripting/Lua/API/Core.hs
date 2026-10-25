@@ -451,6 +451,8 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "fps"
       pushArray pushStructPath (pslFrames l)
       Lua.setfield (-2) "frames"
+      pushArray pushStructPath (pslFaceFrames l)
+      Lua.setfield (-2) "faceFrames"
 
     pushStructPath p = do
       Lua.newtable

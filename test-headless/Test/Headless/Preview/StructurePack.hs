@@ -239,7 +239,7 @@ spec = do
                         `shouldBe` "assets/textures/buildings/dungeon_1/damaged/wall_ne.png"
                 other → expectationFailure (show other)
 
-        it "wire: 16 connections in declared order, sharing one facemap" $ do
+        it "wire: 20 connections (16 autotile + 4 risers) in declared order, each with its OWN facemap" $ do
             loadStructurePack "wire" ⌦ \case
                 Right (Just p) → do
                     let apps = pspkAppearances p
@@ -247,10 +247,17 @@ spec = do
                         [ "isolated", "end_n", "end_e", "end_s", "end_w"
                         , "straight_ns", "straight_ew", "corner_ne", "corner_nw"
                         , "corner_se", "corner_sw", "tee_n", "tee_e", "tee_s"
-                        , "tee_w", "cross" ]
+                        , "tee_w", "cross"
+                        , "riser_n", "riser_e", "riser_s", "riser_w" ]
                     nub (map psaGroup apps) `shouldBe` ["wire"]
-                    nub [ fmap pstPath (psfFile f) | a ← apps, f ← psaFacemaps a ]
-                        `shouldBe` [Just "assets/textures/facemap/floorface.png"]
+                    [ fmap pstPath (psfFile f) | a ← apps, f ← psaFacemaps a ]
+                        `shouldBe`
+                        [ Just ("assets/textures/facemap/wire/" <> c <> ".png")
+                        | c ← [ "isolated", "end_n", "end_e", "end_s", "end_w"
+                              , "straight_ns", "straight_ew", "corner_ne"
+                              , "corner_nw", "corner_se", "corner_sw", "tee_n"
+                              , "tee_e", "tee_s", "tee_w", "cross"
+                              , "riser_n", "riser_e", "riser_s", "riser_w" ] ]
                     pspkDefault p `shouldBe` "wire:isolated"
                 other → expectationFailure (show other)
 
@@ -264,13 +271,30 @@ spec = do
                                       , pstMissing f ] `shouldBe` []
                     other → expectationFailure (name ⧺ ": " ⧺ show other)
 
-        it "only the default Dungeon floor and post declare construction; all other lifecycles remain UNDECLARED" $
+        it "every Wire appearance declares PAIRED construction and destruction; of the Dungeon, only the default floor and post declare construction, all other lifecycles UNDECLARED" $
             forM_ ["dungeon_1", "wire"] $ \name →
                 loadStructurePack name ⌦ \case
                     Right (Just p) → forM_ (pspkAppearances p) $ \a →
                         forM_ ["construction", "destruction"] $ \l → do
                             let lc = lifecycle a l
-                            if name ≡ "dungeon_1" ∧ l ≡ "construction"
+                            if name ≡ "wire"
+                              then do
+                                -- #2516: four paired construction frames and
+                                -- five paired destruction frames, each with
+                                -- its own facemap, lit by the ordinary alpha
+                                -- rule (the pair is drawn as one).
+                                pslDeclared lc `shouldBe` True
+                                length (pslFrames lc) `shouldBe`
+                                    (if l ≡ "construction" then 4 else 5)
+                                map pstPath (pslFaceFrames lc)
+                                    `shouldNotBe` []
+                                length (pslFaceFrames lc)
+                                    `shouldBe` length (pslFrames lc)
+                                all (not ∘ pstMissing)
+                                    (pslFrames lc ⧺ pslFaceFrames lc)
+                                    `shouldBe` True
+                                pslAlphaPolicy lc `shouldBe` "facemap-alpha"
+                              else if name ≡ "dungeon_1" ∧ l ≡ "construction"
                                 ∧ psaIdentity a `elem` ["floor", "post"]
                               then do
                                 pslDeclared lc `shouldBe` True
@@ -378,10 +402,9 @@ spec = do
                 , "  ne: { texture: T/a.png, facemaps: { \"00\": T/f.png } }" ]
             pspkDefault ⊚ loadOk fx "walls" ⌦ (`shouldBe` "wall:se")
             writePack fx "wires" $ T.unlines
-                [ "facemap: T/f.png"
-                , "connections:"
-                , "  tee_w: T/a.png"
-                , "  cross: { texture: T/a.png, construction: [T/a.png] }" ]
+                [ "connections:"
+                , "  tee_w: { texture: T/a.png, facemap: T/f.png }"
+                , "  cross: { texture: T/a.png, facemap: T/f.png, construction: [T/a.png], construction_facemaps: [T/f.png] }" ]
             p ← loadOk fx "wires"
             pspkDefault p `shouldBe` "wire:tee_w"
             pslDeclared (lifecycle (appearance p "wire:cross") "construction")
@@ -491,7 +514,8 @@ spec = do
             rejects "walls: { ne: { texture: T/a.png, facemaps: { \"22\": T/f.png } } }\n" "unknown cap `22`"
             rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png } }\nvariants: { worn: { pieces: { post: { texture: T/a.png } } } }\n"
                     "variants.worn.pieces.post: overrides a piece"
-            rejects "connections: { cross: T/a.png }\n" "missing required `facemap`"
+            rejects "connections: { cross: { texture: T/a.png } }\n" "missing required `facemap`"
+            rejects "connections: { cross: T/a.png }\n" "declares no facemap"
 
     describe "playback timing" $ do
         it "a lifecycle's frame index at a clock phase follows its fps, replaying past a complete cycle" $ withFx $ \_ p → do

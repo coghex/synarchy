@@ -1787,6 +1787,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Structure.ArtCatalog
                    Test.Headless.Structure.ConstructionFixture
                    Test.Headless.Structure.ConstructionFrames
+                   Test.Headless.Structure.WireArt
                    Test.Headless.Structure.ConstructionPacks
                    Test.Headless.Structure.DestructionFixture
                    Test.Headless.Structure.DestructionFrames

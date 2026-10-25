@@ -368,8 +368,16 @@ data PreviewStructLifecycle = PreviewStructLifecycle
     --   inspects it at the documented default), @"static"@ or
     --   @"undeclared"@.
   , pslAlphaPolicy ∷ !Text
-    -- ^ @"facemap-alpha"@ for the static sprite, @"frame-alpha"@ for
-    --   lifecycle frames (D-10).
+    -- ^ @"facemap-alpha"@ for the static sprite and for a lifecycle whose
+    --   frames are PAIRED with their own facemaps (#2516: the ordinary
+    --   @color.a * faceAlpha@ rule), @"frame-alpha"@ for unpaired
+    --   lifecycle frames, which reuse the appearance's facemap and make
+    --   the frame's own alpha authoritative (D-10).
+  , pslFaceFrames  ∷ ![PreviewStructPath]
+    -- ^ #2516: the facemap each frame is lit with, in the same order and
+    --   positions as 'pslFrames' (a missing one stays in its position).
+    --   Empty when the lifecycle declares no paired facemaps, and always
+    --   for @static@, whose facemap is the appearance's own.
   } deriving (Eq, Show)
 
 -- | One resolved appearance a structure pack declares (#2495): a piece
