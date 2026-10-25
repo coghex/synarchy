@@ -717,6 +717,29 @@ spec = do
                 , "    'and a successful retry reports ready')"
                 ]
 
+        it "with the facemap view on, a failed wall cap's map does not stick to the next cap (#2516)" $ withFx $ \fx p →
+            runsWithPack p $ lns
+                [ bootFromEngine
+                , "selectRow('wall:sw')"
+                , "assert(pm.onKeyDown('F'))"
+                , "pm.update(0.016)"
+                , "local s = d()"
+                , "assert(s.showingFacemap and s.path == '" <> tpath fx "wall_sw.png" <> "' )"
+                , "assert(s.facemap == '" <> tpath fx "w00.png" <> "' and s.state == 'ready')"
+                , "pm.onAssetFailed('texture', s.handle, '" <> tpath fx "w00.png" <> "', 'boom', true)"
+                , "pm.update(0.016)"
+                , "s = d()"
+                , "assert(s.failed == true and s.state == 'empty', 'the cap 00 map failed')"
+                , "local loads = LOAD_COUNT"
+                , "assert(pm.onPreviewCapClick(capCell('10').hitHandle))"
+                , "pm.update(0.016)"
+                , "s = d()"
+                , "assert(s.selectedCap == '10' and s.facemap == '" <> tpath fx "w10.png" <> "')"
+                , "assert(s.failed == false and s.state == 'ready',"
+                , "    'a failure of cap 00 must not stick to cap 10')"
+                , "assert(LOAD_COUNT > loads, 'cap 10 map is requested')"
+                ]
+
         it "a frame still uploading is not ready, even right after a ready one" $ withFx $ \_ p →
             runsWithPack p $ lns
                 [ bootFromEngine

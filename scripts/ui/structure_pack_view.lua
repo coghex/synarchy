@@ -488,8 +488,17 @@ function structurePackView.reflow(id)
     local frame, l = displayedFrame(v)
     -- Which frame is on screen, by identity. A cap change, a resize or a
     -- zoom step keeps it; anything else is a new frame for the owner.
+    -- With the facemap view on, WHICH facemap is drawn is part of the
+    -- identity: a wall's cap change swaps the drawn image, so a failure
+    -- of the old cap's map must not stick to the new one.
+    local faceKey = ""
+    if v.showFace then
+        local fm = facemapOf(v)
+        faceKey = tostring(fm and fm.path)
+    end
     local shown = tostring(v.appearance.identity) .. "|" .. v.lifecycle
         .. "|" .. tostring(v.frameIndex) .. "|" .. tostring(v.showFace)
+        .. "|" .. faceKey
     if shown ~= v.shownKey then
         v.shownKey = shown
         -- A failure describes the frame as it was displayed THEN; coming
