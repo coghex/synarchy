@@ -4,7 +4,7 @@ Measured 2026-10-24 against `master@b86f9fc30`. This is an investigation
 report: it records measurements, a validated attribution, a projection and a
 recommendation. It changes no behaviour: `.github/`, `tools/ci_cache_epoch.py`,
 `synarchy.cabal` and `cabal.project*` are untouched. Part of epic #2742
-(CIR-17); builds on [`test_suite_compile_cost_2276.md`](test_suite_compile_cost_2276.md).
+(CIR-17); builds on [`test_suite_compile_cost_2276.md`](archive/test_suite_compile_cost_2276.md).
 
 **Headline.** The long exact-hit builds are not epoch drift in the sense of
 "many master changes piling up". They are *interface cascades*: a change to one
