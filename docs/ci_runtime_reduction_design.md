@@ -128,7 +128,7 @@ logs of runs 36424074239, 36343120829, 36320504148 and 36051757184.
   every build-relevant change since, plus its own diff, and the `-O2`
   interface cascade decides how much of the 900-module library and
   480-module test suite that recompiles. #2276
-  (`docs/test_suite_compile_cost_2276.md`) measured the test suite at 904.5
+  (`docs/archive/test_suite_compile_cost_2276.md`) measured the test suite at 904.5
   CPU-s under `-O2`, 484.7 under `-O0` (−46 %) and −16.6 % under `-O1`; `-O0`
   was kept out of that issue's scope by owner specification.
 - **Hangs recur.** Master run 36054401429 (merge of #2704, 2026-09-24) sat in

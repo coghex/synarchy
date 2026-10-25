@@ -8,8 +8,8 @@ created at the start of this record. On 2026-09-11 the owner chose the completed
 audio foundation and preview player as the first standalone PR boundary; bear
 sounds and selection responses follow separately (selection design D-6).
 
-The [foundation design](audio_system_design.md) and
-[selection pilot design](unit_selection_audio_design.md) own the contracts.
+The [foundation design](../audio_system_design.md) and
+[selection pilot design](../unit_selection_audio_design.md) own the contracts.
 This record does not disposition their issue-processing checklists.
 
 ## Implemented locally
@@ -201,4 +201,4 @@ player. Bear sound content and selection-response behavior are follow-up work.
 Physical-device listening and recovery remain unverified; the PR must retain
 that distinction from the passing offline/null and rendered-UI evidence.
 Portable preview screenshots and validation context are retained in
-[the preview evidence](audio/preview_player/README.md).
+[the preview evidence](../audio/preview_player/README.md).
