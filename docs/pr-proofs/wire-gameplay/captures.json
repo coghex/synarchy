@@ -101,22 +101,22 @@
     {
       "file": "teardown_2_clip.png",
       "crop": "teardown_2_clip_x4.png",
-      "shows": "the cleared middle tile, 0.15 game s into its 0.5 s destruction clip (frame 2 of 5)"
+      "shows": "the cleared middle tile, 0.14 game s into its 0.5 s destruction clip (frame 2 of 5)"
     },
     {
       "file": "teardown_3_clip.png",
       "crop": "teardown_3_clip_x4.png",
-      "shows": "the cleared middle tile, 0.25 game s into its 0.5 s destruction clip (frame 3 of 5)"
+      "shows": "the cleared middle tile, 0.22 game s into its 0.5 s destruction clip (frame 3 of 5)"
     },
     {
       "file": "teardown_4_clip.png",
       "crop": "teardown_4_clip_x4.png",
-      "shows": "the cleared middle tile, 0.35 game s into its 0.5 s destruction clip (frame 4 of 5)"
+      "shows": "the cleared middle tile, 0.32 game s into its 0.5 s destruction clip (frame 4 of 5)"
     },
     {
       "file": "teardown_5_clip.png",
       "crop": "teardown_5_clip_x4.png",
-      "shows": "the cleared middle tile, 0.45 game s into its 0.5 s destruction clip (frame 5 of 5)"
+      "shows": "the cleared middle tile, 0.42 game s into its 0.5 s destruction clip (frame 5 of 5)"
     }
   ]
 }
