@@ -305,6 +305,11 @@ lifecycles ∷ Text → Aeson.Object → P (DeclLifecycle, DeclLifecycle)
 lifecycles ctx o = (,) ⊚ construction ⊛ destruction
   where
     construction = case field o "construction" of
+        -- A paired list with no frames to pair is malformed, as the game
+        -- (`scripts/structure_frames.lua`) treats it.
+        Nothing | isJust (field o "construction_facemaps") →
+            Left (ctx <> ".construction_facemaps: declared without a \
+                         \`construction` frame list to pair")
         Nothing → pure DeclUndeclared
         Just v  → do
             frames ← frameList (ctx <> ".construction") v
@@ -490,7 +495,18 @@ wireAppearances orders _top conns =
             Aeson.Object o → do
                 t ← reqPath ctx o "texture"
                 f ← reqPath ctx o "facemap"
-                l ← lifecycles ctx o
+                l@(c', d') ← lifecycles ctx o
+                -- The game refuses a Wire lifecycle whose frames are not
+                -- all paired (no shared-map fallback), so the viewer does
+                -- too rather than showing the static facemap in its place.
+                forM_ [("construction", c', "construction_facemaps")
+                      , ("destruction", d', "destruction.facemaps")] $
+                    \(what, lc, key) → case lc of
+                        DeclSequence _ _ Nothing →
+                            Left (ctx <> "." <> what <> ": a Wire lifecycle \
+                                         \must pair every frame with its \
+                                         \own facemap (`" <> key <> "`)")
+                        _ → pure ()
                 pure (t, Just f, l)
             _ → Left (ctx <> ": expected a texture path or a mapping \
                              \with a `texture` path")

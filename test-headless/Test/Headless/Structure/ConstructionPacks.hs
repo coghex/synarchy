@@ -95,6 +95,7 @@ spec = aroundAll setup $ describe "structure construction frames" $ do
     shippedDungeonSpec
     pieceLoadSpec
     wireLoadSpec
+    pairedFacemapSpec
     diagnosticSpec
     payloadSpec
     residueSpec
@@ -282,6 +283,45 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
         packArtResolves cat1 "cf_failframe" `shouldBe` False
         warningsOf entries `shouldSatisfy`
             any (namesAll ["cf_failframe", "floor construction frame 3"])
+
+-- * Paired facemaps through the ORDINARY structure loader (#2516)
+
+pairedFacemapSpec ∷ SpecWith EngineEnv
+pairedFacemapSpec = describe "paired construction facemaps" $ do
+
+    it "forwards a floor's own `construction_facemaps` through \
+       \scripts/structures.lua, one per frame, in order" $ \env → do
+        _ ← loadPiecePack env "cf_paired" pairedFloorPack
+        cat ← readIORef (structureArtCatalogRef env)
+        packArtResolves cat "cf_paired" `shouldBe` True
+        fmap (map aaPath ∘ maybe [] V.toList ∘ csFacemaps)
+             (resolveConstructionSequence cat "cf_paired"
+                  (appearance Nothing ApFloor))
+            `shouldBe` Just (faceFramesFor "floor" 3)
+
+    it "leaves an unpaired floor unpaired (no facemaps at all)" $ \env → do
+        _ ← loadPiecePack env "cf_unpaired" defaultPack
+        cat ← readIORef (structureArtCatalogRef env)
+        fmap csFacemaps (resolveConstructionSequence cat "cf_unpaired"
+                             (appearance Nothing ApFloor))
+            `shouldBe` Just Nothing
+
+    it "refuses a paired list of the wrong length rather than dropping \
+       \the extra entries" $ \env → do
+        before ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                 <*> pure "cf_short"
+        (_, entries) ← withCapturedLog env $
+            loadPiecePack env "cf_short"
+                pairedFloorPack { psFloorFaces = Just (take 2 (faceFramesFor "floor" 3)) }
+        after ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                <*> pure "cf_short"
+        (before, after) `shouldBe` (False, False)
+        warningsOf entries `shouldSatisfy`
+            any (namesAll ["cf_short", "frame 3"])
+
+-- | A floor whose construction frames are each paired with a facemap.
+pairedFloorPack ∷ PackSpec
+pairedFloorPack = defaultPack { psFloorFaces = Just (faceFramesFor "floor" 3) }
 
 -- * The wire pack, through scripts/wire.lua
 
@@ -550,6 +590,9 @@ data PackSpec = PackSpec
     { psPieces  ∷ [(Text, Maybe [Text])]   -- ^ floor \/ ceiling \/ post
     , psWalls   ∷ [(Text, Maybe [Text])]   -- ^ ne \/ nw \/ se \/ sw
     , psVariant ∷ Bool                     -- ^ emit the @damaged@ block
+    , psFloorFaces ∷ Maybe [Text]
+      -- ^ #2516: the floor's @construction_facemaps:@, paired with its
+      --   frames, or none.
     , psFloorConstructionScalar ∷ Maybe Text
       -- ^ Emit the floor's @construction:@ as this raw SCALAR rather
       --   than a list — a path, or @false@ — neither of which is a
@@ -562,6 +605,7 @@ barePack = PackSpec
     { psPieces = [ (k, Nothing) | k ← ["floor", "ceiling", "post"] ]
     , psWalls  = [ (e, Nothing) | e ← wallEdges ]
     , psVariant = False
+    , psFloorFaces = Nothing
     , psFloorConstructionScalar = Nothing }
 
 wallEdges ∷ [Text]
@@ -685,7 +729,11 @@ piecePackYaml name ps = T.concat $
            , "    facemap: " <> artDir <> "face.png" ]
            ⧺ (case (k, psFloorConstructionScalar ps) of
                 ("floor", Just raw) → ["    construction: " <> raw]
-                _                   → constructionLines 4 frames))
+                _                   → constructionLines 4 frames)
+           ⧺ (case (k, psFloorFaces ps) of
+                ("floor", Just fs) → "    construction_facemaps:"
+                                       : [ "      - " <> f | f ← fs ]
+                _                  → []))
       | (k, frames) ← psPieces ps ]
     ⧺ [ "walls:\n" ]
     ⧺ [ T.unlines

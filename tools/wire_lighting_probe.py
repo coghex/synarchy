@@ -175,6 +175,39 @@ def measure(port: int, out: str, name: str, setup, teardown, anchor, zoom):
     return rows, common
 
 
+def stocked_payer(port: int, x: int, y: int) -> int:
+    """A unit that really carries wiring: the technomule's starting kit has
+    twenty. Payment is checked by the callers, because an unpaid
+    designation draws the designation GHOST, not a construction frame, and
+    would pass every brightness assertion without exercising one."""
+    uid = int(float(send(port, f"return unit.spawn('technomule', {x}, {y})")))
+    for _ in range(60):
+        have = send(port, f"local c = 0; for _, it in ipairs(unit.getInventory({uid}) or {{}}) do "
+                          "if it.defName == 'wiring' then c = c + 1 end end; return c")
+        if int(float(have or 0)) >= 3:
+            return uid
+        time.sleep(0.1)
+    sys.exit("the technomule never received its wiring")
+
+
+def pay_and_progress(port: int, page: str, x: int, y: int, uid: int,
+                     progress: float = 0.5) -> None:
+    job = poll_until(30.0, lambda: send_json(
+        port, f"return construction.getDesignationAt('{page}', {x}, {y})"))
+    paid = send(port, f"return tostring(construction.payMaterials('{page}',"
+                      f" {x}, {y}, {int(job['attempt'])}, {uid}))").strip('"')
+    if paid != "true":
+        sys.exit(f"payMaterials refused for ({x},{y}): {paid!r}")
+    send(port, f"construction.addJobProgress('{page}', {x}, {y}, {progress},"
+               f" {int(job['attempt'])}); return 'ok'")
+    after = poll_until(30.0, lambda: (lambda d: d if isinstance(d, dict)
+        and d.get("paid") is True and abs(float(d.get("progress", 0)) - progress) < 1e-6
+        else None)(send_json(
+            port, f"return construction.getDesignationAt('{page}', {x}, {y})")))
+    if not after:
+        sys.exit(f"the site at ({x},{y}) is not paid at progress {progress}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9517)
@@ -255,21 +288,13 @@ def main() -> int:
         def build_site():
             # A three-tile run, so each tile draws a straight_ew frame
             # rather than a lone pad too small to measure.
-            uid = int(float(send(args.port, "local d = unit.listDefs(); "
-                             f"return unit.spawn(d[1], {sites[0][0]}, {sites[0][1]})")))
+            uid = stocked_payer(args.port, sites[0][0], sites[0][1])
             for sx, sy in sites:
                 send(args.port, f"construction.designate('{w}', {sx}, {sy},"
                                 f" {sx}, {sy}, 'structure', 'wire', 'wire');"
                                 " return 'ok'")
             for sx, sy in sites:
-                job = poll_until(30.0, lambda: send_json(
-                    args.port,
-                    f"return construction.getDesignationAt('{w}', {sx}, {sy})"))
-                send(args.port, f"construction.payMaterials('{w}', {sx}, {sy},"
-                                f" {int(job['attempt'])}, {uid}); return 'ok'")
-                send(args.port, f"construction.addJobProgress('{w}', {sx},"
-                                f" {sy}, 0.5, {int(job['attempt'])});"
-                                " return 'ok'")
+                pay_and_progress(args.port, w, sx, sy, uid)
 
         def clear_sites():
             for sx, sy in sites:

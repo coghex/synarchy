@@ -40,7 +40,13 @@ local M = {}
 -- An entry that is present but not a string becomes an empty frame
 -- table, which the engine refuses by index rather than by silence.
 function M.load(paths, facePaths)
-    if paths == nil then return nil end
+    if paths == nil then
+        -- A paired facemap list with no frames to pair is a malformed
+        -- declaration, not an absent one: hand the engine an entry it
+        -- refuses (no texture) rather than dropping the list.
+        if facePaths ~= nil then return { { facemap = M.MALFORMED_FACEMAP } } end
+        return nil
+    end
     if type(paths) ~= "table" then return paths end
     -- A non-integer key means this is not a list at all; hand the table
     -- over as it is and let the engine say so.
@@ -89,6 +95,7 @@ end
 -- entry is an explicit refusal and never a sequence that quietly goes
 -- unpaired (#2516).
 local MALFORMED_FACEMAP = "malformed-facemap-declaration"
+M.MALFORMED_FACEMAP = MALFORMED_FACEMAP
 
 -- Normalise a declared paired-facemap list. nil stays nil (the sequence
 -- pairs nothing, every shipped non-wire appearance's state). A value that
@@ -168,6 +175,14 @@ end
 function M.destructionDeclaredBy(variant, over, base)
     if variant then return over.destruction end
     return base.destruction
+end
+
+-- Which PAIRED construction facemap list an appearance uses (#2516). The
+-- same explicit branch as `declaredBy`, for the same reason: a variant
+-- reads its own override's list and nothing else.
+function M.facesDeclaredBy(variant, over, base)
+    if variant then return over.construction_facemaps end
+    return base.construction_facemaps
 end
 
 -- Which construction declaration an appearance uses. A VARIANT reads its

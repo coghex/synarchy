@@ -515,6 +515,15 @@ spec = do
             rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png } }\nvariants: { worn: { pieces: { post: { texture: T/a.png } } } }\n"
                     "variants.worn.pieces.post: overrides a piece"
             rejects "connections: { cross: { texture: T/a.png } }\n" "missing required `facemap`"
+            -- #2516: a Wire lifecycle must pair every frame, as the game requires
+            rejects "connections: { cross: { texture: T/a.png, facemap: T/f.png, construction: [T/a.png] } }\n"
+                "must pair every frame"
+            rejects "connections: { cross: { texture: T/a.png, facemap: T/f.png, destruction: { fps: 10, frames: [T/a.png] } } }\n"
+                "must pair every frame"
+            rejects "connections: { cross: { texture: T/a.png, facemap: T/f.png, construction_facemaps: [T/f.png] } }\n"
+                "declared without a `construction` frame list"
+            rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png, construction_facemaps: [T/f.png] } }\n"
+                "declared without a `construction` frame list"
             rejects "connections: { cross: T/a.png }\n" "declares no facemap"
 
     describe "playback timing" $ do
