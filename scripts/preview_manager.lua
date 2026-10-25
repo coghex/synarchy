@@ -1265,6 +1265,13 @@ function previewManager.onKeyDown(key)
         return true
     end
 
+    -- #2516: F swaps the structure viewer's image between the frame's
+    -- colour and its facemap. Only the structure viewer has a facemap to
+    -- show; in every other mode the key is unhandled exactly as before.
+    if key == "F" and mode == "structure" and structureViewId then
+        return structurePackView.toggleFacemap(structureViewId)
+    end
+
     local handled = navigateKey(key)
     if handled then
         repeatKey = key
@@ -1507,6 +1514,8 @@ structureDump = function(out)
     out.facemapMissing = view and view.facemapMissing or nil
     out.facemapReason = view and view.facemapReason or nil
     out.alphaPolicy = view and view.alphaPolicy or nil
+    out.showingFacemap = view and view.showingFacemap or false
+    out.facemapPaired = view and view.facemapPaired or false
     out.lifecycleRow = view and view.lifecycleRow or nil
     out.capRow = view and view.capRow or nil
     out.spriteElement = view and view.spriteElement or nil

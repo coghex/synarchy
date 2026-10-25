@@ -39,6 +39,8 @@ module Test.Headless.Structure.ConstructionFixture
     , artAsset
     , frameCount
     , framePathsFor
+    , faceFramePathsFor
+    , wireFaceFor
     , staticPathFor
       -- * Building variations
     , registerOrFail
@@ -59,7 +61,7 @@ import Structure.Facing (WallCaps(..), WallEdge(..), wallCapsCode)
 import Structure.WallCatalog
     ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
     , registerWallFamily )
-import Structure.Wire (WireShape(..), allWireShapes, wireShapeName)
+import Structure.Wire (WireShape(..), allWireArtShapes, wireShapeName)
 
 import Test.Headless.Render.StructureGhostFixture (handleForPath)
 
@@ -128,12 +130,29 @@ framePathsFor ak = case frameCount ak of
     AppearanceKey variant slot = ak
     prefix = maybe "" (\v → v <> "/") variant <> slotPath slot
 
+-- | #2516: a Wire appearance's frames are PAIRED, each with a facemap of
+--   its own; every other appearance's are not, so the construction suite
+--   keeps proving the unpaired behaviour it always did.
+faceFramePathsFor ∷ AppearanceKey → [Text]
+faceFramePathsFor ak = case (apSlot ak, frameCount ak) of
+    (ApWire _, Just n) →
+        [ slotPath (apSlot ak) <> "_buildface_" <> tshow i <> ".png"
+        | i ← [0 .. n - 1] ]
+    _ → []
+
+-- | A Wire shape's own static facemap in this fixture.
+wireFaceFor ∷ WireShape → Text
+wireFaceFor w = "fx/wireface_" <> wireShapeName w <> ".png"
+
 sequenceFor ∷ AppearanceKey → Maybe ConstructionSequence
 sequenceFor ak = case framePathsFor ak of
     []     → Nothing
     frames → Just ConstructionSequence
         { csStatic = artAsset (staticPathFor ak)
-        , csFrames = V.fromList (map artAsset frames) }
+        , csFrames = V.fromList (map artAsset frames)
+        , csFacemaps = case faceFramePathsFor ak of
+            [] → Nothing
+            fs → Just (V.fromList (map artAsset fs)) }
 
 artAsset ∷ Text → ArtAsset
 artAsset p = ArtAsset p (handleForPath p)
@@ -148,7 +167,7 @@ allAppearances =
     | v ← [Nothing, Just damagedVariant]
     , s ← [ApFloor, ApCeiling, ApPost]
             ⧺ map ApWall allWallEdges
-            ⧺ map ApWire allWireShapes ]
+            ⧺ map ApWire allWireArtShapes ]
 
 -- * The registrations
 
@@ -187,8 +206,8 @@ fixtureWireRegistration = PackArtRegistration
     , parKinds   = [(KWire, True, Just (mkBuildCost 1.5 [("wiring", 1)]))]
     , parEntries = [ ( AkWire w
                      , asset ("fx/wire_" <> wireShapeName w <> ".png")
-                             "fx/floorface.png" )
-                   | w ← allWireShapes ]
+                             (wireFaceFor w) )
+                   | w ← allWireArtShapes ]
     , parFrames  = declaredSequences [KWire]
     , parDestruction = []
     , parVariantFaces = []
@@ -208,7 +227,8 @@ fixtureSizes ∷ HM.HashMap Text (Int, Int)
 fixtureSizes = HM.fromList
     [ (path, canvas)
     | ak ← allAppearances
-    , path ← staticPathFor ak : framePathsFor ak ]
+    , path ← staticPathFor ak : framePathsFor ak ⧺ faceFramePathsFor ak ]
+    `HM.union` HM.fromList [ (wireFaceFor w, canvas) | w ← allWireArtShapes ]
 
 -- | Both packs, registered through the production entry point — so a
 --   fixture that violated the all-or-nothing rule fails here rather than
@@ -237,7 +257,8 @@ withSequence ak mcs reg = reg
   where
     sizesFor cs = HM.fromList
         [ (aaPath a, canvas)
-        | a ← csStatic cs : V.toList (csFrames cs) ]
+        | a ← csStatic cs : V.toList (csFrames cs)
+                            ⧺ maybe [] V.toList (csFacemaps cs) ]
 
 -- | The wall family the same fixture declares, so a construction frame
 --   rotates through #1712's real catalogue rather than a stand-in.
@@ -270,7 +291,7 @@ fixtureTexSizes = HM.fromList
     allPaths = M.fromList
         [ (p, ())
         | ak ← allAppearances
-        , p ← staticPathFor ak : framePathsFor ak ]
+        , p ← staticPathFor ak : framePathsFor ak ⧺ faceFramePathsFor ak ]
         `M.union` M.fromList
         [ (p, ())
         | (_, art) ← parEntries fixtureRegistration

@@ -48,7 +48,7 @@ import Structure.Facing (WallCaps(..), WallEdge(..), screenWallEdge)
 import Structure.Palette (TexPalette, emptyTexPalette, internPath, lookupPath)
 import Structure.Render (structurePieceQuads)
 import Structure.Types (StructurePieceData(..), StructureSlot(..))
-import Structure.Wire (WireShape(..), allWireShapes)
+import Structure.Wire (WireShape(..), allWireArtShapes)
 import World.Chunk.Types (ChunkCoord, chunkSize)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk, tileAliasStep)
@@ -246,6 +246,22 @@ quadShapes = map shapeOf
           , let Vec2 px py = pos v
           , let Vec2 tu tv = tex v ] )
 
+-- | 'quadShapes' without the facemap slot, for a comparison where the
+--   facemap is exactly what a paired frame is allowed to change.
+quadGeometry ∷ [SortableQuad] → [(Float, String, [(Float, Float, Float, Float, String)])]
+quadGeometry = map shapeOf
+  where
+    shapeOf sq =
+        ( sqSortKey sq
+        , show (sqLayer sq)
+        , [ (px, py, tu, tv, show (worldUV v))
+          | v ← quadVerts sq
+          , let Vec2 px py = pos v
+          , let Vec2 tu tv = tex v ] )
+
+faceIds ∷ [SortableQuad] → [Float]
+faceIds = L.nub ∘ map faceMapId ∘ concatMap quadVerts
+
 quadVerts ∷ SortableQuad → [Vertex]
 quadVerts sq = [sqV0 sq, sqV1 sq, sqV2 sq, sqV3 sq]
 
@@ -283,7 +299,7 @@ declarationSpec = describe "a declared clip" $ do
     it "resolves nothing for an appearance that declares none" $
         forM_ ( AppearanceKey Nothing ApCeiling
                   : [ AppearanceKey Nothing (ApWire w)
-                    | w ← allWireShapes
+                    | w ← allWireArtShapes
                     , isNothing (wreckFrameCount
                                     (AppearanceKey Nothing (ApWire w))) ] )
               $ \ak →
@@ -531,13 +547,27 @@ renderSpec = describe "an effect's quads" $ do
     it "are the PLACED piece's, with only the frame, its atlas id and \
        \the lifecycle flag changed" $
         forM_ [ AppearanceKey Nothing ApFloor
-              , AppearanceKey Nothing ApPost
-              , AppearanceKey Nothing (ApWire WireCross) ] $ \ak → do
+              , AppearanceKey Nothing ApPost ] $ \ak → do
             let eff    = effectFor ak
                 drawn  = effectQuadsAt FaceSouth 0 eff
                 placed = placedQuadsAt FaceSouth ak
             drawn `shouldNotSatisfy` null
             quadShapes drawn `shouldBe` quadShapes placed
+
+    it "are, for a PAIRED clip (Wire, #2516), the placed piece's too — \
+       \with the frame's OWN facemap in place of the appearance's, and no \
+       \lifecycle flag" $ do
+        let ak     = AppearanceKey Nothing (ApWire WireCross)
+            eff    = effectFor ak
+            drawn  = effectQuadsAt FaceSouth 0 eff
+            placed = placedQuadsAt FaceSouth ak
+            face0  = fromMaybe "" (listToMaybe (wreckFaceFramePathsFor ak))
+        drawn `shouldNotSatisfy` null
+        quadGeometry drawn `shouldBe` quadGeometry placed
+        faceIds drawn `shouldBe`
+            [fromIntegral (toInt (handleForPath face0))]
+        faceIds drawn `shouldNotBe` faceIds placed
+        allFlags drawn `shouldBe` [0]
 
     it "draw the frame the elapsed clock selects, never the static sprite" $ do
         let ak     = AppearanceKey Nothing ApPost

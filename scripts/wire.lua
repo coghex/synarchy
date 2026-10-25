@@ -43,30 +43,50 @@ end
 -- #2488's one declaration rule, shared with scripts/structures.lua.
 local frames = require("scripts.structure_frames")
 
--- A `connections.<name>` entry, in either of the two forms the pack
--- schema accepts:
+-- A `connections.<name>` entry. Wire is the one pack whose appearances
+-- each carry their OWN facemap (#2516): the static sprite, every
+-- construction frame and every destruction frame is a colour image paired
+-- with a facemap that describes exactly that image, so the declaring form
+-- is the only complete one.
 --
---   isolated: assets/.../isolated.png                  -- legacy scalar
---   cross:  { texture: assets/.../cross.png,           -- #2488
---             construction: [ .../cross_0.png, … ],
---             destruction: { fps: 12,                  -- #2491
---                            frames: [ .../cross_break_0.png, … ] } }
+--   cross:
+--     texture: assets/.../cross.png
+--     facemap: assets/.../facemap/wire/cross.png
+--     construction: [ .../build/cross_0.png, ... ]
+--     construction_facemaps: [ .../facemap/wire/build/cross_0.png, ... ]
+--     destruction:
+--       fps: 10
+--       frames:   [ .../break/cross_0.png, ... ]
+--       facemaps: [ .../facemap/wire/break/cross_0.png, ... ]
 --
--- The scalar form is not deprecated: a connection with no construction
--- sequence has nothing to say beyond its texture, and every shipped
--- connection is in exactly that state. Anything else — a table with no
--- `texture`, a number, a boolean — is a malformed pack and is reported
+-- The legacy scalar form (`cross: assets/.../cross.png`) is still READ, so
+-- an old pack is reported precisely rather than as an unreadable file, but
+-- it declares no facemap and the engine refuses the pack for that: there is
+-- no shared-map fallback for Wire. Anything else -- a table with no
+-- `texture`, a number, a boolean -- is a malformed pack and is reported
 -- rather than silently skipped, because a missing connection makes the
 -- engine refuse the whole pack with a less specific complaint.
 local function connectionEntry(name, entry)
     if type(entry) == "string" then
-        return entry, nil, nil
+        return entry, nil, nil, nil, nil
     elseif type(entry) == "table" and type(entry.texture) == "string" then
-        return entry.texture, entry.construction, entry.destruction
+        return entry.texture, entry.facemap, entry.construction,
+               entry.construction_facemaps, entry.destruction
     end
     engine.logWarn("wire: connection '" .. tostring(name) ..
         "' is neither a texture path nor a table with a `texture` path")
-    return nil, nil, nil
+    return nil, nil, nil, nil, nil
+end
+
+-- Load a declared facemap path, or hand the engine none when the path is
+-- not one a pack may name (it refuses the declaration, naming the escape)
+-- or none was declared (it refuses the pack, naming the connection).
+local function loadFacemap(path)
+    if type(path) ~= "string" then return nil end
+    if structure.isSafeArtPath and not structure.isSafeArtPath(path) then
+        return nil
+    end
+    return engine.loadTexture(path)
 end
 
 local handleCache = nil
@@ -74,22 +94,28 @@ local function handles()
     if handleCache then return handleCache end
     local pack = packDef()
     if not pack then
-        return { conn = {}, connPath = {}, connBuild = {}, connWreck = {} }
+        return { conn = {}, connPath = {}, face = {}, facePath = {},
+                 connBuild = {}, connWreck = {} }
     end
-    local conn, connPath, connBuild, connWreck = {}, {}, {}, {}
+    local conn, connPath, face, facePath, connBuild, connWreck =
+        {}, {}, {}, {}, {}, {}
     for name, entry in pairs(pack.connections or {}) do
-        local path, construction, destruction = connectionEntry(name, entry)
+        local path, facemap, construction, constructionFaces, destruction =
+            connectionEntry(name, entry)
         if path then
             conn[name] = engine.loadTexture(path)
             connPath[name] = path
-            connBuild[name] = frames.load(construction)
+            if type(facemap) == "string" then
+                face[name] = loadFacemap(facemap)
+                facePath[name] = facemap
+            end
+            connBuild[name] = frames.load(construction, constructionFaces)
             connWreck[name] = frames.loadDestruction(destruction)
         end
     end
-    handleCache = { conn = conn, connPath = connPath, connBuild = connBuild,
-                    connWreck = connWreck,
-                    face = engine.loadTexture(pack.facemap),
-                    facePath = pack.facemap }
+    handleCache = { conn = conn, connPath = connPath, face = face,
+                    facePath = facePath, connBuild = connBuild,
+                    connWreck = connWreck }
     return handleCache
 end
 
@@ -125,6 +151,10 @@ local WIRE_SHAPES = {
     "straight_ns", "straight_ew",
     "corner_ne", "corner_nw", "corner_se", "corner_sw",
     "tee_n", "tee_e", "tee_s", "tee_w", "cross",
+    -- #2516: the four riser appearances. Declared and registered like
+    -- any other, required with no fallback, and never chosen by
+    -- shapeFor: nothing places them yet.
+    "riser_n", "riser_e", "riser_s", "riser_w",
 }
 
 -- Declare the wire pack's per-shape art for UNPLACED pieces (#1842), so
@@ -148,10 +178,14 @@ function M.registerPackArt()
     local b = pack.build and pack.build.wire
     local art, construction, destruction = {}, {}, {}
     for _, name in ipairs(WIRE_SHAPES) do
-        if h.connPath[name] and h.facePath then
+        -- A connection with no facemap of its own is OMITTED, not given
+        -- another's: the engine's refusal then names the missing
+        -- connection, and there is no shared-map fallback (#2516).
+        if h.connPath[name] and h.facePath[name] then
             art[#art + 1] = { kind = "wire", shape = name,
                               texture = h.connPath[name], texHandle = h.conn[name],
-                              facemap = h.facePath, faceHandle = h.face }
+                              facemap = h.facePath[name],
+                              faceHandle = h.face[name] }
         end
         -- #2488: each connection's own sequence, keyed to that exact
         -- shape. A connection with none resolves none — a run being
@@ -211,11 +245,12 @@ local function placeSelf(gx, gy)
     local h = handles()
     local shape = shapeFor(neighborsAt(gx, gy))
     local tex, path = h.conn[shape], h.connPath[shape]
-    if not tex or not path then
+    local face, facePath = h.face[shape], h.facePath[shape]
+    if not tex or not path or not face or not facePath then
         return false, "wire connection texture pack failed to load"
     end
     local z = (world.getTerrainAt(gx, gy) or 0) + 1
-    local placed = structure.place(gx, gy, "wire", tex, h.face, z, path, h.facePath)
+    local placed = structure.place(gx, gy, "wire", tex, face, z, path, facePath)
     if not placed then
         return false, "no active world or unloaded target chunk"
     end

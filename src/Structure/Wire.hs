@@ -24,6 +24,9 @@ module Structure.Wire
     , wireShapeName
     , wireShapeFromName
     , allWireShapes
+    , allWireRisers
+    , allWireArtShapes
+    , isWireRiser
     , allWireNeighbors
     ) where
 
@@ -39,6 +42,12 @@ data WireShape
     | WireCornerNE | WireCornerNW | WireCornerSE | WireCornerSW
     | WireTeeN | WireTeeE | WireTeeS | WireTeeW
     | WireCross
+      -- | The four RISERS (#2516): a cable climbing one tile side's wall
+      --   face to the level above, named after that face. They are ART
+      --   appearances only. 'wireShapeFor' never returns one, so the
+      --   autotile never selects them; they are APPENDED so the sixteen
+      --   autotile shapes keep their positions.
+    | WireRiserN | WireRiserE | WireRiserS | WireRiserW
     deriving (Show, Eq, Ord, Enum, Bounded)
 
 -- | Which cardinal neighbours of a tile carry wire, in the engine's own
@@ -97,16 +106,34 @@ wireShapeName s = case s of
     WireTeeS        → "tee_s"
     WireTeeW        → "tee_w"
     WireCross       → "cross"
+    WireRiserN      → "riser_n"
+    WireRiserE      → "riser_e"
+    WireRiserS      → "riser_s"
+    WireRiserW      → "riser_w"
 
 -- | Parse a connection key. Exact, case-sensitively — the pack YAML's
 --   keys are data, and a lenient parse would silently accept art the
 --   placer would never ask for.
 wireShapeFromName ∷ Text → Maybe WireShape
 wireShapeFromName t =
-    lookup t [ (wireShapeName s, s) | s ← allWireShapes ]
+    lookup t [ (wireShapeName s, s) | s ← allWireArtShapes ]
 
+-- | The sixteen shapes the AUTOTILE can select — what 'wireShapeFor' can
+--   return and what a four-neighbour sweep covers.
 allWireShapes ∷ [WireShape]
-allWireShapes = [minBound .. maxBound]
+allWireShapes = [minBound .. WireCross]
+
+-- | The four riser appearances (#2516): art and declaration only.
+allWireRisers ∷ [WireShape]
+allWireRisers = [WireRiserN .. WireRiserW]
+
+-- | Every appearance the pack must declare art for: the sixteen
+--   autotile shapes and the four risers, each required with no fallback.
+allWireArtShapes ∷ [WireShape]
+allWireArtShapes = allWireShapes ⧺ allWireRisers
+
+isWireRiser ∷ WireShape → Bool
+isWireRiser = (≥ WireRiserN)
 
 -- | The full sixteen-element neighbour space, so a sweep cannot miss a
 --   combination.

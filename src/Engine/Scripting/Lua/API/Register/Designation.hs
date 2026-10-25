@@ -47,6 +47,8 @@ registerDesignationAPI callStats env = do
   registerLuaFunction callStats "structure" "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction callStats "structure" "hasAt"    (structureHasAtFn env)
   registerLuaFunction callStats "structure" "getAt"    (structureGetAtFn env)
+  registerLuaFunction callStats "structure" "drawnFacemap"
+                                                      (structureDrawnFacemapFn env)
   Lua.setglobal (Lua.Name "structure")
 
   -- Construction designation tool (#95). Mirrors the mine-designation

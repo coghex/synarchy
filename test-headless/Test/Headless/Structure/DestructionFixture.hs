@@ -37,6 +37,7 @@ module Test.Headless.Structure.DestructionFixture
     , wreckFps
     , wreckFramePathsFor
     , wreckSequenceFor
+    , wreckFaceFramePathsFor
     , wreckAppearances
       -- * The registrations
     , wreckVariantArt
@@ -57,7 +58,7 @@ import Engine.Asset.Handle (TextureHandle)
 
 import Structure.ArtCatalog
 import Structure.Facing (WallEdge(..))
-import Structure.Wire (WireShape(..), wireShapeName)
+import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
 
 import Test.Headless.Structure.ConstructionFixture
     ( allAppearances, artAsset, damagedVariant, fixtureRegistration
@@ -114,13 +115,24 @@ edgeCode ∷ WallEdge → Text
 edgeCode e = case e of
     WallNE → "ne"; WallNW → "nw"; WallSE → "se"; WallSW → "sw"
 
+-- | #2516: a Wire appearance's clip is PAIRED with a facemap per frame.
+wreckFaceFramePathsFor ∷ AppearanceKey → [Text]
+wreckFaceFramePathsFor ak = case (apSlot ak, wreckFrameCount ak) of
+    (ApWire _, Just n) →
+        [ slotPath (apSlot ak) <> "_breakface_" <> tshow i <> ".png"
+        | i ← [0 .. n - 1] ]
+    _ → []
+
 wreckSequenceFor ∷ AppearanceKey → Maybe DestructionSequence
 wreckSequenceFor ak = case wreckFramePathsFor ak of
     []     → Nothing
     frames → Just DestructionSequence
         { dsStatic = artAsset (staticPathFor ak)
         , dsFrames = V.fromList (map artAsset frames)
-        , dsFps    = wreckFps ak }
+        , dsFps    = wreckFps ak
+        , dsFacemaps = case wreckFaceFramePathsFor ak of
+            [] → Nothing
+            fs → Just (V.fromList (map artAsset fs)) }
 
 -- | Every appearance this fixture declares a clip for, in a fixed order.
 wreckAppearances ∷ [AppearanceKey]
@@ -174,7 +186,12 @@ wreckRegistration = fixtureRegistration
 
 wreckWireRegistration ∷ PackArtRegistration
 wreckWireRegistration = fixtureWireRegistration
-    { parDestruction = declaredWrecks [KWire] }
+    { parDestruction = declaredWrecks [KWire]
+    , parSizes = HM.union (parSizes fixtureWireRegistration) $ HM.fromList
+        [ (aaPath a, (96, 64))
+        | ak ← wreckAppearances, apSlot ak `elem` map ApWire allWireArtShapes
+        , Just ds ← [wreckSequenceFor ak]
+        , a ← V.toList (dsFrames ds) ⧺ maybe [] V.toList (dsFacemaps ds) ] }
 
 -- | Both packs, registered through the production entry point — so a
 --   fixture that violated the wall-family completeness rule fails here
@@ -194,7 +211,8 @@ wreckCatalog =
 wreckTexSizes ∷ HM.HashMap TextureHandle (Int, Int)
 wreckTexSizes = HM.union fixtureTexSizes $ HM.fromList
     [ (handleForPath path, fixtureFrameSize)
-    | ak ← wreckAppearances, path ← wreckFramePathsFor ak ]
+    | ak ← wreckAppearances
+    , path ← wreckFramePathsFor ak ⧺ wreckFaceFramePathsFor ak ]
 
 -- | The size 'fixtureTexSizes' reports for every construction image,
 --   restated here so a teardown frame and the sprite it replaces are

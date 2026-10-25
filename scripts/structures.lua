@@ -77,7 +77,8 @@ local function handles(variant)
                     -- appearance. An override's own list or none —
                     -- never the default's, which would show a variant
                     -- being built out of the default's art.
-                    build = frames.load(frames.declaredBy(variant, o, p)),
+                    build = frames.load(frames.declaredBy(variant, o, p),
+                                        frames.facesDeclaredBy(variant, o, p)),
                     -- #2491: the teardown clip for THIS appearance,
                     -- under the same never-inherited rule.
                     wreck = frames.loadDestruction(
@@ -104,7 +105,8 @@ local function handles(variant)
                        face = faces, facePath = facePaths,
                        ownTex = (variant == nil) or (o.texture ~= nil),
                        ownFace = ownFace,
-                       build = frames.load(frames.declaredBy(variant, o, w)),
+                       build = frames.load(frames.declaredBy(variant, o, w),
+                                        frames.facesDeclaredBy(variant, o, w)),
                        wreck = frames.loadDestruction(
                                    frames.destructionDeclaredBy(variant, o, w)) }
     end
