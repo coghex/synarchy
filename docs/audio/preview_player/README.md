@@ -24,7 +24,7 @@ menu cues against their in-game first playback, exercise sample decode failure,
 reload and shutdown. `Audio.PreviewUI` drives the shipped Lua pane and checks
 selection, reflow, controls, reload revision ordering and the required UI page
 arguments. Full local validation history is in
-[the implementation record](../../audio_implementation_progress.md).
+[the implementation record](../../archive/audio_implementation_progress.md).
 
 On 2026-09-11 the owner said the preview looked good and was ready for a PR.
 That approves the foundation/player delivery boundary. Physical listening and
