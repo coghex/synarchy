@@ -23,6 +23,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import random
@@ -74,7 +76,9 @@ def attribute(drift: frozenset, own: frozenset, unsplit: frozenset) -> dict:
         "own_own_first": len(unsplit & own),
         "drift_split": len((unsplit & drift) - own) + len(unsplit & drift & own) / 2,
         "own_split": len((unsplit & own) - drift) + len(unsplit & drift & own) / 2,
-        "union_error": (len(union) - n_unsplit) / n_unsplit if n_unsplit else 0.0,
+        # zero only when both are empty: a predicted build the unsplit replay never needed is a miss
+        "union_error": ((len(union) - n_unsplit) / n_unsplit if n_unsplit
+                        else (0.0 if not union else math.inf)),
     }
 
 
@@ -187,6 +191,15 @@ def tolerance_violations(rows: list[dict]) -> list[tuple[int, str, float]]:
     """(run, step group, relative error) wherever the union model misses the unsplit replay by over 5 %."""
     return [(r["run_id"], group, r[group]["attribution"]["union_error"]) for r in rows for group in GROUPS
             if abs(r[group]["attribution"]["union_error"]) > TOLERANCE]
+
+
+def exit_code(rows: list[dict]) -> int:
+    """Non-zero, with the offending runs on stderr, when the attribution model misses the 5 % gate."""
+    bad = tolerance_violations(rows)
+    if bad:
+        print(f"attribution model misses the unsplit replay by more than {TOLERANCE:.0%}: {bad}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def calibrate(rows: list[dict]) -> dict:
@@ -328,8 +341,16 @@ def self_test() -> int:
     assert (a["drift_own_first"], a["own_own_first"]) == (1, 2)
     for convention in (("drift", "own"), ("drift_own_first", "own_own_first"), ("drift_split", "own_split")):
         assert a[convention[0]] + a[convention[1]] + a["residual"] == a["unsplit"], (convention, a)
-    cancelled = attribute(frozenset({("lib", "A")}), frozenset(), frozenset())
-    assert cancelled["cancelled"] == 1 and cancelled["unsplit"] == 0 and cancelled["union_error"] == 0.0
+    both = attribute(frozenset(), frozenset(), frozenset())
+    assert both["union_error"] == 0.0
+    # a complete cancellation (the union predicts a build the unsplit replay never needed) must fail the gate
+    cancelled = attribute(frozenset({("lib", "A")}), frozenset({("lib", "A")}), frozenset())
+    assert cancelled["cancelled"] == 1 and cancelled["unsplit"] == 0 and cancelled["union_error"] == math.inf
+    row = {"run_id": 7, "lib_exe": {"attribution": cancelled}, "tests": {"attribution": both}}
+    assert tolerance_violations([row]) == [(7, "lib_exe", math.inf)]
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert exit_code([row]) == 1
+    assert exit_code([{"run_id": 8, "lib_exe": {"attribution": both}, "tests": {"attribution": both}}]) == 0
 
     fit = ols([(0, 10), (10, 30), (20, 50), (30, 70)])
     assert abs(fit["intercept"] - 10) < 1e-9 and abs(fit["slope"] - 2) < 1e-9 and fit["r2"] > 0.999999
@@ -498,11 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     opt = json.loads(args.opt.read_text()) if args.opt else None
     text = render(runs, plan, rows, fits, lanes, opt)
     (args.out.write_text(text) if args.out else print(text))
-    bad = tolerance_violations(rows)
-    if bad:
-        print(f"attribution model misses the unsplit replay by more than {TOLERANCE:.0%}: {bad}", file=sys.stderr)
-        return 1
-    return 0
+    return exit_code(rows)
 
 
 if __name__ == "__main__":
