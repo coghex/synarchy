@@ -63,10 +63,16 @@ Output is DETERMINISTIC (pure arithmetic and a hash-seeded generator,
 no PIL drawing primitives) — re-running reproduces the committed art
 bit-for-bit.
 
-Usage: python3 tools/make_wire_textures.py [--pins]
-  --pins   also (re)write the approved-content digest manifest
-           (test-headless/fixtures/wire_art_pins.txt); run it only after
-           the owner has approved the art.
+Usage: python3 tools/make_wire_textures.py [--yaml] [--pins]
+  (default) write every colour image and facemap
+  --yaml    also (re)write data/structure_packs/wire.yaml, the pack
+            declaration that names them. Off by default: the declaration's
+            schema (per-connection facemaps, paired lifecycle lists) needs
+            the loader that reads it, so a checkout whose loader predates it
+            must not have its tracked pack replaced by a plain rerun.
+  --pins    also (re)write the approved-content digest manifest
+            (test-headless/fixtures/wire_art_pins.txt); run it only after
+            the owner has approved the art.
 """
 from __future__ import annotations
 
@@ -574,6 +580,8 @@ def pixel_digest(img: Image.Image) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--yaml", action="store_true",
+                    help="also write data/structure_packs/wire.yaml")
     ap.add_argument("--pins", action="store_true",
                     help="write the approved-content digest manifest")
     args = ap.parse_args()
@@ -591,8 +599,9 @@ def main():
                 else f"{shape}/{stage}{idx}"
             pins.append(f"{tag}\tcolour\t{pixel_digest(colour)}")
             pins.append(f"{tag}\tfacemap\t{pixel_digest(face)}")
-    YAML.write_text(yaml_text())
-    print(f"wrote {YAML}")
+    if args.yaml:
+        YAML.write_text(yaml_text())
+        print(f"wrote {YAML}")
     if args.pins:
         PINS.parent.mkdir(parents=True, exist_ok=True)
         PINS.write_text(
