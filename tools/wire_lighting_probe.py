@@ -176,18 +176,30 @@ def measure(port: int, out: str, name: str, setup, teardown, anchor, zoom):
 
 
 def stocked_payer(port: int, x: int, y: int) -> int:
-    """A unit that really carries wiring: the technomule's starting kit has
-    twenty. Payment is checked by the callers, because an unpaid
-    designation draws the designation GHOST, not a construction frame, and
-    would pass every brightness assertion without exercising one."""
-    uid = int(float(send(port, f"return unit.spawn('technomule', {x}, {y})")))
+    """A unit that really carries wiring: any unit, given three `wiring`
+    items (as tools/wire_probe.py does). Payment is checked by the callers,
+    because an unpaid designation draws the designation GHOST, not a
+    construction frame, and would pass every brightness assertion without
+    exercising one."""
+    uid = -1
+    for _ in range(60):
+        uid = int(float(send(port, "local d = unit.listDefs();"
+                                   " if not d or #d == 0 then return -1 end;"
+                                   f" return unit.spawn(d[1], {x}, {y})") or -1))
+        if uid > 0:
+            break
+        time.sleep(0.5)
+    if uid <= 0:
+        sys.exit("unit.spawn never returned a unit")
+    for _ in range(3):
+        send(port, f"unit.addItem({uid}, 'wiring', 0); return 'ok'")
     for _ in range(60):
         have = send(port, f"local c = 0; for _, it in ipairs(unit.getInventory({uid}) or {{}}) do "
                           "if it.defName == 'wiring' then c = c + 1 end end; return c")
         if int(float(have or 0)) >= 3:
             return uid
         time.sleep(0.1)
-    sys.exit("the technomule never received its wiring")
+    sys.exit("the unit never received its wiring")
 
 
 def pay_and_progress(port: int, page: str, x: int, y: int, uid: int,
@@ -295,11 +307,12 @@ def main() -> int:
                                 " return 'ok'")
             for sx, sy in sites:
                 pay_and_progress(args.port, w, sx, sy, uid)
+            send(args.port, f"unit.destroy({uid}); return 'ok'")
 
         def clear_sites():
             for sx, sy in sites:
-                send(args.port, f"construction.cancelDesignation({sx}, {sy});"
-                                " return 'ok'")
+                send(args.port, f"construction.cancelDesignationForRefund("
+                                f"'{w}', {sx}, {sy}); return 'ok'")
         w = page
         rows, common = measure(args.port, args.out, "construction",
                                build_site, clear_sites, anchor, args.zoom)
@@ -319,11 +332,15 @@ def main() -> int:
             for x, y in wrun:
                 send(args.port, f"structure.clear({x}, {y}, 'wire');"
                                 " return 'ok'")
-            send(args.port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
-            set_paused(args.port, False, settle=0.0)
-            time.sleep(0.35)
-            set_paused(args.port, True)
-            send(args.port, f"world.setTimeScale('{w}', 0); return 'ok'")
+            # `engine.gameTime()` drives the clip (pause freezes it; the
+            # world time scale does not touch it): run it for 0.2 REAL
+            # seconds inside one console call, which lands mid-clip of
+            # the 0.5 s, five-frame destruction regardless of console
+            # latency.
+            send(args.port,
+                 "engine.setPaused(false); local t = engine.realTime();"
+                 " while engine.realTime() - t < 0.2 do end;"
+                 " engine.setPaused(true); return 'ok'", timeout=30.0)
         rows, common = measure(args.port, args.out, "destruction",
                                tear_down, lambda: None, anchor, args.zoom)
         judge("destruction (mid-clip)", rows, common, faces_split=False)

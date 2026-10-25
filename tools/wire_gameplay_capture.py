@@ -103,18 +103,30 @@ def shape(port: int, x: int, y: int):
 
 
 def stocked_payer(port: int, x: int, y: int) -> int:
-    """A unit that really carries wiring: the technomule's starting kit has
-    twenty. Payment is checked by the callers, because an unpaid
-    designation draws the designation GHOST, not a construction frame, and
-    would pass every brightness assertion without exercising one."""
-    uid = int(float(send(port, f"return unit.spawn('technomule', {x}, {y})")))
+    """A unit that really carries wiring: any unit, given three `wiring`
+    items (as tools/wire_probe.py does). Payment is checked by the callers,
+    because an unpaid designation draws the designation GHOST, not a
+    construction frame, and would pass every brightness assertion without
+    exercising one."""
+    uid = -1
+    for _ in range(60):
+        uid = int(float(send(port, "local d = unit.listDefs();"
+                                   " if not d or #d == 0 then return -1 end;"
+                                   f" return unit.spawn(d[1], {x}, {y})") or -1))
+        if uid > 0:
+            break
+        time.sleep(0.5)
+    if uid <= 0:
+        sys.exit("unit.spawn never returned a unit")
+    for _ in range(3):
+        send(port, f"unit.addItem({uid}, 'wiring', 0); return 'ok'")
     for _ in range(60):
         have = send(port, f"local c = 0; for _, it in ipairs(unit.getInventory({uid}) or {{}}) do "
                           "if it.defName == 'wiring' then c = c + 1 end end; return c")
         if int(float(have or 0)) >= 3:
             return uid
         time.sleep(0.1)
-    sys.exit("the technomule never received its wiring")
+    sys.exit("the unit never received its wiring")
 
 
 def pay_and_progress(port: int, page: str, x: int, y: int, uid: int,
@@ -224,11 +236,17 @@ def main() -> int:
                         f" {by}, 'structure', 'wire', 'wire'); return 'ok'")
         uid = stocked_payer(args.port, ax, ay - 3)
         pay_and_progress(args.port, page, bx, by, uid)
+        # The payer has done its job; leaving it standing would put a unit
+        # (and its selection ring) in every later frame.
+        send(args.port, f"unit.destroy({uid}); return 'ok'")
         shot("neighbour_1_neighbour_half_built",
              "the next tile paid and half built: its construction frame is "
              "drawn, the first tile is still a lone tile", (cx, cy), "neighbour")
-        send(args.port, f"construction.cancelDesignation({bx}, {by});"
-                        " return 'ok'")
+        # POP the paid job (what completion does) rather than cancel it:
+        # a cancel refunds the wiring as a ground item, which would show as
+        # a marker on the finished tile.
+        send(args.port, f"construction.cancelDesignationForRefund('{page}',"
+                        f" {bx}, {by}); return 'ok'")
         send(args.port, f"require('scripts.wire').place({bx}, {by});"
                         " return 'ok'")
         done = [shape(args.port, ax, ay), shape(args.port, bx, by)]
