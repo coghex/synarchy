@@ -40,8 +40,8 @@ def test_timeout_overrides_are_validated_registry_data() -> None:
     print("\n-- per-probe timeout defaults are validated registry data")
     expect(probe_runner_registry.timeout_override_problems() == [],
            "the shipped timeout declarations are valid")
-    expect(probe_runner_registry.effective_timeout("save_compat_migration") == 3600.0,
-           "save_compat_migration receives its declared 3600s default")
+    expect(probe_runner_registry.effective_timeout("save_compat_migration") == 5400.0,
+           "save_compat_migration receives its declared 5400s default")
     expect(probe_runner_registry.effective_timeout("expedition_loop") == 3600.0,
            "expedition_loop receives its declared 3600s default")
     expect(probe_runner_registry.DEFAULT_TIMEOUT == 900.0,
