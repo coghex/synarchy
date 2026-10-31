@@ -1191,9 +1191,10 @@ default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
 `probe_runner_registry.PROBE_TIMEOUT_OVERRIDES`; the runner prints each
 probe's effective
-budget when it starts or completes. `save_compat_migration` uses 3600 seconds
-because its manifest-wide two-process/two-real-codec-dump path has a measured
-clean runtime above 2300 seconds. Passing `--timeout SECONDS` explicitly
+budget when it starts or completes. `save_compat_migration` uses 5400 seconds
+because its manifest-wide two-process/two-real-codec-dump path took 3657 seconds
+with every manifest fixture loading after #2893/#2894. Passing
+`--timeout SECONDS` explicitly
 overrides both the ordinary and key-specific defaults for every selected probe,
 including solo retries. Keep short explicit values available for deliberate
 timeout-path testing; do not raise the global default to accommodate one
