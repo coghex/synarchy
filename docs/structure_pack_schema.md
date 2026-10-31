@@ -341,6 +341,20 @@ family's art for the SCREEN edge, so the construction sequence drawn is
 that edge's too — otherwise a turning camera would show one direction's
 build stages on another direction's wall.
 
+**Wire is the same discipline, keyed by connection (#2901).** A Wire
+piece's authored identity is its world connection shape; the sprite and
+facemap drawn are the connection variant `Structure.Facing.screenWireShape`
+picks for the camera facing (a tee names its missing side, an end its
+connected one, as everywhere), and the construction sequence and teardown
+clip drawn are that variant's too. Every pack must already declare all
+twenty Wire appearances' static art, so no direction can be absent there. A
+teardown clip is held to the wall rule per rotation ORBIT (the shapes a camera
+turn swaps between, e.g. `straight_ns`/`straight_ew`; the `cross` and
+`isolated` are their own orbits): declare every member or none, with the
+same frame count and fps, or the pack is refused — the effect's length and
+expiry are fixed from the shape captured at clear time. See
+`docs/engine_contracts.md` §Structure construction presentation.
+
 The frame INDEX must not change with the camera, which is what makes the
 equal-length rule a registration requirement rather than a convention. A
 direction the pack never declared simply stays absent (§7).

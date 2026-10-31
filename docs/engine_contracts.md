@@ -5926,6 +5926,34 @@ hspec `--match "Wire structure lifecycle art"` and `--match "Wire facemap
 integration"`; offscreen `tools/wire_lighting_probe.py`; fresh-process
 `tools/wire_art_save_probe.py`.
 
+**Wire follows the camera (#2901).** A Wire sprite is a fixed picture
+whose spokes run to fixed SCREEN positions, so the variant drawn is chosen
+from the SCREEN connections, never the world neighbours alone:
+`Structure.Facing.screenWireShape facing` (the wire counterpart of
+`screenWallEdge`, the same vertex permutation as `screenPostCorner`;
+`FaceWest` maps N→W, E→N, S→E, W→S, `FaceSouth` is the identity) turns the
+stored world shape into the drawn one. It is the ONE conversion and every
+wire draw path asks it: placed pieces (`Structure.ArtCatalog.drawnWireArt`
+— sprite AND facemap together — through `Structure.Render`'s placed-art
+override), hover/drag previews and unpaid designation ghosts
+(`World.Render.StructureGhost.resolveDrawnPieceArt`), construction frames
+(`constructionAppearanceAt`) and destruction clips (the CAPTURED appearance
+rotated in `World.Render.StructureDestruction`, never re-derived from the
+neighbours of a piece that is already gone). It is a draw-time mapping:
+the stored shape, the palette ids and paths, the plan context, the placer,
+`structure.wireShape` and saves are unchanged, so a pre-#2516 save is lit
+through the same override at every facing. A Wire teardown clip is
+registered per rotation ORBIT like a wall family (every member or none, the
+same frame count and fps), because the effect's length is fixed at capture.
+The frame index and playback
+clock are untouched, so turning the camera mid-build or mid-teardown
+neither resets nor skips a sequence. The four risers are declaration-only
+and `screenWireShape` leaves them alone; when something places one it needs
+this same mapping. `structure.drawnFacemap` follows the current camera
+facing. Gates: hspec `--match "Wire screen facing"`, `--match "Wire placed
+and destroyed facing"`, `--match "structure ghost"`; offscreen
+`tools/wire_facing_capture.py`.
+
 Saved designations carry no new field. Full schema, refusal table and
 ownership: [structure_pack_schema.md](structure_pack_schema.md). Gates:
 hspec `--match "structure construction frames"`, `--match "structure

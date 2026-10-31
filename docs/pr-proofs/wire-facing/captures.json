@@ -1,0 +1,220 @@
+{
+  "anchor": [
+    -9,
+    -9
+  ],
+  "captures": [
+    {
+      "scene": "straight",
+      "facing": "south",
+      "file": "straight_south.png",
+      "crop": "straight_south_x4.png",
+      "stored_shapes": {
+        "-9,-9": "end_e",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_w"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "end_e",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_w"
+      },
+      "shows": "a three-tile straight run (end, straight, end), camera facing south"
+    },
+    {
+      "scene": "straight",
+      "facing": "west",
+      "file": "straight_west.png",
+      "crop": "straight_west_x4.png",
+      "stored_shapes": {
+        "-9,-9": "end_e",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_w"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "end_n",
+        "-8,-9": "straight_ns",
+        "-7,-9": "end_s"
+      },
+      "shows": "a three-tile straight run (end, straight, end), camera facing west"
+    },
+    {
+      "scene": "straight",
+      "facing": "north",
+      "file": "straight_north.png",
+      "crop": "straight_north_x4.png",
+      "stored_shapes": {
+        "-9,-9": "end_e",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_w"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "end_w",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_e"
+      },
+      "shows": "a three-tile straight run (end, straight, end), camera facing north"
+    },
+    {
+      "scene": "straight",
+      "facing": "east",
+      "file": "straight_east.png",
+      "crop": "straight_east_x4.png",
+      "stored_shapes": {
+        "-9,-9": "end_e",
+        "-8,-9": "straight_ew",
+        "-7,-9": "end_w"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "end_s",
+        "-8,-9": "straight_ns",
+        "-7,-9": "end_n"
+      },
+      "shows": "a three-tile straight run (end, straight, end), camera facing east"
+    },
+    {
+      "scene": "corner",
+      "facing": "south",
+      "file": "corner_south.png",
+      "crop": "corner_south_x4.png",
+      "stored_shapes": {
+        "-9,-9": "corner_se",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "corner_se",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "shows": "an L: a corner tile with an arm east and an arm south, camera facing south"
+    },
+    {
+      "scene": "corner",
+      "facing": "west",
+      "file": "corner_west.png",
+      "crop": "corner_west_x4.png",
+      "stored_shapes": {
+        "-9,-9": "corner_se",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "corner_ne",
+        "-8,-9": "end_s",
+        "-9,-8": "end_w"
+      },
+      "shows": "an L: a corner tile with an arm east and an arm south, camera facing west"
+    },
+    {
+      "scene": "corner",
+      "facing": "north",
+      "file": "corner_north.png",
+      "crop": "corner_north_x4.png",
+      "stored_shapes": {
+        "-9,-9": "corner_se",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "corner_nw",
+        "-8,-9": "end_e",
+        "-9,-8": "end_s"
+      },
+      "shows": "an L: a corner tile with an arm east and an arm south, camera facing north"
+    },
+    {
+      "scene": "corner",
+      "facing": "east",
+      "file": "corner_east.png",
+      "crop": "corner_east_x4.png",
+      "stored_shapes": {
+        "-9,-9": "corner_se",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "corner_sw",
+        "-8,-9": "end_n",
+        "-9,-8": "end_e"
+      },
+      "shows": "an L: a corner tile with an arm east and an arm south, camera facing east"
+    },
+    {
+      "scene": "tee",
+      "facing": "south",
+      "file": "tee_south.png",
+      "crop": "tee_south_x4.png",
+      "stored_shapes": {
+        "-9,-9": "tee_n",
+        "-10,-9": "end_e",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "tee_n",
+        "-10,-9": "end_e",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "shows": "a tee: a centre tile joined west, east and south, camera facing south"
+    },
+    {
+      "scene": "tee",
+      "facing": "west",
+      "file": "tee_west.png",
+      "crop": "tee_west_x4.png",
+      "stored_shapes": {
+        "-9,-9": "tee_n",
+        "-10,-9": "end_e",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "tee_w",
+        "-10,-9": "end_n",
+        "-8,-9": "end_s",
+        "-9,-8": "end_w"
+      },
+      "shows": "a tee: a centre tile joined west, east and south, camera facing west"
+    },
+    {
+      "scene": "tee",
+      "facing": "north",
+      "file": "tee_north.png",
+      "crop": "tee_north_x4.png",
+      "stored_shapes": {
+        "-9,-9": "tee_n",
+        "-10,-9": "end_e",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "tee_s",
+        "-10,-9": "end_w",
+        "-8,-9": "end_e",
+        "-9,-8": "end_s"
+      },
+      "shows": "a tee: a centre tile joined west, east and south, camera facing north"
+    },
+    {
+      "scene": "tee",
+      "facing": "east",
+      "file": "tee_east.png",
+      "crop": "tee_east_x4.png",
+      "stored_shapes": {
+        "-9,-9": "tee_n",
+        "-10,-9": "end_e",
+        "-8,-9": "end_w",
+        "-9,-8": "end_n"
+      },
+      "drawn_facemaps": {
+        "-9,-9": "tee_e",
+        "-10,-9": "end_s",
+        "-8,-9": "end_n",
+        "-9,-8": "end_e"
+      },
+      "shows": "a tee: a centre tile joined west, east and south, camera facing east"
+    }
+  ]
+}
