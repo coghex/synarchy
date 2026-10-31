@@ -96,7 +96,6 @@ def main() -> int:
                                 " return 'ok'")
             stored = {f"{tx},{ty}": shape(args.port, tx, ty) for tx, ty in tiles}
             print(f"{name}: stored world shapes {stored}")
-            fixed = None
             for fi, fname in enumerate(FACINGS):
                 if fi:
                     send(args.port, "camera.rotateCW(); return 'ok'")
@@ -107,9 +106,10 @@ def main() -> int:
                 if not capture(args.port, path):
                     sys.exit(f"capture failed: {name} {fname}")
                 from PIL import Image
-                if fixed is None:
-                    fixed = locate(Image.open(path).convert("RGB"), (cx, cy))
-                crop = crop4x(path, fixed, half=110, fixed_centre=True)
+                # Framed on the cable itself at EACH facing: the run's
+                # screen position moves with the camera.
+                centre = locate(Image.open(path).convert("RGB"), (cx, cy))
+                crop = crop4x(path, centre, half=110, fixed_centre=True)
                 log.append({"scene": name, "facing": fname,
                             "file": os.path.basename(path),
                             "crop": os.path.basename(crop),
