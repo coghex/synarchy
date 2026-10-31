@@ -534,6 +534,18 @@ integrationSpec = describe "Wire facemap integration" $ do
                                                 , k ≢ AppearanceKey Nothing (ApWire w) ] })
                 ["wire", name, "every one must declare its own clip"]
 
+    it "refuses Wire construction sequences of different lengths within a \
+       \rotation orbit (#2901): turning the camera would change the stage" $ do
+        reg ← shippedWire
+        refused (mutateConstruction WireStraightEW
+                    (\cs → cs { csFrames = V.take 2 (csFrames cs)
+                              , csFacemaps = V.take 2 <$> csFacemaps cs }) reg)
+            ["wire", "straight_ns", "different lengths", "straight_ew: 2"]
+        -- a sibling that declares NO sequence stays absent, not refused
+        outcomeOf (reg { parFrames = [ e | e@(k, _) ← parFrames reg
+                                         , k ≢ AppearanceKey Nothing (ApWire WireStraightEW) ] })
+            `shouldBe` ArtRegistered
+
     it "accepts a lone Wire shape's clip without siblings: the cross is its \
        \own rotation orbit" $ do
         reg ← shippedWire

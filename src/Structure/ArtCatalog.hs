@@ -820,6 +820,29 @@ registerPackArt reg cat = case validate of
                                 | (e, n) ← sortOn (wallEdgeCode ∘ fst) lens ]
                            <> "), so one progress value would select \
                               \different stages at different facings"))
+        -- #2901: the same rule for wire. The sequence drawn is the
+        -- SCREEN variant's ('Structure.Facing.screenWireShape'), so the
+        -- connections one camera turn swaps between must run to the SAME
+        -- length or a fixed progress would select a different stage
+        -- after the turn. A connection the pack never declared stays
+        -- absent (requirement 8), so only the DECLARED members compare.
+        forM_ (M.toList wireLengths) $ \(variant, lens) →
+            forM_ wireRotationOrbits $ \orbit → do
+                let found = [ (w, n) | w ← orbit, Just n ← [lookup w lens] ]
+                when (S.size (S.fromList (map snd found)) > 1) $
+                    Left (fault (Just KWire)
+                            (appearanceKeyRole
+                               (AppearanceKey variant (ApWire (fromMaybe WireIsolated
+                                                                 (listToMaybe orbit))))
+                               <> " construction")
+                            Nothing
+                            ("these wire connections run to different \
+                             \lengths ("
+                               <> T.intercalate ", "
+                                    [ wireShapeName w <> ": " <> tshow n
+                                    | (w, n) ← found ]
+                               <> "), so one progress value would select \
+                                  \different stages at different facings"))
         let frameMap = M.fromList (parFrames reg)
         when (M.size frameMap ≢ length (parFrames reg)) $
             Left (fault Nothing "construction frames" Nothing
@@ -830,6 +853,9 @@ registerPackArt reg cat = case validate of
         wallLengths = M.fromListWith (++)
             [ (apVariant ak, [(e, V.length (csFrames cs))])
             | (ak, cs) ← parFrames reg, ApWall e ← [apSlot ak] ]
+        wireLengths = M.fromListWith (++)
+            [ (apVariant ak, [(w, V.length (csFrames cs))])
+            | (ak, cs) ← parFrames reg, ApWire w ← [apSlot ak] ]
 
     -- #2491's VARIANT inventory: every authored variant appearance and
     -- the sprite it is placed with. Shape checks only — a variant's
