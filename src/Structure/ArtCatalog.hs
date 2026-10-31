@@ -136,7 +136,8 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Facing
     (WallEdge(..), WallCaps(..), wallCapsCode, screenWireShape)
 import Structure.Types (StructureSlot(..))
-import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
+import Structure.Wire
+    (WireShape(..), wireShapeName, allWireArtShapes, allWireShapes)
 
 -- * Vocabulary
 
@@ -261,6 +262,15 @@ appearanceSlotRole s = case s of
 --   on screen by turning the camera ('Structure.Facing.screenWallEdge'
 --   is a bijection at every facing), which is why #2491 requires a
 --   declared destruction family to cover all of them.
+-- | The sets of wire connection shapes a camera turn can swap between
+--   ('Structure.Facing.screenWireShape' over every facing), each in
+--   ascending order. The autotile's sixteen shapes only; the risers do
+--   not rotate.
+wireRotationOrbits ∷ [[WireShape]]
+wireRotationOrbits = map S.toAscList $ S.toList $ S.fromList
+    [ S.fromList [ screenWireShape f w | f ← facings ] | w ← allWireShapes ]
+  where facings = [FaceSouth, FaceWest, FaceNorth, FaceEast]
+
 allWallEdges ∷ [WallEdge]
 allWallEdges = [minBound .. maxBound]
 
@@ -950,6 +960,40 @@ registerPackArt reg cat = case validate of
                                 | (e, (n, f)) ← M.toAscList named ]
                            <> "), so one elapsed time would select different \
                               \stages at different facings"))
+        -- #2901: a wire's teardown is drawn from the variant its SCREEN
+        -- connections pick ('Structure.Facing.screenWireShape'), while
+        -- the effect's frame count, fps and expiry are fixed from the
+        -- shape CAPTURED at clear time. So the shapes a camera turn can
+        -- swap between -- one rotation ORBIT -- are held to the wall
+        -- rule: declare every member or none, all with the same frame
+        -- count and fps. Otherwise a turn would truncate the clip (a
+        -- shorter sibling), run it past its drawn frames (a longer one)
+        -- or make it vanish (an undeclared one).
+        forM_ (M.toList wreckWires) $ \(variant, declared) → do
+            let named = M.fromList declared
+            forM_ wireRotationOrbits $ \orbit → do
+                let found = [ (w, v) | w ← orbit, Just v ← [M.lookup w named] ]
+                    role  = appearanceKeyRole
+                              (AppearanceKey variant (ApWire (headOr orbit)))
+                              <> " destruction"
+                    missing = [ w | w ← orbit, not (M.member w named) ]
+                unless (null found ∨ null missing) $
+                    Left (fault (Just KWire) role Nothing
+                            ("this wire declares destruction frames for \
+                             \some connections but not "
+                               <> T.intercalate ", " (map wireShapeName missing)
+                               <> "; a camera turn swaps between "
+                               <> T.intercalate ", " (map wireShapeName orbit)
+                               <> ", so every one must declare its own clip"))
+                when (S.size (S.fromList (map snd found)) > 1) $
+                    Left (fault (Just KWire) role Nothing
+                            ("these wire connections' clips disagree ("
+                               <> T.intercalate ", "
+                                    [ wireShapeName w <> ": " <> tshow n
+                                        <> " frame(s) at " <> tshow f <> " fps"
+                                    | (w, (n, f)) ← found ]
+                               <> "), so one elapsed time would select \
+                                  \different stages at different facings"))
         let wreckMap = M.fromList (parDestruction reg)
         when (M.size wreckMap ≢ length (parDestruction reg)) $
             Left (fault Nothing "destruction frames" Nothing
@@ -963,6 +1007,11 @@ registerPackArt reg cat = case validate of
         wreckWalls = M.fromListWith (++)
             [ (apVariant ak, [(e, (V.length (dsFrames ds), dsFps ds))])
             | (ak, ds) ← parDestruction reg, ApWall e ← [apSlot ak] ]
+        -- The same, for wire connections.
+        wreckWires = M.fromListWith (++)
+            [ (apVariant ak, [(w, (V.length (dsFrames ds), dsFps ds))])
+            | (ak, ds) ← parDestruction reg, ApWire w ← [apSlot ak] ]
+        headOr = fromMaybe WireIsolated ∘ listToMaybe
 
     -- #2516: one lifecycle sequence's facemap PAIRING, shared by the
     -- construction and destruction halves because the rule is the same

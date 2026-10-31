@@ -75,6 +75,9 @@ wreckFrameCount (AppearanceKey variant slot) = case (variant, slot) of
     (Nothing, ApWall _)        → Just 4
     (Nothing, ApWire WireCross)      → Just 6
     (Nothing, ApWire WireStraightNS) → Just 7
+    -- #2901: the two straights are one rotation orbit, so they declare
+    -- the same shape of clip (registration requires it).
+    (Nothing, ApWire WireStraightEW) → Just 7
     (Just v,  ApFloor) | v ≡ damagedVariant → Just 2
     _ → Nothing
 
@@ -89,6 +92,7 @@ wreckFps (AppearanceKey variant slot) = case (variant, slot) of
     (Nothing, ApWall _)        → 10
     (Nothing, ApWire WireCross)      → 15
     (Nothing, ApWire WireStraightNS) → 5
+    (Nothing, ApWire WireStraightEW) → 5
     (Just v,  ApFloor) | v ≡ damagedVariant → 6
     _ → 1
 
