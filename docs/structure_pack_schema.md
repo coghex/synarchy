@@ -347,7 +347,12 @@ facemap drawn are the connection variant `Structure.Facing.screenWireShape`
 picks for the camera facing (a tee names its missing side, an end its
 connected one, as everywhere), and the construction sequence and teardown
 clip drawn are that variant's too. Every pack must already declare all
-twenty Wire appearances, so no direction can be absent. See
+twenty Wire appearances' static art, so no direction can be absent there. A
+teardown clip is held to the wall rule per rotation ORBIT (the shapes a camera
+turn swaps between, e.g. `straight_ns`/`straight_ew`; the `cross` and
+`isolated` are their own orbits): declare every member or none, with the
+same frame count and fps, or the pack is refused — the effect's length and
+expiry are fixed from the shape captured at clear time. See
 `docs/engine_contracts.md` §Structure construction presentation.
 
 The frame INDEX must not change with the camera, which is what makes the
