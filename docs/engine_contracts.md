@@ -5942,7 +5942,10 @@ rotated in `World.Render.StructureDestruction`, never re-derived from the
 neighbours of a piece that is already gone). It is a draw-time mapping:
 the stored shape, the palette ids and paths, the plan context, the placer,
 `structure.wireShape` and saves are unchanged, so a pre-#2516 save is lit
-through the same override at every facing. The frame index and playback
+through the same override at every facing. A Wire teardown clip is
+registered per rotation ORBIT like a wall family (every member or none, the
+same frame count and fps), because the effect's length is fixed at capture.
+The frame index and playback
 clock are untouched, so turning the camera mid-build or mid-teardown
 neither resets nor skips a sequence. The four risers are declaration-only
 and `screenWireShape` leaves them alone; when something places one it needs
