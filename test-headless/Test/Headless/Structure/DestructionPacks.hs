@@ -195,6 +195,8 @@ wireLoadSpec = describe "the wire pack" $ do
             `shouldBe` Just (framesFor "wire_fx" "wire_cross" 4, 15)
         clipOf cat "wire" (appearance Nothing (ApWire WireStraightNS))
             `shouldBe` Just (framesFor "wire_fx" "wire_straight_ns" 3, 5)
+        clipOf cat "wire" (appearance Nothing (ApWire WireStraightEW))
+            `shouldBe` Just (framesFor "wire_fx" "wire_straight_ew" 3, 5)
         -- A connection that declares no clip resolves none.
         clipOf cat "wire" (appearance Nothing (ApWire WireTeeN))
             `shouldBe` Nothing
@@ -503,7 +505,10 @@ writeWirePack = do
 
 wireClips ∷ [(Text, (Int, Text))]
 wireClips = [ (wireShapeName WireCross, (4, "15"))
-            , (wireShapeName WireStraightNS, (3, "5")) ]
+            , (wireShapeName WireStraightNS, (3, "5"))
+              -- #2901: the other straight is the same rotation orbit and
+              -- must declare the same clip shape.
+            , (wireShapeName WireStraightEW, (3, "5")) ]
 
 -- | #2516: the facemap paired with each frame of a Wire clip.
 faceFramesFor ∷ Text → Text → Int → [Text]
@@ -532,7 +537,8 @@ writeFixtureImages pack = do
               ⧺ [ "wireface_" <> wireShapeName s | s ← [minBound .. maxBound] ]
     sequences = [ ("floor", 3), ("damaged_floor", 2) ]
               ⧺ [ ("wall_" <> e, 3) | e ← wallEdgeNames ]
-              ⧺ [ ("wire_cross", 4), ("wire_straight_ns", 3) ]
+              ⧺ [ ("wire_cross", 4), ("wire_straight_ns", 3)
+                , ("wire_straight_ew", 3) ]
 
 writeImageAt ∷ Text → IO ()
 writeImageAt path =

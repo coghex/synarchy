@@ -28,6 +28,7 @@ module Structure.Wire
     , allWireArtShapes
     , isWireRiser
     , allWireNeighbors
+    , wireShapeNeighbors
     ) where
 
 import UPrelude
@@ -142,3 +143,17 @@ allWireNeighbors =
     [ WireNeighbors n e s w
     | n ← [False, True], e ← [False, True]
     , s ← [False, True], w ← [False, True] ]
+
+-- | The WORLD connections a shape stands for — the inverse of
+--   'wireShapeFor' over the sixteen autotile shapes. 'Nothing' for the
+--   four risers: a riser is not a horizontal connection, so it has no
+--   neighbour set.
+--
+--   Derived by search over 'allWireNeighbors' rather than restated, so
+--   the rule has ONE spelling and this cannot drift from it
+--   ('wireShapeFor' is a bijection on the sixteen sets).
+wireShapeNeighbors ∷ WireShape → Maybe WireNeighbors
+wireShapeNeighbors s =
+    case [ n | n ← allWireNeighbors, wireShapeFor n ≡ s ] of
+        (n : _) → Just n
+        []      → Nothing

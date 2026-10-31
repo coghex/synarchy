@@ -91,7 +91,7 @@ import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
 import Structure.ArtCatalog
     ( ArtAsset(..), PieceArt(..), placedFacemapPath
-    , placedWireArt )
+    , placedWireTexture, drawnWireArt )
 import Structure.Facing
 import Structure.Palette (TexPalette, lookupPath)
 import Structure.Types
@@ -166,7 +166,7 @@ renderStructureQuadsScanned env ws facing zSlice effDepth tileAlpha = do
                             (camX, camY) = camPosition camera
                             (scanned, quads) =
                                 structureChunkQuadsScannedWith
-                                    (placedWireArt art) catalog palette
+                                    (drawnWireArt art facing) catalog palette
                                     handles lookupSlot texSizes facing zSlice
                                     effDepth tileAlpha worldSize vb camX camY
                                     chunks
@@ -376,7 +376,10 @@ structurePieceQuads = structurePieceQuadsWith noPlacedArtOverride
 --   shared @floorface.png@ facemap. The facemap Wire is lit with is a
 --   function of its SHAPE, which the persisted texture path identifies,
 --   so the catalogue re-derives it here instead of the save being
---   rewritten: no component migration, and a piece in an evicted chunk,
+--   rewritten (#2901 adds the sprite: the override is the art of the
+--   variant drawn at the CURRENT facing, so its sprite replaces the
+--   stored one wherever the camera has rotated the piece onto another
+--   variant): no component migration, and a piece in an evicted chunk,
 --   regenerated from the edit log, resolves the same way a resident one
 --   does.
 type PlacedArtOverride = Text → Maybe PieceArt
@@ -404,10 +407,21 @@ structurePieceQuadsWith override catalog palette handles lookupSlot texSizes
         (Just th, Just fh) →
             let texPath = lookupPath (spdTexId spd) palette
                 own     = placedFacemapPath override slot texPath
+                -- #2901: a Wire piece's sprite is chosen from its SCREEN
+                -- connections. The override answers with the art of the
+                -- variant drawn at this facing; its sprite replaces the
+                -- stored one only where that is a DIFFERENT sprite, so
+                -- a rotation that changes nothing (every 'FaceSouth'
+                -- piece) keeps the live handle the piece was stored
+                -- with, bit for bit.
+                drawnTex = placedWireTexture override slot texPath
+                texH     = case (drawnTex, texPath) of
+                    (Just a, Just p) | aaPath a ≢ p → aaHandle a
+                    _                               → th
             in structurePieceQuadsResolved catalog lookupSlot texSizes facing
                 zSlice effDepth (opaqueTint tileAlpha) gx gy slot
                 ResolvedPieceArt
-                    { rpaTexture     = th
+                    { rpaTexture     = texH
                     , rpaFacemap     = maybe fh aaHandle own
                     , rpaTexturePath = texPath
                     , rpaFacemapPath = maybe (lookupPath (spdFaceId spd) palette)

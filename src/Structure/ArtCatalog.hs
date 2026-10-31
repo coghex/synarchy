@@ -111,7 +111,9 @@ module Structure.ArtCatalog
     , missingConstructionMessage
     , appearanceForTexturePath
     , placedWireArt
+    , drawnWireArt
     , placedFacemapPath
+    , placedWireTexture
     , ambiguousAppearancePaths
     , ambiguousAppearanceMessage
     , resolveDestructionSequence
@@ -130,9 +132,12 @@ import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
-import Structure.Facing (WallEdge(..), WallCaps(..), wallCapsCode)
+import Engine.Graphics.Camera (CameraFacing(..))
+import Structure.Facing
+    (WallEdge(..), WallCaps(..), wallCapsCode, screenWireShape)
 import Structure.Types (StructureSlot(..))
-import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
+import Structure.Wire
+    (WireShape(..), wireShapeName, allWireArtShapes, allWireShapes)
 
 -- * Vocabulary
 
@@ -257,6 +262,15 @@ appearanceSlotRole s = case s of
 --   on screen by turning the camera ('Structure.Facing.screenWallEdge'
 --   is a bijection at every facing), which is why #2491 requires a
 --   declared destruction family to cover all of them.
+-- | The sets of wire connection shapes a camera turn can swap between
+--   ('Structure.Facing.screenWireShape' over every facing), each in
+--   ascending order. The autotile's sixteen shapes only; the risers do
+--   not rotate.
+wireRotationOrbits ∷ [[WireShape]]
+wireRotationOrbits = map S.toAscList $ S.toList $ S.fromList
+    [ S.fromList [ screenWireShape f w | f ← facings ] | w ← allWireShapes ]
+  where facings = [FaceSouth, FaceWest, FaceNorth, FaceEast]
+
 allWallEdges ∷ [WallEdge]
 allWallEdges = [minBound .. maxBound]
 
@@ -806,6 +820,29 @@ registerPackArt reg cat = case validate of
                                 | (e, n) ← sortOn (wallEdgeCode ∘ fst) lens ]
                            <> "), so one progress value would select \
                               \different stages at different facings"))
+        -- #2901: the same rule for wire. The sequence drawn is the
+        -- SCREEN variant's ('Structure.Facing.screenWireShape'), so the
+        -- connections one camera turn swaps between must run to the SAME
+        -- length or a fixed progress would select a different stage
+        -- after the turn. A connection the pack never declared stays
+        -- absent (requirement 8), so only the DECLARED members compare.
+        forM_ (M.toList wireLengths) $ \(variant, lens) →
+            forM_ wireRotationOrbits $ \orbit → do
+                let found = [ (w, n) | w ← orbit, Just n ← [lookup w lens] ]
+                when (S.size (S.fromList (map snd found)) > 1) $
+                    Left (fault (Just KWire)
+                            (appearanceKeyRole
+                               (AppearanceKey variant (ApWire (fromMaybe WireIsolated
+                                                                 (listToMaybe orbit))))
+                               <> " construction")
+                            Nothing
+                            ("these wire connections run to different \
+                             \lengths ("
+                               <> T.intercalate ", "
+                                    [ wireShapeName w <> ": " <> tshow n
+                                    | (w, n) ← found ]
+                               <> "), so one progress value would select \
+                                  \different stages at different facings"))
         let frameMap = M.fromList (parFrames reg)
         when (M.size frameMap ≢ length (parFrames reg)) $
             Left (fault Nothing "construction frames" Nothing
@@ -816,6 +853,9 @@ registerPackArt reg cat = case validate of
         wallLengths = M.fromListWith (++)
             [ (apVariant ak, [(e, V.length (csFrames cs))])
             | (ak, cs) ← parFrames reg, ApWall e ← [apSlot ak] ]
+        wireLengths = M.fromListWith (++)
+            [ (apVariant ak, [(w, V.length (csFrames cs))])
+            | (ak, cs) ← parFrames reg, ApWire w ← [apSlot ak] ]
 
     -- #2491's VARIANT inventory: every authored variant appearance and
     -- the sprite it is placed with. Shape checks only — a variant's
@@ -946,6 +986,40 @@ registerPackArt reg cat = case validate of
                                 | (e, (n, f)) ← M.toAscList named ]
                            <> "), so one elapsed time would select different \
                               \stages at different facings"))
+        -- #2901: a wire's teardown is drawn from the variant its SCREEN
+        -- connections pick ('Structure.Facing.screenWireShape'), while
+        -- the effect's frame count, fps and expiry are fixed from the
+        -- shape CAPTURED at clear time. So the shapes a camera turn can
+        -- swap between -- one rotation ORBIT -- are held to the wall
+        -- rule: declare every member or none, all with the same frame
+        -- count and fps. Otherwise a turn would truncate the clip (a
+        -- shorter sibling), run it past its drawn frames (a longer one)
+        -- or make it vanish (an undeclared one).
+        forM_ (M.toList wreckWires) $ \(variant, declared) → do
+            let named = M.fromList declared
+            forM_ wireRotationOrbits $ \orbit → do
+                let found = [ (w, v) | w ← orbit, Just v ← [M.lookup w named] ]
+                    role  = appearanceKeyRole
+                              (AppearanceKey variant (ApWire (headOr orbit)))
+                              <> " destruction"
+                    missing = [ w | w ← orbit, not (M.member w named) ]
+                unless (null found ∨ null missing) $
+                    Left (fault (Just KWire) role Nothing
+                            ("this wire declares destruction frames for \
+                             \some connections but not "
+                               <> T.intercalate ", " (map wireShapeName missing)
+                               <> "; a camera turn swaps between "
+                               <> T.intercalate ", " (map wireShapeName orbit)
+                               <> ", so every one must declare its own clip"))
+                when (S.size (S.fromList (map snd found)) > 1) $
+                    Left (fault (Just KWire) role Nothing
+                            ("these wire connections' clips disagree ("
+                               <> T.intercalate ", "
+                                    [ wireShapeName w <> ": " <> tshow n
+                                        <> " frame(s) at " <> tshow f <> " fps"
+                                    | (w, (n, f)) ← found ]
+                               <> "), so one elapsed time would select \
+                                  \different stages at different facings"))
         let wreckMap = M.fromList (parDestruction reg)
         when (M.size wreckMap ≢ length (parDestruction reg)) $
             Left (fault Nothing "destruction frames" Nothing
@@ -959,6 +1033,11 @@ registerPackArt reg cat = case validate of
         wreckWalls = M.fromListWith (++)
             [ (apVariant ak, [(e, (V.length (dsFrames ds), dsFps ds))])
             | (ak, ds) ← parDestruction reg, ApWall e ← [apSlot ak] ]
+        -- The same, for wire connections.
+        wreckWires = M.fromListWith (++)
+            [ (apVariant ak, [(w, (V.length (dsFrames ds), dsFps ds))])
+            | (ak, ds) ← parDestruction reg, ApWire w ← [apSlot ak] ]
+        headOr = fromMaybe WireIsolated ∘ listToMaybe
 
     -- #2516: one lifecycle sequence's facemap PAIRING, shared by the
     -- construction and destruction halves because the rule is the same
@@ -1417,12 +1496,24 @@ appearanceForTexturePath cat path = do
 --   'appearanceForTexturePath' is, and for any path that is not a
 --   DEFAULT Wire appearance's sprite.
 placedWireArt ∷ StructureArtCatalog → Text → Maybe PieceArt
-placedWireArt cat path = do
+placedWireArt cat = drawnWireArt cat FaceSouth
+
+-- | The registered art a PLACED Wire piece drawn with this static
+--   texture path is DRAWN with at @facing@ (#2901): the art of the
+--   screen variant 'Structure.Facing.screenWireShape' picks, so the
+--   sprite AND its lighting facemap travel together onto the shape
+--   whose spokes meet the neighbours' at the current camera. The path
+--   identifies the piece's stored WORLD shape; nothing is rewritten.
+--
+--   Silent in the same cases 'placedWireArt' is. At 'FaceSouth' it IS
+--   'placedWireArt'.
+drawnWireArt ∷ StructureArtCatalog → CameraFacing → Text → Maybe PieceArt
+drawnWireArt cat facing path = do
     (pack, ak) ← appearanceForTexturePath cat path
     guard (isNothing (apVariant ak))
     ApWire shape ← Just (apSlot ak)
     p ← HM.lookup pack (sacPacks cat)
-    M.lookup (AkWire shape) (pkArt p)
+    M.lookup (AkWire (screenWireShape facing shape)) (pkArt p)
 
 -- | The facemap a placed piece of this slot and texture path is drawn
 --   with, when the catalogue has its own answer (#2516). Only Wire has
@@ -1433,6 +1524,17 @@ placedFacemapPath ∷ (Text → Maybe PieceArt) → StructureSlot → Maybe Text
                   → Maybe ArtAsset
 placedFacemapPath override slot mTexPath
     | slot ≡ SWire = paFacemap ⊚ (mTexPath ⌦ override)
+    | otherwise    = Nothing
+
+-- | The sprite counterpart of 'placedFacemapPath' (#2901): the colour
+--   texture a placed Wire piece is drawn with, when the catalogue's
+--   facing-aware answer names one. Meaningful only against the
+--   'drawnWireArt' override; a different path than the stored one means
+--   the camera has rotated the piece onto another variant.
+placedWireTexture ∷ (Text → Maybe PieceArt) → StructureSlot → Maybe Text
+                  → Maybe ArtAsset
+placedWireTexture override slot mTexPath
+    | slot ≡ SWire = paTexture ⊚ (mTexPath ⌦ override)
     | otherwise    = Nothing
 
 -- | The destruction playback this pack declares for that exact

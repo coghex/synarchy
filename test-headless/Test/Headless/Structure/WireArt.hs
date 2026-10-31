@@ -516,6 +516,43 @@ integrationSpec = describe "Wire facemap integration" $ do
                     (\ds → ds { dsFacemaps = V.take 2 <$> dsFacemaps ds }) reg)
             ["wire", "cross", "5 entries", "2"]
 
+    it "refuses a Wire destruction family whose rotation siblings disagree or \
+       \are missing (#2901): a camera turn swaps between them" $ do
+        reg ← shippedWire
+        -- a shorter / longer sibling would truncate or outrun the clip
+        refused (mutateDestruction WireStraightEW
+                    (\ds → ds { dsFrames = V.take 3 (dsFrames ds)
+                              , dsFacemaps = V.take 3 <$> dsFacemaps ds }) reg)
+            ["wire", "straight_ns", "disagree", "straight_ew: 3 frame(s)"]
+        refused (mutateDestruction WireStraightEW
+                    (\ds → ds { dsFps = dsFps ds + 5 }) reg)
+            ["wire", "straight_ns", "disagree", "fps"]
+        -- an undeclared sibling would make the clip vanish when turned to
+        forM_ [ (WireCornerNE, "corner_ne"), (WireTeeS, "tee_s"), (WireEndW, "end_w") ] $
+          \(w, name) →
+            refused (reg { parDestruction = [ e | e@(k, _) ← parDestruction reg
+                                                , k ≢ AppearanceKey Nothing (ApWire w) ] })
+                ["wire", name, "every one must declare its own clip"]
+
+    it "refuses Wire construction sequences of different lengths within a \
+       \rotation orbit (#2901): turning the camera would change the stage" $ do
+        reg ← shippedWire
+        refused (mutateConstruction WireStraightEW
+                    (\cs → cs { csFrames = V.take 2 (csFrames cs)
+                              , csFacemaps = V.take 2 <$> csFacemaps cs }) reg)
+            ["wire", "straight_ns", "different lengths", "straight_ew: 2"]
+        -- a sibling that declares NO sequence stays absent, not refused
+        outcomeOf (reg { parFrames = [ e | e@(k, _) ← parFrames reg
+                                         , k ≢ AppearanceKey Nothing (ApWire WireStraightEW) ] })
+            `shouldBe` ArtRegistered
+
+    it "accepts a lone Wire shape's clip without siblings: the cross is its \
+       \own rotation orbit" $ do
+        reg ← shippedWire
+        outcomeOf (mutateDestruction WireCross
+                      (\ds → ds { dsFps = dsFps ds + 5 }) reg)
+            `shouldBe` ArtRegistered
+
     it "refuses an UNPAIRED Wire sequence: there is no shared-map fallback" $ do
         reg ← shippedWire
         refused (mutateConstruction WireCross (\cs → cs { csFacemaps = Nothing }) reg)

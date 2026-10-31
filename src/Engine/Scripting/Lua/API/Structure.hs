@@ -41,12 +41,15 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv, activeWorldPage, activeWorldState)
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Facing (WallEdge(..), WallCaps, wallCapsFromCode)
-import Structure.ArtCatalog (ArtAsset(..), placedWireArt, placedFacemapPath)
+import Structure.ArtCatalog (ArtAsset(..), drawnWireArt, placedFacemapPath)
 import Structure.Palette (internPath, lookupPath, TexPalette(..))
 import Structure.WallCatalog (WallArtEntry(..), registerWallFamily)
 import World.Types
@@ -548,7 +551,10 @@ structureGetAtFn env = do
 --   art change the stored id names the shared floor facemap and the
 --   drawn one is its shape's dedicated map. Computed by the render
 --   pass's own 'placedFacemapPath', so a headless probe asserts the
---   renderer's answer rather than a restatement of it.
+--   renderer's answer rather than a restatement of it. Since #2901 a
+--   Wire piece is drawn as the variant its SCREEN connections pick, so
+--   the answer follows the camera's current facing (identity at
+--   'FaceSouth').
 structureDrawnFacemapFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureDrawnFacemapFn env = do
     gxA   ← Lua.tointeger 1
@@ -570,11 +576,14 @@ structureDrawnFacemapFn env = do
                             pal ← Lua.liftIO $ readIORef (rhTexPaletteRef handoff)
                             art ← Lua.liftIO $
                                 readIORef (rhStructureArtCatalogRef handoff)
+                            cam ← Lua.liftIO $ readIORef
+                                    (rvCameraRef (toRenderViewCapability env))
                             let texPath = lookupPath (spdTexId spd) pal
                                 drawn = maybe (lookupPath (spdFaceId spd) pal)
                                               (Just ∘ aaPath)
-                                              (placedFacemapPath (placedWireArt art)
-                                                                 slot texPath)
+                                              (placedFacemapPath
+                                                  (drawnWireArt art (camFacing cam))
+                                                  slot texPath)
                             case drawn of
                                 Just p  → Lua.pushstring (TE.encodeUtf8 p)
                                 Nothing → Lua.pushnil

@@ -37,6 +37,8 @@ module Structure.Facing
     , screenWallEdge
     , screenPostCorner
     , authoredPostCorner
+    , screenWireNeighbors
+    , screenWireShape
     , isScreenFrontEdge
     , wallEdgeEnds
     , wallEdgeCanvasSpan
@@ -49,6 +51,8 @@ import UPrelude
 import qualified Data.Text as T
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Types (StructureSlot(..))
+import Structure.Wire
+    (WireNeighbors(..), WireShape, wireShapeFor, wireShapeNeighbors)
 
 -- | One of the tile diamond's four edges. As an AUTHORED value this
 --   names a physical world edge; as a SCREEN value it names the screen
@@ -124,6 +128,50 @@ authoredPostCorner FaceSouth c = c
 authoredPostCorner FaceWest  c = screenPostCorner FaceEast  c
 authoredPostCorner FaceNorth c = screenPostCorner FaceNorth c
 authoredPostCorner FaceEast  c = screenPostCorner FaceWest  c
+
+-- | World wire connections → the connections as the SCREEN shows them
+--   at @facing@ (#2901): a world neighbour on side @d@ is drawn on side
+--   @'screenSide' d@. The same permutation as 'screenPostCorner' — the
+--   cardinal neighbours N\/E\/S\/W sit on the tile's N\/E\/S\/W
+--   vertices' sides, so 'FaceWest' is @N → W → S → E → N@ and the others
+--   its square and cube — and for the same reason: it is what
+--   'World.Grid.applyFacing' does to a neighbour offset.
+--
+--   A wire sprite is a fixed picture whose spokes run to fixed screen
+--   positions, named for the world side they occupy at 'FaceSouth'.
+--   Choosing the sprite from the SCREEN connections is what keeps two
+--   neighbouring tiles' spokes meeting at every facing. 'FaceSouth' is
+--   the identity. The STORED shape stays world-relative; this is a
+--   draw-time mapping only.
+screenWireNeighbors ∷ CameraFacing → WireNeighbors → WireNeighbors
+screenWireNeighbors facing (WireNeighbors n e s w) =
+    WireNeighbors
+        { wnNorth = at CornerN, wnEast = at CornerE
+        , wnSouth = at CornerS, wnWest = at CornerW }
+  where
+    -- The screen side @c@ is lit when the world side that lands on it
+    -- is connected.
+    at c = case authoredPostCorner facing c of
+        CornerN → n
+        CornerE → e
+        CornerS → s
+        CornerW → w
+
+-- | The wire variant DRAWN for a world shape at @facing@: the sprite
+--   whose screen connections are the facing-rotated world ones. The one
+--   conversion every wire draw path uses — placed pieces, previews,
+--   designation ghosts, construction frames and destruction clips — the
+--   wire counterpart of 'screenWallEdge'. Identity at 'FaceSouth'.
+--
+--   The four risers (#2516) are not horizontal connections and are
+--   returned unchanged. They are declaration-only today (nothing places
+--   one); when risers are placed they need the same screen mapping —
+--   their darker camera-facing pair is a screen fact — and this is the
+--   function to extend.
+screenWireShape ∷ CameraFacing → WireShape → WireShape
+screenWireShape facing shape =
+    maybe shape (wireShapeFor ∘ screenWireNeighbors facing)
+                (wireShapeNeighbors shape)
 
 -- | Is this a SCREEN-front edge — the pair the #415 depth-strip path and
 --   the #418 billboard lift both act on? Takes a screen edge, never an

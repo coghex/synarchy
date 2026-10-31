@@ -51,7 +51,7 @@ import Structure.ArtCatalog
     , DestructionSequence(..), PieceArt(..), StructureArtCatalog
     , resolveDestructionSequence )
 import Structure.Destruction
-import Structure.Facing (wallEdgeOfSlot)
+import Structure.Facing (wallEdgeOfSlot, screenWireShape)
 import Structure.Render
     ( ResolvedPieceArt(..), opaqueTint, structurePieceQuadsResolved
     , translateQuad )
@@ -204,6 +204,13 @@ structureDestructionQuads art walls handles lookupSlot texSizes facing
                 { apSlot = ApWall (drawnWallEdge walls facing edge
                                       (pieceArtOf (sdeTexPath eff) texH
                                                   facePath faceH)) }
+        -- #2901: a wire's captured appearance is its WORLD shape; the
+        -- clip that plays is the one for the variant drawn at this
+        -- facing. Rotated from the capture, never re-derived from the
+        -- neighbours — the piece is already gone, so they would answer
+        -- for the wire left behind.
+        (ApWire shape, _, _) →
+            (sdeAppearance eff) { apSlot = ApWire (screenWireShape facing shape) }
         _ → sdeAppearance eff
 
     pieceArtOf texPath texH facePath faceH =
