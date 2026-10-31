@@ -351,7 +351,10 @@ twenty Wire appearances' static art, so no direction can be absent there. A
 teardown clip is held to the wall rule per rotation ORBIT (the shapes a camera
 turn swaps between, e.g. `straight_ns`/`straight_ew`; the `cross` and
 `isolated` are their own orbits): declare every member or none, with the
-same frame count and fps, or the pack is refused — the effect's length and
+same frame count and fps, or the pack is refused. A construction sequence is
+held to the same-length half of that rule among the members it DECLARES (an
+undeclared one stays absent), so a fixed progress selects the same stage after
+a camera turn — the effect's length and
 expiry are fixed from the shape captured at clear time. See
 `docs/engine_contracts.md` §Structure construction presentation.
 
