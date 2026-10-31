@@ -1171,7 +1171,7 @@ applyTagSeed seed snap0 =
             iid ← seededId i
             Right (appendEditTo x y (WeSetFloraState x y iid z u v var h a) page)
         SeedCropPlot pg x y sp d h → onFloraPage pg snap $ \page →
-            Right page { pgsCropPlots = HM.insert (x, y) (CropPlot (FloraByName sp) d h)
+            Right page { pgsCropPlots = HM.insert (x, y) (CropPlot (FloraByName sp) d h Nothing)
                                                   (pgsCropPlots page) }
         SeedHarvest pg i secs → onFloraPage pg snap $ \page → do
             iid ← seededId i

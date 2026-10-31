@@ -107,7 +107,7 @@ spec = do
                             (GroundItems 2 (HM.singleton 1
                                 (GroundItem richItem 3.5 4.5))) } ]
                 bytes = S.encode legacy
-            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7]
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8]
             forM_ [1, 2] $ \ver → do
                 mv ← expectDecode ("v" ⧺ show ver)
                           (ccDecode worldActivityCodec ver bytes)

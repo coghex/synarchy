@@ -488,10 +488,17 @@ identity scheme (#2547):
   identifies a plant within its owning page, so a cross-page consumer must keep
   the page qualification beside it.
 - **A groundcover plot is keyed by its canonical `CropPlots` tile**, again
-  within its owning page, **until EFM-6 decides replacement identity**. A plot is
-  not a plant: `cropPlotInstance` synthesizes a `FloraInstance` carrying the
-  reserved `floraInstanceIdNone`, and that zero must **never** become an
-  occurrence key.
+  within its owning page, and **owns its condition as part of its value**
+  (#2552, EFM-6). A plot is not a plant: `cropPlotInstance` synthesizes a
+  `FloraInstance` carrying the reserved `floraInstanceIdNone`, and that zero
+  must **never** become an occurrence key, so a plot's condition is NOT an
+  entry of the identity-keyed condition store. It is the optional
+  `cpCondition` of the plot — the same shared record, with no crop-specific
+  fields — and its lifetime is the plot's: the harvest delete discards it and
+  a plot planted on the emptied tile starts without one, so a replacement plot
+  never inherits the old death and no separate replacement identity is
+  needed. `World.Flora.ConditionQuery` is the single page-qualified query over
+  both owners.
 
 `FloraInstanceId` has two disjoint namespaces, distinguished by one bit:
 

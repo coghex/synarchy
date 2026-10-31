@@ -4292,6 +4292,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z19-flora-condition-store.expected.json"
         }
       ]
+    },
+    {
+      "id": "z20-crop-plot-condition",
+      "description": "The #2552 shape (world-activity v8): every groundcover crop plot carries an optional embedded condition (CropPlotDTO.cpiCondition). The session is generated through a real headless engine with a planted groundcover crop plot (wheat) on tilled soil; a live session has no public verb that marks a plot dead yet (EFM-7), so the plot's condition is absent here and the populated v8 shape is pinned by the 'crop plot condition persistence' hspec group. v1-v7 payloads stay tracked by the earlier baselines and migrate to unconditioned plots.",
+      "declaredAt": "2026-10-31",
+      "declaredByIssue": 2552,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z20-crop-plot-condition",
+          "path": "test-headless/data/save-compat/z20-crop-plot-condition.bin",
+          "kind": "complete-session",
+          "sha256": "a2fb306af118e2c9ce97732e39f80f1c57d1198482e2493b864bb92d390a6479",
+          "sizeBytes": 905533,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml') if not fs then return false end local ps={} for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end table.sort(ps) for _,p in ipairs(ps) do engine.loadFloraYaml(p) end return flora.exists('wheat') end)(), settled 2.0s and held until `(function() local p='generated_page' local site=nil for gy=-32,32 do for gx=-32,32 do if site==nil then local s=world.getSlopeAt(gx,gy) local f=world.getFluidAt(gx,gy) if s==0 and (f==nil or f=='') and world.getFloraAt(gx,gy)==nil then site={gx,gy} end end end end if site==nil then return false end if not world.isPlantable(site[1],site[2]) then local z=world.getSurfaceAt(site[1],site[2]) world.setVegAt(p,site[1],site[2],z,77) end if world.isPlantable(site[1],site[2]) and world.getCropPlotAt(site[1],site[2])==nil then world.plantCropAt(site[1],site[2],'wheat') end return world.getCropPlotAt(site[1],site[2])~=nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z20-crop-plot-condition.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

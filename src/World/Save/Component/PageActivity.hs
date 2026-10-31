@@ -31,7 +31,10 @@
 --   - 'ChopDesignation'     → 'ChopDesignationDTO'
 --   - 'TillDesignation'     → 'TillDesignationDTO'
 --   - 'PlantDesignation'    → 'PlantDesignationDTO'
---   - 'CropPlot'            → 'CropPlotDTO'
+--   - 'CropPlot'            → 'CropPlotDTO' (#2552: with its optional
+--                             embedded 'FloraConditionDTO'; the
+--                             three-field v6/v7 shape is frozen as
+--                             'CropPlotDTOv2')
 --   - 'GroundItem'/'GroundItems' → 'GroundItemDTO'/'GroundItemsDTO', its
 --                             nested 'ItemInstance' frozen recursively via
 --                             'ItemInstanceDTO' (whose optional storage
@@ -76,6 +79,7 @@ module World.Save.Component.PageActivity
     , PlantDesignationDTOv1(..)
     , CropPlotDTO(..)
     , CropPlotDTOv1(..)
+    , CropPlotDTOv2(..)
       -- * Frozen item / ground-item / spoil DTOs
     , ItemStorageDTO(..)
     , ItemInstanceDTO(..)
@@ -106,6 +110,8 @@ module World.Save.Component.PageActivity
     , WorldActivityDTOv5(..)
     , PageActivityDTOv6(..)
     , WorldActivityDTOv6(..)
+    , PageActivityDTOv7(..)
+    , WorldActivityDTOv7(..)
       -- * Flora condition records (#2549)
     , FloraConditionDTO(..)
     , FloraRetentionDTO(..)
@@ -155,7 +161,8 @@ import World.Plant.Types
     , SavedPlantDesignations )
 import World.Spoil.Types (SpoilPile(..), SpoilPiles)
 import World.Flora.CropPlot
-    ( CropPlotOf(..), SavedCropPlot, SavedCropPlots )
+    ( CropPlotOf(..), CropConditionProblem(..), SavedCropPlot
+    , SavedCropPlots, cropConditionProblems, renderCropConditionProblem )
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
 import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Save.Snapshot (PageSnapshot(..))
@@ -398,11 +405,32 @@ migratePlantDesignationDTOv1 d =
     PlantDesignationDTO (pti1Z d) (FloraByLegacyId (pti1Crop d))
 
 -- | Frozen mirror of 'World.Flora.CropPlot.SavedCropPlot' — the CURRENT
---   (@world-activity@ v6) shape. See 'PlantDesignationDTO' above.
+--   (@world-activity@ v8) shape. See 'PlantDesignationDTO' above.
+--
+--   #2552 appended the optional embedded condition. It reuses the v7
+--   'FloraConditionDTO' wire record verbatim — a groundcover plot's
+--   condition is the same record a wild or row occurrence has, and the
+--   same vocabulary-as-index discipline applies, so an out-of-vocabulary
+--   tag decodes and is refused by 'validateWorldActivity' naming the page
+--   and the plot's tile. The three-field shape every v6 and v7 payload
+--   carries is frozen as 'CropPlotDTOv2'.
 data CropPlotDTO = CropPlotDTO
     { cpiSpecies    ∷ !FloraRef
     , cpiPlantedDay ∷ !Int
     , cpiHealth     ∷ !Float
+    , cpiCondition  ∷ !(Maybe FloraConditionDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN pre-#2552 crop plot (@world-activity@ v6 and v7): the
+--   durable-'FloraRef' three-field shape verbatim. Every retained v6 and
+--   v7 page wrapper nests THIS, never the current four-field
+--   'CropPlotDTO' — freezing a wrapper while leaving its nested crop type
+--   pointing at the live DTO would silently re-read old bytes as the new
+--   layout.
+data CropPlotDTOv2 = CropPlotDTOv2
+    { cpi2Species    ∷ !FloraRef
+    , cpi2PlantedDay ∷ !Int
+    , cpi2Health     ∷ !Float
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The FROZEN pre-#2243 crop plot (@world-activity@ v1–v5, and the v90
@@ -414,15 +442,41 @@ data CropPlotDTOv1 = CropPlotDTOv1
     } deriving (Show, Eq, Generic, Serialize)
 
 toCropPlotDTO ∷ SavedCropPlot → CropPlotDTO
-toCropPlotDTO c = CropPlotDTO (cpSpecies c) (cpPlantedDay c) (cpHealth c)
+toCropPlotDTO c = CropPlotDTO
+    { cpiSpecies    = cpSpecies c
+    , cpiPlantedDay = cpPlantedDay c
+    , cpiHealth     = cpHealth c
+    , cpiCondition  = toFloraConditionDTO <$> cpCondition c
+    }
 
+-- | Total on a validated payload: 'validateWorldActivity' has refused any
+--   plot whose condition does not decode, so the @Nothing@ arm of the
+--   decode is unreachable there. It is not a silent repair — an
+--   unvalidated caller would LOSE the condition, which is why the
+--   component validates before it applies.
 fromCropPlotDTO ∷ CropPlotDTO → SavedCropPlot
-fromCropPlotDTO d = CropPlot (cpiSpecies d) (cpiPlantedDay d) (cpiHealth d)
+fromCropPlotDTO d = CropPlot
+    { cpSpecies    = cpiSpecies d
+    , cpPlantedDay = cpiPlantedDay d
+    , cpHealth     = cpiHealth d
+    , cpCondition  = cpiCondition d
+                        ≫= either (const Nothing) Just ∘ fromFloraConditionDTO
+    }
 
--- | v1 → current (#2243).
-migrateCropPlotDTOv1 ∷ CropPlotDTOv1 → CropPlotDTO
-migrateCropPlotDTOv1 d = CropPlotDTO
+-- | v1 → v2 (#2243): the legacy ordinal becomes a durable reference.
+migrateCropPlotDTOv1 ∷ CropPlotDTOv1 → CropPlotDTOv2
+migrateCropPlotDTOv1 d = CropPlotDTOv2
     (FloraByLegacyId (cpi1Species d)) (cpi1PlantedDay d) (cpi1Health d)
+
+-- | v2 → current (#2552): no earlier payload recorded a plot's death, so
+--   every migrated plot carries no condition.
+migrateCropPlotDTOv2 ∷ CropPlotDTOv2 → CropPlotDTO
+migrateCropPlotDTOv2 d = CropPlotDTO
+    { cpiSpecies    = cpi2Species d
+    , cpiPlantedDay = cpi2PlantedDay d
+    , cpiHealth     = cpi2Health d
+    , cpiCondition  = Nothing
+    }
 
 -- | Frozen mirror of 'Item.Types.ItemStorage' — a portable item's
 --   INTERNAL weight + bulk capacities (#1233). Frozen rather than reused
@@ -819,7 +873,8 @@ data PageActivityDTO = PageActivityDTO
       --   is one-per-tile by construction and never coexists with wild
       --   'FloraInstance's on the same tile (tilled soil excludes
       --   natural flora placement), so it has no co-tenancy to
-      --   disambiguate.
+      --   disambiguate. #2552 (v8): each plot may carry its own embedded
+      --   condition ('cpiCondition'), whose lifetime is the plot's.
     , padGroundItems   ∷ !GroundItemsDTO
     , padSpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , padPendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
@@ -846,11 +901,39 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN pre-#2552 activity slice (@world-activity@ v7): the v7
+--   shape verbatim — everything the current slice carries, with the crop
+--   plots still in their three-field 'CropPlotDTOv2' form. Its nested
+--   records are the CURRENT leaf and non-leaf DTOs other than the crop
+--   plot, which #2552 does change; the next change to any of them must
+--   freeze the one it changes, as #2243 and #2552 did.
+data PageActivityDTOv7 = PageActivityDTOv7
+    { pad7PageId        ∷ !WorldPageId
+    , pad7Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad7Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad7Chop          ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
+    , pad7Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad7Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad7FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
+    , pad7CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTOv2)
+    , pad7GroundItems   ∷ !GroundItemsDTO
+    , pad7SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , pad7PendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+    , pad7PendingHarvests ∷ !FloraHarvestsDTOv1
+    , pad7ConstructNextAttempt ∷ !ConstructAttemptId
+    , pad7FloraConditions ∷ !(HM.HashMap FloraInstanceId FloraConditionDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv7 =
+    WorldActivityDTOv7 { wad7Pages ∷ [PageActivityDTOv7] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | The FROZEN pre-#2549 activity slice (@world-activity@ v6): the v6
 --   shape verbatim — everything the current slice carries but the
---   condition store. Its nested records are the CURRENT leaf and
---   non-leaf DTOs, which #2549 does not change; the next change to
---   any of them must freeze the one it changes, as #2243 did.
+--   condition store. Its nested records were the then-current leaf and
+--   non-leaf DTOs; its crop plots are the three-field 'CropPlotDTOv2'
+--   since #2552 changed the live 'CropPlotDTO'.
 data PageActivityDTOv6 = PageActivityDTOv6
     { pad6PageId        ∷ !WorldPageId
     , pad6Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
@@ -859,7 +942,7 @@ data PageActivityDTOv6 = PageActivityDTOv6
     , pad6Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , pad6Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
     , pad6FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
-    , pad6CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad6CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTOv2)
     , pad6GroundItems   ∷ !GroundItemsDTO
     , pad6SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , pad6PendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
@@ -1063,25 +1146,46 @@ migratePageActivityV5 s = PageActivityDTOv6
 --   store starts EMPTY: no earlier payload recorded a death, and
 --   'fgDead' is derived from the lifespan clock, not state, so there is
 --   nothing to carry.
-migratePageActivityV6 ∷ PageActivityDTOv6 → PageActivityDTO
-migratePageActivityV6 s = PageActivityDTO
-    { padPageId               = pad6PageId s
-    , padMine                 = pad6Mine s
-    , padConstruct            = pad6Construct s
-    , padChop                 = pad6Chop s
-    , padTill                 = pad6Till s
-    , padPlant                = pad6Plant s
-    , padFloraHarvests        = pad6FloraHarvests s
-    , padCropPlots            = pad6CropPlots s
-    , padGroundItems          = pad6GroundItems s
-    , padSpoilPiles           = pad6SpoilPiles s
-    , padPendingChop          = pad6PendingChop s
-    , padPendingHarvests      = pad6PendingHarvests s
-    , padConstructNextAttempt = pad6ConstructNextAttempt s
-    , padFloraConditions      = HM.empty
+migratePageActivityV6 ∷ PageActivityDTOv6 → PageActivityDTOv7
+migratePageActivityV6 s = PageActivityDTOv7
+    { pad7PageId               = pad6PageId s
+    , pad7Mine                 = pad6Mine s
+    , pad7Construct            = pad6Construct s
+    , pad7Chop                 = pad6Chop s
+    , pad7Till                 = pad6Till s
+    , pad7Plant                = pad6Plant s
+    , pad7FloraHarvests        = pad6FloraHarvests s
+    , pad7CropPlots            = pad6CropPlots s
+    , pad7GroundItems          = pad6GroundItems s
+    , pad7SpoilPiles           = pad6SpoilPiles s
+    , pad7PendingChop          = pad6PendingChop s
+    , pad7PendingHarvests      = pad6PendingHarvests s
+    , pad7ConstructNextAttempt = pad6ConstructNextAttempt s
+    , pad7FloraConditions      = HM.empty
     }
 
--- | v1/v2 → v7: every designation map crosses unchanged and each ground
+-- | v7 → v8 (#2552). Every field crosses unchanged, including the v7
+--   occurrence condition store, and every crop plot migrates with NO
+--   condition: no earlier payload recorded a plot's death.
+migratePageActivityV7 ∷ PageActivityDTOv7 → PageActivityDTO
+migratePageActivityV7 s = PageActivityDTO
+    { padPageId               = pad7PageId s
+    , padMine                 = pad7Mine s
+    , padConstruct            = pad7Construct s
+    , padChop                 = pad7Chop s
+    , padTill                 = pad7Till s
+    , padPlant                = pad7Plant s
+    , padFloraHarvests        = pad7FloraHarvests s
+    , padCropPlots            = HM.map migrateCropPlotDTOv2 (pad7CropPlots s)
+    , padGroundItems          = pad7GroundItems s
+    , padSpoilPiles           = pad7SpoilPiles s
+    , padPendingChop          = pad7PendingChop s
+    , padPendingHarvests      = pad7PendingHarvests s
+    , padConstructNextAttempt = pad7ConstructNextAttempt s
+    , padFloraConditions      = pad7FloraConditions s
+    }
+
+-- | v1/v2 → v8: every designation map crosses unchanged and each ground
 --   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
 --   for why). #1175's v1 canonical-frame repair is deliberately NOT done
 --   here — 'applyWorldActivity' re-keys for EVERY accepted version, so
@@ -1090,37 +1194,47 @@ migratePageActivityV6 s = PageActivityDTO
 migrateWorldActivityV2 ∷ WorldActivityDTOv2 → WorldActivityDTO
 migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
     WorldActivityDTO
-        (map (migratePageActivityV6 . migratePageActivityV5
+        (map (migratePageActivityV7 . migratePageActivityV6
+                                    . migratePageActivityV5
                                     . migratePageActivityV4
                                     . migratePageActivityV3
                                     . migratePageActivityV2)
              slices)
 
--- | v3 → v7: see 'migratePageActivityV3' onward.
+-- | v3 → v8: see 'migratePageActivityV3' onward.
 migrateWorldActivityV3 ∷ WorldActivityDTOv3 → WorldActivityDTO
 migrateWorldActivityV3 (WorldActivityDTOv3 slices) =
-    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5
+    WorldActivityDTO (map (migratePageActivityV7 . migratePageActivityV6
+                                                 . migratePageActivityV5
                                                  . migratePageActivityV4
                                                  . migratePageActivityV3)
                           slices)
 
--- | v4 → v7: see 'migratePageActivityV4' onward.
+-- | v4 → v8: see 'migratePageActivityV4' onward.
 migrateWorldActivityV4 ∷ WorldActivityDTOv4 → WorldActivityDTO
 migrateWorldActivityV4 (WorldActivityDTOv4 slices) =
-    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5
+    WorldActivityDTO (map (migratePageActivityV7 . migratePageActivityV6
+                                                 . migratePageActivityV5
                                                  . migratePageActivityV4)
                           slices)
 
--- | v5 → v7: see 'migratePageActivityV5' and 'migratePageActivityV6'.
+-- | v5 → v8: see 'migratePageActivityV5' onward.
 migrateWorldActivityV5 ∷ WorldActivityDTOv5 → WorldActivityDTO
 migrateWorldActivityV5 (WorldActivityDTOv5 slices) =
-    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5)
+    WorldActivityDTO (map (migratePageActivityV7 . migratePageActivityV6
+                                                 . migratePageActivityV5)
                           slices)
 
--- | v6 → v7: see 'migratePageActivityV6'.
+-- | v6 → v8: see 'migratePageActivityV6' and 'migratePageActivityV7'.
 migrateWorldActivityV6 ∷ WorldActivityDTOv6 → WorldActivityDTO
 migrateWorldActivityV6 (WorldActivityDTOv6 slices) =
-    WorldActivityDTO (map migratePageActivityV6 slices)
+    WorldActivityDTO
+        (map (migratePageActivityV7 . migratePageActivityV6) slices)
+
+-- | v7 → v8: see 'migratePageActivityV7'.
+migrateWorldActivityV7 ∷ WorldActivityDTOv7 → WorldActivityDTO
+migrateWorldActivityV7 (WorldActivityDTOv7 slices) =
+    WorldActivityDTO (map migratePageActivityV7 slices)
 
 -- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
@@ -1160,6 +1274,7 @@ validateWorldActivity (WorldActivityDTO slices) = concat
       , gid ≥ gisiNextId (padGroundItems s)
       ]
     , floraConditionErrors slices
+    , cropConditionErrors slices
     ]
   where
     firstGroundItemId = gisNextId emptyGroundItems
@@ -1188,6 +1303,34 @@ floraConditionErrors slices =
         Left vocabulary → [ ReservedKey | isFloraInstanceIdNone key ]
                           ⧺ vocabulary
         Right record    → conditionRecordProblems key record
+    ]
+
+-- | #2552: the component-local validity of every groundcover plot's
+--   embedded condition, each refusal naming the page and the plot's
+--   tile AS STORED in the payload key. Validation runs before
+--   'applyWorldActivity' canonicalises anything, and v2+ payloads
+--   already promise canonical keys, so no re-canonicalisation is needed
+--   here. A condition is judged on the same terms as an occurrence's
+--   (a vocabulary tag outside its vocabulary, a stored condition that is
+--   not dead, an expiry day before the begin day, a successor that
+--   contradicts the render context) plus what only a plot can be asked:
+--   that the context is @cultivated@ and that the record's own species
+--   and tile agree with the plot that carries them.
+--
+--   Sorted by tile so the diagnostics are deterministic rather than in
+--   hash order.
+cropConditionErrors ∷ [PageActivityDTO] → [ComponentError]
+cropConditionErrors slices =
+    [ ComponentError worldActivityComponentId 8 ValidatePhase
+        ("page '" <> unWorldPageId (padPageId s) <> "': crop plot \
+         \condition (tile " <> tshow tile <> "): "
+         <> renderCropConditionProblem problem)
+    | s ← slices
+    , (tile, plot) ← L.sortOn fst (HM.toList (padCropPlots s))
+    , Just dto ← [cpiCondition plot]
+    , problem ← case fromFloraConditionDTO dto of
+        Left vocabulary → map CropConditionShape vocabulary
+        Right record    → cropConditionProblems tile (cpiSpecies plot) record
     ]
 
 -- | v2 (#1175) is a SEMANTIC bump, not a shape change: the wire layout
@@ -1227,16 +1370,23 @@ floraConditionErrors slices =
 --   condition store ('padFloraConditions'). v6's own layout is frozen as
 --   'PageActivityDTOv6', every older version reaches v7 through it, and
 --   each migrates to an EMPTY store — no earlier payload recorded a death.
+--   v8 (#2552) is the fifth: a groundcover crop plot carries an optional
+--   embedded condition. v7's own layout is frozen as 'PageActivityDTOv7'
+--   and its crop plots as 'CropPlotDTOv2' — which v6's frozen page also
+--   nests, so neither retained wrapper reads its crops as the new
+--   four-field shape — and every older version reaches v8 through it,
+--   each plot migrating with no condition.
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 7
+    , csVersion       = 8
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 6 migrateWorldActivityV6
+    , csOlderVersions = [ atVersion 7 migrateWorldActivityV7
+                        , atVersion 6 migrateWorldActivityV6
                         , atVersion 5 migrateWorldActivityV5
                         , atVersion 4 migrateWorldActivityV4
                         , atVersion 3 migrateWorldActivityV3

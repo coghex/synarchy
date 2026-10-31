@@ -61,6 +61,7 @@ module World.Flora.Condition
       -- * Record validity
     , ConditionProblem(..)
     , conditionRecordProblems
+    , recordShapeProblems
     , renderConditionProblem
       -- * Wire vocabulary
     , VocabTag
@@ -232,9 +233,17 @@ data ConditionProblem
 -- | Every reason the record is not valid, in a stable order.
 conditionRecordProblems
     ∷ FloraInstanceId → FloraConditionRecordOf s → [ConditionProblem]
-conditionRecordProblems key r = concat
-    [ [ ReservedKey | isFloraInstanceIdNone key ]
-    , [ NotAStoredCondition | fcrCondition r ≢ ConditionDead ]
+conditionRecordProblems key r =
+    [ ReservedKey | isFloraInstanceIdNone key ] ⧺ recordShapeProblems r
+
+-- | The key-INDEPENDENT validity of a record: everything
+--   'conditionRecordProblems' judges except the occurrence key. A
+--   groundcover plot (#2552) embeds the same record under a TILE key
+--   rather than an instance id, so it cannot be asked 'ReservedKey' and
+--   judges the record on exactly these terms, in the same order.
+recordShapeProblems ∷ FloraConditionRecordOf s → [ConditionProblem]
+recordShapeProblems r = concat
+    [ [ NotAStoredCondition | fcrCondition r ≢ ConditionDead ]
     , [ PhaseDeadAtDeath | fcrPhase r ≡ Just PhaseDead ]
     , case fcrRetention r of
         RetentionPersistent → []

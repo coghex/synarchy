@@ -147,6 +147,8 @@ module World.Save.Component.Page
     , WorldActivityDTOv5(..)
     , PageActivityDTOv6(..)
     , WorldActivityDTOv6(..)
+    , PageActivityDTOv7(..)
+    , WorldActivityDTOv7(..)
     , FloraConditionDTO(..)
     , FloraRetentionDTO(..)
     , toFloraConditionDTO
@@ -194,6 +196,7 @@ module World.Save.Component.Page
     , PlantDesignationDTOv1(..)
     , CropPlotDTO(..)
     , CropPlotDTOv1(..)
+    , CropPlotDTOv2(..)
     , ItemStorageDTO(..)
     , ItemInstanceDTO(..)
     , ItemInstanceDTOv1(..)

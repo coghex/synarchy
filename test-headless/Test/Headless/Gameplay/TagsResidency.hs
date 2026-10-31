@@ -218,7 +218,7 @@ regeneratedChunkC ∷ LoadedChunk
 regeneratedChunkC = chunkWith chunkC [plant farTile oakId farOak]
 
 wheatPlot ∷ CropPlot
-wheatPlot = CropPlot cropId 0 1.0
+wheatPlot = CropPlot cropId 0 1.0 Nothing
 
 -- | One page, both chunks resident, one wheat plot, nothing tagged.
 newPage ∷ IO WorldState
@@ -742,7 +742,7 @@ sessionSpec = describe "whole-session save and load" $ do
             -- A plot naming a species this build does not know: the load
             -- is refused before anything is published.
             let broken = snap { snapPages = HM.adjust
-                    (\p → p { pgsCropPlots = HM.map (\cp → cp { cpSpecies = FloraByName "no_such_crop" })
+                    (\p → p { pgsCropPlots = HM.map (\cp → cp { cpSpecies = FloraByName "no_such_crop", cpCondition = Nothing })
                                                      (pgsCropPlots p) })
                     pageP (snapPages snap) }
             (logger, _) ← capturingLogger
@@ -786,7 +786,7 @@ capturedSession env = do
             { pgsPageTags = capturePageTags pt store
             , pgsEdits = edits
             , pgsPlantedFloraCursor = cursor
-            , pgsCropPlots = HM.map (\cp → cp { cpSpecies = FloraByName "res_wheat" })
+            , pgsCropPlots = HM.map (\cp → cp { cpSpecies = FloraByName "res_wheat", cpCondition = Nothing })
                                     (cpsPlots store)
             , pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid)
             , pgsDateYear = 1, pgsDateMonth = 1, pgsDateDay = 1 }

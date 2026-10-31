@@ -430,7 +430,7 @@ dropping the in-progress stamp.
   immunity key would make removing one infection definition reject every
   save in which any surviving unit still holds un-decayed immunity to
   it, while the wound case needs a unit that is infected right now.
-- A saved **flora condition record** (#2549, `world-activity` v7) names
+- A saved **flora condition record** (#2549, `world-activity` v7; carried unchanged by v8) names
   its species by authored name, so a record for a species the loading
   build lacks fails the load exactly like any other flora reference
   (`missingFloraReferences`) — including a record for a wild occurrence
@@ -442,6 +442,17 @@ dropping the in-progress stamp.
   malformed (reserved key, a tag outside its vocabulary, an expiry before
   its begin day, a successor that contradicts its render context) is a
   hard error naming the page and key.
+- A groundcover plot's **embedded condition** (#2552, `world-activity` v8)
+  rides inside the plot value, so its species is converted by the same
+  `traverseCropPlotSpecies` step as the plot's own and a condition naming a
+  species the loading build lacks fails the load as a `crop plot condition`
+  reference. It is judged at the component boundary on the same terms as an
+  occurrence's record plus two that only a plot can be asked — the context
+  is `cultivated`, and the record's species and tile agree with the plot
+  carrying it — each refusal naming the page and the plot's tile as stored
+  in the payload key. v6 and v7 keep the frozen three-field crop shape and
+  every earlier retained layout its original legacy species form; every
+  older plot migrates with no condition.
 - Producing placeholder textures and changing renderer fallback
   behavior are tracked separately (out of scope here); this contract
   only defines their effect on load *validity*, which is: none, for
@@ -539,6 +550,9 @@ marker; the bump does not replace the component migration above.
 `currentSaveVersion` was bumped to 109 for #2548's new optional
 `relation-causes` component; the bump marks the in-memory `SaveData` bridge
 gaining `sdRelationCauses` and, as above, replaces no component migration.
+`currentSaveVersion` was bumped to 110 for #2552's `WorldPageSave` layout
+change (`wpsCropPlots` values gain the optional condition); as above, the
+`world-activity` v7 → v8 migration is the compatibility mechanism.
 
 ## 5. Format-version policy
 

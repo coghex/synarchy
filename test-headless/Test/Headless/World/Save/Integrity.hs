@@ -215,15 +215,15 @@ namedPageSave = pageSaveWith
     (HM.singleton (ChunkCoord 0 0)
         [ WePlaceFloraRef 11 12 (FloraByName "tomato_plant") 4 0.5
               (plantedFloraInstanceId 1) ])
-    (HM.singleton (13, 14) (CropPlot (FloraByName "wheat") 5 0.9))
+    (HM.singleton (13, 14) (CropPlot (FloraByName "wheat") 5 0.9 Nothing))
     (HM.singleton (15, 16) (PlantDesignation 0 (FloraByName "wheat")))
 unknownCropPlotSave = pageSaveWith emptyWorldEdits
-    (HM.singleton (13, 14) (CropPlot (FloraByName "moonpetal") 5 0.9))
+    (HM.singleton (13, 14) (CropPlot (FloraByName "moonpetal") 5 0.9 Nothing))
     HM.empty
 unknownPlantDesignationSave = pageSaveWith emptyWorldEdits HM.empty
     (HM.singleton (15, 16) (PlantDesignation 0 (FloraByName "moonpetal")))
 legacyOrdinalSave = pageSaveWith emptyWorldEdits
-    (HM.singleton (13, 14) (CropPlot (FloraByLegacyId (FloraId 99)) 5 0.9))
+    (HM.singleton (13, 14) (CropPlot (FloraByLegacyId (FloraId 99)) 5 0.9 Nothing))
     HM.empty
 
 minimalBuilding ∷ BuildingInstanceSnapshot
@@ -1352,7 +1352,7 @@ spec = do
            \-- today's semantics applied one last time (D-2)" $ do
             let save = pageSaveWith emptyWorldEdits
                            (HM.singleton (13, 14)
-                               (CropPlot (FloraByLegacyId wheatIdA) 5 0.9))
+                               (CropPlot (FloraByLegacyId wheatIdA) 5 0.9 Nothing))
                            HM.empty
             missingFloraReferences shippedCatalog [(page1, save)]
                 `shouldBe` []
@@ -1360,7 +1360,7 @@ spec = do
                  (resolveFloraReferences shippedCatalog page1
                       emptyWorldEdits
                       (HM.singleton (13, 14)
-                          (CropPlot (FloraByLegacyId wheatIdA) 5 0.9))
+                          (CropPlot (FloraByLegacyId wheatIdA) 5 0.9 Nothing))
                       HM.empty HM.empty)
                 `shouldBe` Right [wheatIdA]
 
@@ -1376,7 +1376,7 @@ spec = do
             let liveEdits = HM.singleton (ChunkCoord 0 0)
                     [ WePlaceFloraWithId 11 12 tomatoIdA 4 0.5
                           (plantedFloraInstanceId 1) ]
-                liveCrops = HM.singleton (13, 14) (CropPlot wheatIdA 5 0.9)
+                liveCrops = HM.singleton (13, 14) (CropPlot wheatIdA 5 0.9 Nothing)
                 livePlants = HM.singleton (15, 16)
                                  (PlantDesignation 0 wheatIdA)
             case nameFloraReferences shippedCatalog page1
@@ -1430,7 +1430,7 @@ spec = do
                     HM.empty HM.empty HM.empty
                 atCrop = nameFloraReferences shippedCatalog page1
                     emptyWorldEdits
-                    (HM.singleton (13, 14) (CropPlot unknownId 5 0.9))
+                    (HM.singleton (13, 14) (CropPlot unknownId 5 0.9 Nothing))
                     HM.empty HM.empty
                 atPlant = nameFloraReferences shippedCatalog page1
                     emptyWorldEdits HM.empty

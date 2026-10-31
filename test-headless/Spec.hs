@@ -345,6 +345,7 @@ import qualified Test.Headless.World.Chop.Selection as ChopSelection
 import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.Chop.TagPolicy as ChopTagPolicy
 import qualified Test.Headless.World.FloraCondition as FloraCondition
+import qualified Test.Headless.World.CropPlotCondition as CropPlotCondition
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.FloraOrder as FloraOrder
 import qualified Test.Headless.World.FloraRenderContext as FloraRenderContext
@@ -1343,6 +1344,8 @@ restLane = do
     FloraIdentity.engineSpec
     FloraCondition.spec
     aroundAll withHeadlessEngine FloraCondition.engineSpec
+    CropPlotCondition.spec
+    aroundAll withHeadlessEngine CropPlotCondition.engineSpec
     FloraRenderContext.spec
     describe "World.CropPlant" CropPlant.spec
     describe "World.CropPlant (engine)" CropPlant.engineSpec

@@ -468,7 +468,7 @@ richPage = PageSnapshot
       -- durable reference sites, all three naming the same species so a
       -- round trip that mixed them up is visible.
     , pgsCropPlots    = HM.singleton (11, 12)
-                            (CropPlot (FloraByName "wheat") 5 0.9)
+                            (CropPlot (FloraByName "wheat") 5 0.9 Nothing)
     , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.singleton (13, 14)
                             (PlantDesignation 0 (FloraByName "wheat"))
