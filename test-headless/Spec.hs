@@ -354,6 +354,7 @@ import qualified Test.Headless.World.StructurePaletteResidue as StructurePalette
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
 import qualified Test.Headless.Structure.ConstructionFrames as StructureConstructionFrames
 import qualified Test.Headless.Structure.WireArt as StructureWireArt
+import qualified Test.Headless.Structure.WireFacing as StructureWireFacing
 import qualified Test.Headless.Structure.ConstructionPacks as StructureConstructionPacks
 import qualified Test.Headless.Structure.DestructionFrames as StructureDestructionFrames
 import qualified Test.Headless.Structure.DestructionPacks as StructureDestructionPacks
@@ -1364,6 +1365,7 @@ restLane = do
     StructureArtCatalog.spec
     StructureConstructionFrames.spec
     StructureWireArt.spec
+    StructureWireFacing.spec
     StructureConstructionPacks.spec
     StructureDestructionFrames.spec
     StructureDestructionPacks.spec

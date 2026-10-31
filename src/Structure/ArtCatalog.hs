@@ -111,7 +111,9 @@ module Structure.ArtCatalog
     , missingConstructionMessage
     , appearanceForTexturePath
     , placedWireArt
+    , drawnWireArt
     , placedFacemapPath
+    , placedWireTexture
     , ambiguousAppearancePaths
     , ambiguousAppearanceMessage
     , resolveDestructionSequence
@@ -130,7 +132,9 @@ import qualified Data.Set as S
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
-import Structure.Facing (WallEdge(..), WallCaps(..), wallCapsCode)
+import Engine.Graphics.Camera (CameraFacing(..))
+import Structure.Facing
+    (WallEdge(..), WallCaps(..), wallCapsCode, screenWireShape)
 import Structure.Types (StructureSlot(..))
 import Structure.Wire (WireShape(..), wireShapeName, allWireArtShapes)
 
@@ -1417,12 +1421,24 @@ appearanceForTexturePath cat path = do
 --   'appearanceForTexturePath' is, and for any path that is not a
 --   DEFAULT Wire appearance's sprite.
 placedWireArt ∷ StructureArtCatalog → Text → Maybe PieceArt
-placedWireArt cat path = do
+placedWireArt cat = drawnWireArt cat FaceSouth
+
+-- | The registered art a PLACED Wire piece drawn with this static
+--   texture path is DRAWN with at @facing@ (#2901): the art of the
+--   screen variant 'Structure.Facing.screenWireShape' picks, so the
+--   sprite AND its lighting facemap travel together onto the shape
+--   whose spokes meet the neighbours' at the current camera. The path
+--   identifies the piece's stored WORLD shape; nothing is rewritten.
+--
+--   Silent in the same cases 'placedWireArt' is. At 'FaceSouth' it IS
+--   'placedWireArt'.
+drawnWireArt ∷ StructureArtCatalog → CameraFacing → Text → Maybe PieceArt
+drawnWireArt cat facing path = do
     (pack, ak) ← appearanceForTexturePath cat path
     guard (isNothing (apVariant ak))
     ApWire shape ← Just (apSlot ak)
     p ← HM.lookup pack (sacPacks cat)
-    M.lookup (AkWire shape) (pkArt p)
+    M.lookup (AkWire (screenWireShape facing shape)) (pkArt p)
 
 -- | The facemap a placed piece of this slot and texture path is drawn
 --   with, when the catalogue has its own answer (#2516). Only Wire has
@@ -1433,6 +1449,17 @@ placedFacemapPath ∷ (Text → Maybe PieceArt) → StructureSlot → Maybe Text
                   → Maybe ArtAsset
 placedFacemapPath override slot mTexPath
     | slot ≡ SWire = paFacemap ⊚ (mTexPath ⌦ override)
+    | otherwise    = Nothing
+
+-- | The sprite counterpart of 'placedFacemapPath' (#2901): the colour
+--   texture a placed Wire piece is drawn with, when the catalogue's
+--   facing-aware answer names one. Meaningful only against the
+--   'drawnWireArt' override; a different path than the stored one means
+--   the camera has rotated the piece onto another variant.
+placedWireTexture ∷ (Text → Maybe PieceArt) → StructureSlot → Maybe Text
+                  → Maybe ArtAsset
+placedWireTexture override slot mTexPath
+    | slot ≡ SWire = paTexture ⊚ (mTexPath ⌦ override)
     | otherwise    = Nothing
 
 -- | The destruction playback this pack declares for that exact

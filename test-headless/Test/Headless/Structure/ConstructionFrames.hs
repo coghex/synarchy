@@ -50,7 +50,7 @@ import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
 import Structure.Facing
-    (WallCaps(..), WallEdge(..), screenWallEdge, rotateWallCaps)
+    (WallCaps(..), WallEdge(..), screenWallEdge, screenWireShape, rotateWallCaps)
 import Structure.Palette (emptyTexPalette, internPath)
 import Structure.WallCatalog
     ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
@@ -741,12 +741,29 @@ absenceSpec ∷ Spec
 absenceSpec = describe "a paid designation whose appearance declares no \
                        \frames" $ do
     it "draws nothing at all, at every progress and every facing" $
-        forM_ [ w | w ← allWireArtShapes, w `notElem` framedWireShapes ] $ \shape →
-            forM_ allFacings $ \facing →
+        -- #2901: what a wire draws is its SCREEN variant, so absence is
+        -- judged on the shape DRAWN at that facing, not the world one.
+        forM_ [ (w, facing) | w ← allWireArtShapes, facing ← allFacings
+              , screenWireShape facing w `notElem` framedWireShapes ] $
+          \(shape, facing) →
                 forM_ [0.0, 0.5, 1.0] $ \progress → do
                     let sp = StructurePiece fixtureWirePack "wire" Nothing
                         ge = wireEnvFor facing (paidAt sp progress) shape
                     snd (structureConstructionGhosts ge) `shouldSatisfy` V.null
+
+    it "draws the frames of the shape DRAWN at that facing, whatever the \
+       \world shape (#2901)" $
+        forM_ [ (w, facing) | w ← allWireArtShapes, facing ← allFacings
+              , screenWireShape facing w `elem` framedWireShapes ] $
+          \(shape, facing) → do
+            let sp = StructurePiece fixtureWirePack "wire" Nothing
+                ge = wireEnvFor facing (paidAt sp 0.5) shape
+                want = framePathsFor
+                    (AppearanceKey Nothing (ApWire (screenWireShape facing shape)))
+                    !! 3
+            L.nub (map sqTexture
+                      (V.toList (snd (structureConstructionGhosts ge))))
+                `shouldBe` [handleForPath want]
 
     it "draws its declared frames for a shape that HAS them, so the \
        \absence above is a declaration difference and not a dead pass" $

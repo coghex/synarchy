@@ -57,6 +57,7 @@ module World.Render.StructureGhost
     , structureConstructionGhosts
     , structurePreviewGhosts
     , constructionAppearanceAt
+    , resolveDrawnPieceArt
     , drawnWallEdge
     ) where
 
@@ -72,17 +73,19 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec4)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
     ( AppearanceKey(..), AppearanceSlot(..), ArtAsset(..)
-    , PieceArt(..), PieceArtContext(..), resolveConstructionFramePair )
-import Structure.Facing (WallEdge, screenWallEdge)
+    , PieceArt(..), PieceArtContext(..), resolveConstructionFramePair
+    , resolveUnplacedArt )
+import Structure.Facing (WallEdge, screenWallEdge, screenWireShape)
 import Structure.Render
     ( ResolvedPieceArt(..), opaqueTint, structurePieceQuadsResolved
     , translateQuad )
 import Structure.Types (StructureSlot)
+import Structure.Wire (WireShape)
 import Structure.WallCatalog (StructureWallCatalog, rotatedWallArt)
 import World.Construct.Art (structureCommittedAt)
 import World.Construct.Plan
     ( PlanOp(..), PlanOutcome(..), PlanResult(..), PlanWorld(..)
-    , resolvePlanPieceArt, resolveStructurePlan, structurePieceArtContext
+    , resolveStructurePlan, structurePieceArtContext
     , structurePieceSlot, structurePieceWallEdge )
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
@@ -143,7 +146,7 @@ ghostQuadsWith ∷ GhostEnv
 ghostQuadsWith ge lifecycle tint piece tile@(gx, gy) pr = fromMaybe [] $ do
     slot   ← prSlot pr
     gridZ  ← prFinalZ pr
-    art    ← resolvePlanPieceArt (gePlan ge) piece tile
+    art    ← resolveDrawnPieceArt (geFacing ge) (gePlan ge) piece tile
     mFrame ← case lifecycle of
         Nothing → pure Nothing
         Just f  → Just <$> f art
@@ -296,7 +299,13 @@ structureConstructionGhosts ge
 --   is the one thing the shared-rotation discipline exists to prevent.
 --
 --   A wire's variant comes from the shared plan context, so a run being
---   built resolves the same connection shape the placer will use.
+--   built resolves the same connection shape the placer will use — and
+--   (#2901) is then the variant DRAWN at @facing@, the one whose screen
+--   spokes are the facing-rotated world connections
+--   ('Structure.Facing.screenWireShape'), so the frames are the same
+--   appearance's the static sprite is drawn as. The frame INDEX and
+--   progress are untouched, so turning the camera mid-build neither
+--   resets nor skips the sequence.
 constructionAppearanceAt
     ∷ PlanWorld → StructureWallCatalog → CameraFacing → StructurePiece
     → (Int, Int) → PieceArt → Maybe AppearanceKey
@@ -307,9 +316,32 @@ constructionAppearanceAt pw catalog facing piece tile art =
         "post"    → Just ApPost
         "wall"    → Just (ApWall (drawnWallEdge catalog facing
                                       (structurePieceWallEdge piece) art))
-        "wire"    → Just (ApWire (pacWireShape
-                                      (structurePieceArtContext pw piece tile)))
+        "wire"    → Just (ApWire (drawnWireShape facing pw piece tile))
         _         → Nothing
+
+-- | The wire connection shape a candidate is DRAWN as at @facing@
+--   (#2901): the plan's world-relative shape through the one shared
+--   screen conversion. Every ghost, construction and preview path asks
+--   this, so the static sprite and the frames can never disagree.
+drawnWireShape ∷ CameraFacing → PlanWorld → StructurePiece → (Int, Int)
+               → WireShape
+drawnWireShape facing pw piece tile =
+    screenWireShape facing (pacWireShape (structurePieceArtContext pw piece tile))
+
+-- | 'World.Construct.Plan.resolvePlanPieceArt' for what is actually
+--   DRAWN at @facing@ (#2901): the same catalogue answer, with a
+--   wire's connection shape taken through 'screenWireShape'. The
+--   resolver's own missing-art check stays on the world shape; the two
+--   differ only in WHICH of a pack's sixteen variants they ask for, and
+--   a pack registers all of them or none, so they are 'Nothing' together.
+--   The colour texture and its facemap come from the one 'PieceArt', so
+--   the pair cannot be split.
+resolveDrawnPieceArt ∷ CameraFacing → PlanWorld → StructurePiece → (Int, Int)
+                     → Maybe PieceArt
+resolveDrawnPieceArt facing pw piece tile =
+    resolveUnplacedArt (pwCatalog pw) (spPack piece) (spKind piece)
+        (spEdge piece) ctx { pacWireShape = drawnWireShape facing pw piece tile }
+  where ctx = structurePieceArtContext pw piece tile
 
 -- | The wall edge whose art is actually DRAWN for a piece authored on
 --   @edge@ at @facing@: the screen edge when the catalogue rotates this

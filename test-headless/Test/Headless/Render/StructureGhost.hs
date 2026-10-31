@@ -35,15 +35,19 @@ import Engine.Graphics.Vulkan.Types.Vertex
     (Vertex(..), Vec2(..), Vec4(..), renderFlagLifecycleAlpha)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
-    ( ArtAsset(..), PackArtRegistration(..), PieceArt(..)
+    ( AppearanceKey(..), AppearanceSlot(..), ArtAsset(..)
+    , PackArtRegistration(..), PieceArt(..), constructionFrameIndex
+    , resolveConstructionFramePair
     , resolveUnplacedArt, defaultPieceArtContext, PieceArtContext(..) )
-import Structure.Facing (WallCaps(..), WallEdge(..))
+import Structure.Facing (WallCaps(..), WallEdge(..), screenWireShape)
 import Structure.Palette (emptyTexPalette, internPath)
 import Structure.Render (structurePieceQuads)
 import Structure.Types
     ( ChunkStructures, StructurePieceData(..), StructureSlot(..)
     , StructureStage, emptyStructureStage )
-import Structure.Wire (WireShape(..))
+import Structure.Wire
+    (WireNeighbors(..), WireShape(..), allWireShapes, wireShapeName
+    , wireShapeNeighbors)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Construct.Attempt (ConstructAttemptId(..))
@@ -112,6 +116,7 @@ spec = beforeAll loadShippedPacks $ describe "structure ghost" $ do
     floorlessPostSpec
     missingArtSpec
     wireSpec
+    wireFacingSpec
     workSpec
     lineModeSpec
     seamSpec
@@ -433,6 +438,96 @@ wireSpec = describe "a wire ghost runs the autotile rule speculatively" $ do
         V.length quads `shouldBe` 3
         map (color ∘ sqV0) (V.toList quads) `shouldBe`
             [validPreviewTint, invalidTint, validPreviewTint]
+
+-- * Wire follows the camera (#2901)
+
+-- | Every ghost path draws the variant whose SCREEN spokes are the
+--   facing-rotated world connections: the preview, the unpaid
+--   designation and the paid construction frame, for all sixteen world
+--   shapes at all four facings. The expected art is resolved through
+--   the catalogue for 'screenWireShape''s answer, so a pass that kept
+--   the world-relative variant fails every non-'FaceSouth' example.
+wireFacingSpec ∷ SpecWith [PackFixture]
+wireFacingSpec = describe "a wire ghost is drawn as its SCREEN variant" $ do
+    it "previews the screen variant — sprite AND facemap — for all 16 \
+       \shapes × 4 facings" $ \packs → do
+        let sp = StructurePiece wirePack "wire" Nothing
+        forM_ allWireShapes $ \shape → forM_ allFacings $ \facing → do
+            let ge = wireEnv packs facing HM.empty shape
+                want = screenWireShape facing shape
+                quads = V.toList (snd (structurePreviewGhosts ge sp surfaceZ [homeTile]))
+            -- the arrangement really produces the world shape
+            wireShapesOf packs (wireEnv packs FaceSouth HM.empty shape) sp [homeTile]
+                `shouldBe` [Just shape]
+            (shape, facing, L.nub (map sqTexture quads))
+                `shouldBe` (shape, facing, [handleForPath (wireColour want)])
+            (shape, facing, L.nub [faceMapId v | q ← quads, v ← quadVerts q])
+                `shouldBe` (shape, facing, [slotOfPath (wireFace want)])
+
+    it "draws the unpaid DESIGNATION ghost as the screen variant" $ \packs → do
+        let sp = StructurePiece wirePack "wire" Nothing
+        forM_ allWireShapes $ \shape → forM_ allFacings $ \facing → do
+            let ge = wireEnv packs facing (designationsFor sp) shape
+                want = screenWireShape facing shape
+                quads = V.toList (snd (structureDesignationGhosts ge))
+            (shape, facing, L.nub (map sqTexture quads))
+                `shouldBe` (shape, facing, [handleForPath (wireColour want)])
+            (shape, facing, L.nub [faceMapId v | q ← quads, v ← quadVerts q])
+                `shouldBe` (shape, facing, [slotOfPath (wireFace want)])
+
+    it "draws the PAID construction frame and its paired facemap of the \
+       \screen variant, at the same frame index at every camera" $ \packs → do
+        let sp = StructurePiece wirePack "wire" Nothing
+            unpaid = newConstructDesignation surfaceZ (CtStructure sp)
+                         (ConstructAttemptId 1)
+            paid p = unpaid { cdPayment = CpPaid (MaterialReceipt [])
+                            , cdProgress = p }
+            cat = packCatalog packs
+        forM_ allWireShapes $ \shape → forM_ [0, 0.3, 0.6, 0.99, 1] $ \progress → do
+            let k = constructionFrameIndex 4 progress
+            -- the screen variant's frame at this progress, per facing
+            frames <- forM allFacings $ \facing → do
+                let ge = wireEnv packs facing
+                            (HM.singleton (canon homeTile) (paid progress)) shape
+                    want = screenWireShape facing shape
+                    quads = V.toList (snd (structureConstructionGhosts ge))
+                    (frame, mFace) = fromMaybe (error "no frame pair") $
+                        resolveConstructionFramePair cat wirePack
+                            (AppearanceKey Nothing (ApWire want)) progress
+                quads `shouldSatisfy` (not ∘ null)
+                L.nub (map sqTexture quads) `shouldBe` [aaHandle frame]
+                L.nub [faceMapId v | q ← quads, v ← quadVerts q]
+                    `shouldBe` [ slotOfPath (aaPath f) | Just f ← [mFace] ]
+                -- a paired frame is lit by its own map: no lifecycle flag
+                L.nub [renderFlags v | q ← quads, v ← quadVerts q] `shouldBe` [0]
+                aaPath frame `shouldBe`
+                    ("assets/textures/structures/wire/build/"
+                        <> wireShapeName want <> "_" <> tshow k <> ".png")
+                pure k
+            -- turning the camera neither resets nor skips the sequence
+            L.nub frames `shouldBe` [k]
+
+-- | A wire environment whose committed neighbours are arranged to
+--   produce exactly @shape@ in WORLD terms.
+wireEnv ∷ [PackFixture] → CameraFacing → ConstructDesignations → WireShape
+        → GhostEnv
+wireEnv packs facing designs shape =
+    ghostEnvWith packs facing designs neighbours emptyStructureStage
+  where
+    (gx, gy) = homeTile
+    WireNeighbors n e s w = fromMaybe (error "autotile shape expected")
+                                (wireShapeNeighbors shape)
+    neighbours = HM.unions
+        [ structuresAt (gx + dx, gy + dy) [SWire]
+        | ((dx, dy), True) ← zip [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                 [n, e, s, w] ]
+
+wireColour, wireFace ∷ WireShape → Text
+wireColour sh = "assets/textures/structures/wire/" <> wireShapeName sh <> ".png"
+wireFace   sh = "assets/textures/facemap/wire/" <> wireShapeName sh <> ".png"
+
+slotOfPath ∷ Text → Float
+slotOfPath = fromIntegral ∘ toInt ∘ handleForPath
 
 -- | A post whose supporting FLOOR is absent has no final grid z at all
 --   — a post takes its floor's z, so "no floor" and "nowhere to draw"
