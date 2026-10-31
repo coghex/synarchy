@@ -6420,7 +6420,7 @@ contexts, so the axis changes no existing visual.
 record on eviction, load and the `world-edits` v1 rewrite. The occurrence
 key is the page-scoped `FloraInstanceId` for wild and row flora and the
 canonical `CropPlots` tile for a groundcover plot (never the reserved
-zero id) until EFM-6; contract §6.1-6.2 records both rules and the two id
+zero id), which since EFM-6 (#2552) owns its condition as part of its value; contract §6.1-6.2 records both rules and the two id
 namespaces. `docs/persistence_state_inventory.md` gains no row: the
 field is covered by the existing `wsTilesRef` rebuild classification, and
 no save component writes `FloraChunkData`.
@@ -6447,7 +6447,7 @@ be added or renamed without migrating a save.
 `World.Flora.Condition` holds at most one record per occurrence, keyed
 by the #1854 `FloraInstanceId`, in `wsFloraConditionsRef` beside
 `wsFloraHarvestsRef`; `wpsFloraConditions` carries it and
-`world-activity` v7 persists it (v1–v6 decode to an empty map). Wild
+`world-activity` v7 persists it (v1–v6 decode to an empty map; v8, below, adds a plot's embedded condition). Wild
 flora regenerates and row crops replay, then each finds its record by
 id, so a death survives eviction, regeneration and a save/load with its
 same-tile siblings untouched. `markFloraDead` refuses a second record
@@ -6469,6 +6469,37 @@ page's own planting). A record whose planting the page's log does not
 hold, or whose chunk is not resident, is the tolerated dangling case.
 Nothing renders, ticks or reads a record yet: the mutation/query seam is
 EFM-7 and expiry is EFM-10.
+
+**A groundcover plot embeds the same record in its own value (#2552,
+EFM-6).** A plot has no instance identity — it is tile-keyed, and its
+growth adapter carries the reserved zero id, which is never an occurrence
+key — so `World.Flora.CropPlot.CropPlotOf` carries an optional
+`cpCondition`, the exact `FloraConditionRecordOf` of the store above (no
+crop-specific fields), and `wsCropPlotsRef` / `wpsCropPlots` persist it
+with the plot. Ownership is the plot's: deleting the plot, including the
+existing successful harvest, discards the condition, a plot planted on the
+emptied tile starts without one, and planting over an existing plot stays
+refused whatever it carries. `markCropPlotDead` refuses a second mark and
+an invalid record (validity first), `clearCropPlotCondition` removes only
+the condition, and `World.Flora.ConditionQuery.lookupConditionRecord` is
+the one page-qualified query answering either owner with the same record
+type. The record's species and tile restate the plot's own and are
+refused when they disagree, so the value stays self-validating;
+`traverseCropPlotSpecies` swaps both species spellings in one step.
+`world-activity` v8 persists it (`CropPlotDTO.cpiCondition`, the v7
+`FloraConditionDTO` verbatim); v7 and v6 are frozen with the three-field
+`CropPlotDTOv2`, earlier layouts keep `CropPlotDTOv1`, and every older
+plot migrates with no condition. `validateWorldActivity` refuses, naming
+the page and the plot's tile as stored in the payload key, a tag outside
+its vocabulary, a stored condition other than dead, an expiry before the
+begin day, a successor that contradicts the render context, a context
+other than `cultivated`, and a species or tile that disagrees with the
+plot. This slice is persistence-only: a stored `dead` condition does not
+alter growth, rendering, planting eligibility or the harvest window (an
+otherwise harvest-open conditioned plot is still harvested, taking its
+condition with it, and a growth-derived dead plot still returns `nil`) —
+EFM-7 owns condition-aware growth and harvest refusal, and EFM-10 owns
+expiry and automatic replanting.
 
 Design record:
 [`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
@@ -6514,12 +6545,31 @@ same planted counter; an unloaded wild occurrence naming a missing
 species; and one of three same-tile co-tenants kept dead across eviction,
 regeneration, the production capture, an envelope encode/decode and
 staging, with a planted row crop doing the same across a save/load),
+and, since #2552, `--match "crop plot condition persistence"` (the plot's
+pure mark/clear/read operations — double-mark refused with every original
+field preserved, clear removes only the condition, the legal-retention
+space judged against an independent oracle, validity judged before
+occupancy; the one page-qualified query answering a row identity, a wild
+identity and a plot tile with the same record type and never reading the
+reserved zero id; the species swap reaching the embedded record, and a
+condition naming a missing species refusing the load as `crop plot
+condition`; a populated v8 payload byte-for-byte; every retained crop-bearing
+layout, v1 through v7, decoded from frozen DTO encoders into UNCONDITIONED
+current plots with species, planted day, health, a v7 occurrence condition
+and unrelated page data intact, and v7 bytes proven not to read as the
+four-field crop layout; every component-validation refusal driven through
+the real decode and validate path with the page and tile asserted; the
+production capture, envelope and staging of a conditioned plot beside an
+unconditioned sibling; and, through the real Lua verbs, an otherwise
+harvest-open conditioned plot still harvesting and taking its condition
+with it, replanting making a fresh unconditioned plot, planting over an
+occupied plot refused whatever its condition, and a growth-derived dead plot
+still refusing with `nil`),
 `--match "save migrations"` and `python3 tools/save_compat_audit.py`
-(the v7 fixture), and `python3 tools/persistence_inventory_audit.py` (the
-`wsFloraConditionsRef` and `wpsFloraConditions` rows). OWED by the epic's
-children, each with its own issue: EFM-6 owes the groundcover-crop
-condition and persistence gates;
-EFM-7 owes
+(the v8 fixture), and `python3 tools/persistence_inventory_audit.py` (the
+`wsFloraConditionsRef`, `wpsFloraConditions`, `wsCropPlotsRef` and
+`wpsCropPlots` rows). OWED by the epic's children, each with its own
+issue: EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still
 renders `harvested_texture`); EFM-10 owes retention and successor

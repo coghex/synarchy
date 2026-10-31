@@ -305,7 +305,7 @@ spec = do
         isGeneratedFloraInstanceId floraInstanceIdNone `shouldBe` False
         isPlantedFloraInstanceId floraInstanceIdNone `shouldBe` False
         isFloraInstanceIdNone floraInstanceIdNone `shouldBe` True
-        fiInstanceId (cropPlotInstance (CropPlot berryId 3 1.0))
+        fiInstanceId (cropPlotInstance (CropPlot berryId 3 1.0 Nothing))
           `shouldBe` floraInstanceIdNone
 
     describe "the planted allocator" $ do
@@ -413,7 +413,7 @@ spec = do
 
       it "accepts v1 through v7, so no shipped payload lost \
          \its decoder" $
-        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7]
+        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8]
 
       it "does not follow the live harvest alias into the frozen v1/v2 \
          \layout: a tile-keyed timer still decodes as a tile-keyed timer" $ do

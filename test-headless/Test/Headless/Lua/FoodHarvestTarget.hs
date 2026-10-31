@@ -520,7 +520,7 @@ spec = describe "food harvest target identity" $ do
             <> "has no instance identity to name") $ \env → do
           ws ← resetScene env probeCatalog []
           writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots
-              (HM.singleton sharedTile (CropPlot berryId 0 1.0 ∷ CropPlotOf FloraId))
+              (HM.singleton sharedTile (CropPlot berryId 0 1.0 Nothing ∷ CropPlotOf FloraId))
           ls ← newBareLuaBackend env
           loadAi ls
           tick ls `shouldReturn` "ok"

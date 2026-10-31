@@ -117,7 +117,7 @@ import World.Flora.Condition
     ( FloraConditions, SavedFloraConditions, FloraConditionRecordOf(..)
     , traverseConditionSpecies )
 import World.Flora.CropPlot
-    ( CropPlots, SavedCropPlots, CropPlotOf(..) )
+    ( CropPlots, SavedCropPlots, CropPlotOf(..), traverseCropPlotSpecies )
 import World.Flora.Types (FloraCatalog)
 import World.Flora.Identity (FloraInstanceId, floraInstanceIdNone, floraInstanceIdToLua)
 import World.Flora.Reference
@@ -168,7 +168,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 109
+currentSaveVersion = 110
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -1717,6 +1717,16 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         | (coord, cp) ← HM.toList (wpsCropPlots w)
         , unresolved (cpSpecies cp) ]
         ⧺
+        -- #2552: a plot's embedded condition restates the plot's species,
+        -- and is converted with it. 'World.Save.Component.PageActivity'
+        -- refuses a payload where the two disagree; this keeps the
+        -- durable-reference rule independent of that, so a record
+        -- reaching here by another route is still checked.
+        [ MissingFloraRef "crop plot condition" pid coord (fcrSpecies rec)
+        | (coord, cp) ← HM.toList (wpsCropPlots w)
+        , Just rec ← [cpCondition cp]
+        , unresolved (fcrSpecies rec) ]
+        ⧺
         [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
         | (coord, pd) ← HM.toList (wpsPlantDesignations w)
         , unresolved (ptCrop pd) ]
@@ -1826,7 +1836,7 @@ nameFloraReferences catalog pid edits crops plants conditions =
         -- re-capturing an already-named page is the identity rather
         -- than a failure.
         _ → Just e
-    nameCrop cp  = (\ref → cp { cpSpecies = ref }) <$> named (cpSpecies cp)
+    nameCrop     = traverseCropPlotSpecies named
     namePlant pd = (\ref → pd { ptCrop = ref }) <$> named (ptCrop pd)
     nameCondition = traverseConditionSpecies named
     problems =
@@ -1837,6 +1847,11 @@ nameFloraReferences catalog pid edits crops plants conditions =
         [ MissingFloraRef "crop plot" pid coord
               (FloraByLegacyId (cpSpecies cp))
         | (coord, cp) ← HM.toList crops, unnamed (cpSpecies cp) ]
+        ⧺
+        [ MissingFloraRef "crop plot condition" pid coord
+              (FloraByLegacyId (fcrSpecies rec))
+        | (coord, cp) ← HM.toList crops
+        , Just rec ← [cpCondition cp], unnamed (fcrSpecies rec) ]
         ⧺
         [ MissingFloraRef "plant designation" pid coord
               (FloraByLegacyId (ptCrop pd))
@@ -1894,7 +1909,7 @@ resolveFloraReferences catalog pid edits crops plants conditions =
         -- legacy forms — so this crosses whatever a caller handed in
         -- unchanged rather than re-deriving an id it already has.
         _ → Just e
-    resolveCrop cp  = (\fid → cp { cpSpecies = fid }) <$> resolve (cpSpecies cp)
+    resolveCrop  = traverseCropPlotSpecies resolve
     resolvePlant pd = (\fid → pd { ptCrop = fid }) <$> resolve (ptCrop pd)
     resolveCondition = traverseConditionSpecies resolve
     problems =
@@ -1904,6 +1919,10 @@ resolveFloraReferences catalog pid edits crops plants conditions =
         ⧺
         [ MissingFloraRef "crop plot" pid coord (cpSpecies cp)
         | (coord, cp) ← HM.toList crops, unresolved (cpSpecies cp) ]
+        ⧺
+        [ MissingFloraRef "crop plot condition" pid coord (fcrSpecies rec)
+        | (coord, cp) ← HM.toList crops
+        , Just rec ← [cpCondition cp], unresolved (fcrSpecies rec) ]
         ⧺
         [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
         | (coord, pd) ← HM.toList plants, unresolved (ptCrop pd) ]

@@ -323,8 +323,8 @@ spec = describe "flora condition persistence" $ do
 
   describe "world-activity versions" $ do
 
-    it "accepts v1 through v7" $
-        ccInputVers worldActivityCodec `shouldBe` [1 .. 7]
+    it "accepts v1 through v8" $
+        ccInputVers worldActivityCodec `shouldBe` [1 .. 8]
 
     it "migrates a v6 payload to an EMPTY condition map, preserving \
        \every other field" $ do
@@ -358,7 +358,7 @@ spec = describe "flora condition persistence" $ do
                         , (plantedFloraInstanceId 3, toFloraConditionDTO
                             (savedOf (deadRecord berryId otherTile
                                          ContextCultivated))) ] } ]
-        case ccDecode worldActivityCodec 7 (S.encode dto) of
+        case ccDecode worldActivityCodec 8 (S.encode dto) of
             Left e → expectationFailure (show e)
             Right back → do
                 S.encode back `shouldBe` S.encode dto
@@ -375,7 +375,7 @@ spec = describe "flora condition persistence" $ do
             let payload = WorldActivityDTO
                     [ (emptyActivityV7 pid)
                         { padFloraConditions = HM.singleton key dto } ]
-            case ccDecode worldActivityCodec 7 (S.encode payload) of
+            case ccDecode worldActivityCodec 8 (S.encode payload) of
                 Left e → expectationFailure (show e) ≫ pure []
                 Right decoded →
                     pure (map renderComponentError

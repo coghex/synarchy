@@ -1171,6 +1171,7 @@ library
                      World.Flora.Harvest
                      World.Flora.CropPlot
                      World.Flora.Condition
+                     World.Flora.ConditionQuery
                      World.Fluid.Types
                      World.Fluid.Exact
                      World.Fluid.Internal
@@ -1943,6 +1944,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FloraVisualResolver
                    Test.Headless.World.FloraVisualOracle
                    Test.Headless.World.FloraCondition
+                   Test.Headless.World.CropPlotCondition
                    Test.Headless.World.FloraIdentity
                    Test.Headless.World.FloraOrder
                    Test.Headless.World.FloraRenderContext

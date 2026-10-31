@@ -515,7 +515,7 @@ plantPlot ws species = do
     writeIORef (wsDateRef ws)
         (worldDateAddDays defaultCalendarConfig 100 defaultWorldDate)
     writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots
-        (HM.singleton foragedTile (CropPlot species 0 1.0))
+        (HM.singleton foragedTile (CropPlot species 0 1.0 Nothing))
 
 -- | The named fixture plant. A typo is a test-authoring error, not a
 --   silently skipped case.

@@ -399,13 +399,13 @@ spec = describe "flora render context" $ do
     it "is cultivated and keeps the reserved non-identity id" $ do
       let inst = cropPlotInstance
                    (CropPlot { cpSpecies = wheatId, cpPlantedDay = 4
-                             , cpHealth = 1.0 })
+                             , cpHealth = 1.0, cpCondition = Nothing })
       fiContext inst `shouldBe` ContextCultivated
       fiInstanceId inst `shouldBe` floraInstanceIdNone
 
     it "does not borrow a wild instance's context for the same species" $ do
       let plot = CropPlot { cpSpecies = meadowId, cpPlantedDay = 0
-                          , cpHealth = 1.0 }
+                          , cpHealth = 1.0, cpCondition = Nothing }
       -- The meadow also GENERATES wild instances; the plot's synthetic
       -- instance of that same species is cultivated regardless.
       map fiContext (generated homeChunk)

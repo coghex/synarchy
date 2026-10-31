@@ -315,7 +315,7 @@ freshChunkB = chunkWith chunkB []
 freshChunkC = chunkWith chunkC [plant farTile oakId farOak]
 
 wheatPlot ∷ CropPlot
-wheatPlot = CropPlot cropId 0 1.0
+wheatPlot = CropPlot cropId 0 1.0 Nothing
 
 ruinDef ∷ LocationDef
 ruinDef = LocationDef
