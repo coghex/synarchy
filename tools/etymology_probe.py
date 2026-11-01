@@ -85,9 +85,9 @@ the run, and so does failing to take or read the window at all — an
 ungraded window is exactly the silence this evidence exists to remove.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated. ``--self-test``
-is the exception: it drives the fixture classification and the manual
-rebuilds' resource and log-window decisions with synthetic readings, and
-boots nothing at all.
+is the exception: it drives the fixture classification, the manual
+rebuilds' resource and log-window decisions and phase 7's page-activation
+wait and cleanup with synthetic readings, and boots nothing at all.
 
 Usage:
   python3 tools/etymology_probe.py
@@ -117,6 +117,31 @@ LOG = "/tmp/etymology_engine.log"
 #: hardcodes it, and scripts/hud.lua points at the same id, which is what
 #: the name plate reads through.
 PAGE = "main_world"
+
+#: The player-named page phase 7 creates (#2771).
+CUSTOM_PAGE = "custom"
+
+#: How long phase 7 waits for `CUSTOM_PAGE` to become the active world.
+#: Not a dispatch-latency budget: `world.init` and `world.show` are FIFO
+#: world-thread commands, so the show cannot run until the custom page's
+#: own generation has returned, and `world.waitForInit` follows the ACTIVE
+#: page and so is already satisfied by the finished `main_world` (#1447
+#: drew the same line in tools/multiworld_save_probe.py). The page is tiny,
+#: but the bound is the one that probe settled on for a page still being
+#: generated.
+CUSTOM_ACTIVE_SECS = 180.0
+
+#: How long phase 7's cleanup waits for the hide to take effect. The hide
+#: is queued behind the show it undoes, so this only has to cover a
+#: command round trip once the show has been seen applied.
+PAGE_RESTORE_SECS = 30.0
+
+#: Poll interval for both waits.
+PAGE_POLL_SECS = 0.5
+
+#: Indirection so `--self-test` drives the real waits on a fake clock.
+_clock = time.monotonic
+_sleep = time.sleep
 
 #: The tectonic plate count the fixture generates with. Named alongside
 #: the seed and world size by every FIXTURE failure, so the world that
@@ -967,26 +992,107 @@ def phase5_bound_and_recurrence(port: int) -> None:
         print("  SKIP  no morpheme recurred across this world's eligible names")
 
 
-def phase7_unavailable(args) -> None:
-    print("\n[7] the honest UNAVAILABLE state")
-    port = args.port
-    # A CUSTOM-named page: a player-entered name has no language and no
-    # expression, which is requirement 7's first case. Deliberately TINY
-    # regardless of --size — this needs an identity, not terrain, and a
-    # second full-size generation would only cost minutes.
-    send(port, f"world.init('custom', {args.seed}, 16, 3, 'Player Name')",
-         timeout=20)
-    send(port, "return world.waitForInit(600)", timeout=620)
-    send(port, "world.show('custom')", timeout=20)
-    # Assert the switch actually happened before reading anything through
-    # it: openFor('world') resolves the ACTIVE page, so a page that never
-    # became active would silently re-answer for the previous world and
-    # every check below would be measuring the wrong thing.
-    active = send(port, "return world.getActiveWorldId()", timeout=20)
-    if "custom" not in (active or ""):
-        check(False, "the custom-named page became the active world",
-              f"active={active!r}")
-        return
+def active_page_id(raw) -> str | None:
+    """The page id in a ``world.getActiveWorldId()`` reading, or ``None``
+    when the reading is not one.
+
+    ``nil`` (no page registered, which cannot hold once a page has been
+    initialised), an empty reply and anything that is not a bare page id
+    are malformed. Matching is EXACT everywhere downstream: a substring
+    test accepted any id that merely contained the requested one (#2771).
+    """
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text in ("", "nil", "null"):
+        return None
+    if not all(c.isalnum() or c in "_-." for c in text):
+        return None
+    return text
+
+
+def read_active_page(port: int):
+    """One reading of the active world id, or ``None`` when the console
+    could not answer. Never raises: a dead console is a reading to wait
+    out and then report, not a crash that skips the cleanup."""
+    try:
+        return send(port, "return world.getActiveWorldId()", timeout=20)
+    except OSError:
+        return None
+
+
+def wait_for_active_page(port: int, page: str, secs: float):
+    """Poll until the active world is EXACTLY ``page`` (#2771).
+
+    ``world.show`` only enqueues a command; the active id is the head of
+    the visible list the world worker moves it into later, so a reading
+    taken straight after the show can still name the previous page. Stale
+    and malformed readings are waited out within ``secs``; the wait never
+    sleeps a fixed time and never hangs.
+
+    Returns ``(True, None)``, or ``(False, why)`` where ``why`` names the
+    requested page and the last observed id (or malformed reading).
+    """
+    deadline = _clock() + secs
+    last = None
+    readings = 0
+    while True:
+        last = read_active_page(port)
+        readings += 1
+        if active_page_id(last) == page:
+            return True, None
+        if _clock() >= deadline:
+            break
+        _sleep(PAGE_POLL_SECS)
+    kind = ("the last reading was malformed" if active_page_id(last) is None
+            else "the last observed active id differs")
+    return False, (f"requested page {page!r} was never the active world "
+                   f"within {secs:.0f}s ({readings} readings; {kind}); "
+                   f"last observed active id: {last!r}")
+
+
+def restore_main_page(port: int, custom_was_active: bool) -> bool:
+    """Leave the active page in a known, CHECKED state (#2771).
+
+    Re-showing ``PAGE`` cannot do it: ``PAGE`` is still visible, a
+    re-show of a visible page leaves the visible list unchanged, and
+    ``CUSTOM_PAGE`` would stay the active world. The custom page is
+    HIDDEN instead, which removes it from the visible list and leaves
+    ``PAGE`` at the head.
+
+    A hide is a queued command too, so a ``PAGE`` reading is only proof
+    when the custom page was SEEN active first: then its show has already
+    been applied and the hide, queued behind it, can be what moved the
+    head back. If the custom page was never seen active, its show may
+    still be queued, a ``PAGE`` reading is just the page it has not yet
+    replaced, and restoration cannot be verified at all.
+
+    Returns whether restoration is verified; a ``False`` has already been
+    reported as a failure.
+    """
+    label = f"the active page is back to {PAGE!r} after phase 7"
+    try:
+        send(port, f"world.hide('{CUSTOM_PAGE}')", timeout=20)
+    except OSError as err:
+        check(False, label, f"the hide could not be sent: {err!r}")
+        return False
+    ok, why = wait_for_active_page(port, PAGE, PAGE_RESTORE_SECS)
+    if not custom_was_active:
+        check(False, label,
+              f"unverifiable: {CUSTOM_PAGE!r} was never observed active, "
+              f"so its show may still be queued and an active reading of "
+              f"{PAGE!r} proves nothing; the hide was requested but not "
+              f"confirmed")
+        return False
+    if not ok:
+        check(False, label, why or "")
+        return False
+    return check(True, label)
+
+
+def grade_unavailable_panel(port: int) -> None:
+    """Open the world panel on the (now active) custom page and grade the
+    six unavailable-state checks."""
     send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                "if ep then ep.openFor('world') end", timeout=15)
     d = panel_dump(port)
@@ -1008,9 +1114,58 @@ def phase7_unavailable(args) -> None:
           "and inventing no morpheme rows")
     check((d.get("rowCount") or 0) > 0,
           "the unavailable state still renders something visible")
-    send(port, f"world.show('{PAGE}')", timeout=20)
-    send(port, "local ep = package.loaded['scripts.etymology_panel']; "
-               "if ep then ep.closeIfOpen() end", timeout=15)
+
+
+def phase7_unavailable(args) -> bool:
+    """Returns whether the active page is VERIFIED restored to ``PAGE``.
+
+    ``False`` means a page-dependent phase after it would be grading the
+    wrong world, so the caller must not run one.
+    """
+    print("\n[7] the honest UNAVAILABLE state")
+    port = args.port
+    # A CUSTOM-named page: a player-entered name has no language and no
+    # expression, which is requirement 7's first case. Deliberately TINY
+    # regardless of --size — this needs an identity, not terrain, and a
+    # second full-size generation would only cost minutes.
+    custom_was_active = False
+    try:
+        # Everything that changes engine state sits INSIDE the cleanup
+        # scope: a console reset after the engine accepted the show must
+        # still reach the hide, and a communication failure is a counted
+        # failure rather than an exception that skips the engine
+        # teardown and the resource-warning grading after this phase.
+        try:
+            send(port, f"world.init('{CUSTOM_PAGE}', {args.seed}, 16, 3, "
+                       f"'Player Name')", timeout=20)
+            send(port, "return world.waitForInit(600)", timeout=620)
+            send(port, f"world.show('{CUSTOM_PAGE}')", timeout=20)
+            # Assert the switch actually happened before reading anything
+            # through it: openFor('world') resolves the ACTIVE page, so a
+            # page that never became active would silently re-answer for
+            # the previous world and every check below would be measuring
+            # the wrong thing. The show is only QUEUED, so wait for it
+            # (#2771).
+            custom_was_active, why = wait_for_active_page(
+                port, CUSTOM_PAGE, CUSTOM_ACTIVE_SECS)
+            if check(custom_was_active,
+                     "the custom-named page became the active world",
+                     why or ""):
+                grade_unavailable_panel(port)
+        except OSError as err:
+            check(False, "phase 7 kept its console connection",
+                  f"{type(err).__name__}: {err}")
+    finally:
+        # Bounded and unconditional: success, activation failure, an
+        # unreadable panel and a console failure all end here.
+        # (`closeIfOpen` is a no-op when the panel never opened.)
+        restored = restore_main_page(port, custom_was_active)
+        try:
+            send(port, "local ep = package.loaded['scripts.etymology_panel']; "
+                       "if ep then ep.closeIfOpen() end", timeout=15)
+        except OSError:
+            pass
+    return restored
 
 
 def phase6_scrolling(port: int) -> None:
@@ -1190,9 +1345,240 @@ class _FixtureArgs:
     """The default fixture's identifying parameters, for the self-test's
     message assertions."""
 
-    def __init__(self, seed: int = 42, size: int = 64) -> None:
+    def __init__(self, seed: int = 42, size: int = 64,
+                 port: int = 0) -> None:
         self.seed = seed
         self.size = size
+        self.port = port
+
+
+class _FakeEngine:
+    """A scripted console for driving the REAL ``phase7_unavailable``.
+
+    ``world.show``/``world.hide`` only QUEUE a command, like the engine's:
+    each is applied after a number of ``getActiveWorldId`` reads
+    (``show_after``/``hide_after``; ``None`` = never), so a reading taken
+    before then is STALE. A fake clock advances only when the probe sleeps,
+    so every timeout elapses instantly and deterministically.
+    """
+
+    def __init__(self, show_after=0, hide_after=0, shown_id=CUSTOM_PAGE,
+                 readings=None, panel=None, raise_on=None,
+                 panel_raises=False) -> None:
+        self.raise_on = raise_on or {}   # lua substring -> exception
+        self.panel_raises = panel_raises
+        self.t = 0.0
+        self.active = PAGE
+        self.show_after, self.hide_after = show_after, hide_after
+        self.shown_id = shown_id
+        self.readings = readings      # None, or a fixed raw reading
+        self.panel = panel
+        self.queue: list[list] = []   # [kind, reads left or None]
+        self.sent: list[str] = []
+        self.reads = 0
+        self.panel_opened = False
+        self.panel_closed = False
+
+    def clock(self) -> float:
+        return self.t
+
+    def sleep(self, secs: float) -> None:
+        self.t += secs
+
+    def send(self, port, lua, timeout=10.0, **_kw):
+        # A fault AFTER the engine accepted the command: the command is
+        # recorded and queued, then the console connection resets.
+        try:
+            return self._send(lua)
+        finally:
+            for needle, exc in self.raise_on.items():
+                if needle in lua:
+                    raise exc
+
+    def _send(self, lua):
+        self.sent.append(lua)
+        if lua.startswith("world.show("):
+            self.queue.append(["show", self.show_after])
+        elif lua.startswith("world.hide("):
+            self.queue.append(["hide", self.hide_after])
+        elif "openFor('world')" in lua:
+            self.panel_opened = True
+        elif "closeIfOpen" in lua:
+            self.panel_closed = True
+        elif lua == "return world.getActiveWorldId()":
+            self.reads += 1
+            # Commands apply in FIFO order, one tick per reading: with
+            # `show_after=N` the first N readings are stale.
+            if self.queue:
+                kind, left = self.queue[0]
+                if left is not None:
+                    if left <= 0:
+                        self.queue.pop(0)
+                        self.active = (self.shown_id if kind == "show"
+                                       else PAGE)
+                    else:
+                        self.queue[0][1] -= 1
+            reading = self.active
+            return reading if self.readings is None else self.readings
+        elif "waitForInit" in lua:
+            return "true"
+        return "ok"
+
+    def panel_dump(self, port):
+        if self.panel_raises:
+            raise ConnectionResetError("panel read reset")
+        return self.panel
+
+
+_UNAVAILABLE_PANEL = {"available": False, "reason": "custom",
+                      "reasonText": "A player-entered name has no language.",
+                      "name": "Player Name", "morphemes": [], "rowCount": 3}
+
+_PHASE7_LABELS = (
+    "a custom name reports its etymology as unavailable",
+    "and names the reason honestly as 'custom'",
+    "with a non-empty player-facing explanation",
+    "while STILL showing the stored name",
+    "and inventing no morpheme rows",
+    "the unavailable state still renders something visible",
+)
+
+
+def _drive_phase7(fake: "_FakeEngine"):
+    """Run the real ``phase7_unavailable`` against ``fake``; return
+    ``(restored, new FAIL count, printed output)`` and leave the module's
+    failure counters and I/O hooks as they were."""
+    global failures, fixture_failures, send, panel_dump, _clock, _sleep
+    saved = (failures, fixture_failures, send, panel_dump, _clock, _sleep)
+    failures = 0
+    send, panel_dump = fake.send, fake.panel_dump
+    _clock, _sleep = fake.clock, fake.sleep
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out):
+            restored = phase7_unavailable(_FixtureArgs())
+        counted = failures
+    finally:
+        (failures, fixture_failures, send, panel_dump,
+         _clock, _sleep) = saved
+    return restored, counted, out.getvalue()
+
+
+def phase7_self_test(problems: list) -> None:
+    """Requirement 6 of #2771: the real phase 7 over an immediate reading,
+    stale readings, permanent non-activation, malformed and look-alike
+    readings, a late or failed cleanup, and an unreadable panel dump."""
+
+    def expect(label: str, fake, *, restored, fails, panel,
+               labels: bool, detail: tuple = ()) -> None:
+        got_restored, got_fails, text = _drive_phase7(fake)
+        if got_restored is not restored:
+            problems.append(f"phase 7 {label}: restored={got_restored!r}, "
+                            f"expected {restored!r}")
+        if got_fails != fails:
+            problems.append(f"phase 7 {label}: {got_fails} FAIL(s), "
+                            f"expected {fails}:\n{text}")
+        if fake.panel_opened is not panel:
+            problems.append(f"phase 7 {label}: panel opened="
+                            f"{fake.panel_opened!r}, expected {panel!r}")
+        for want in _PHASE7_LABELS:
+            if (f"  PASS  {want}" in text) is not labels:
+                problems.append(
+                    f"phase 7 {label}: check {want!r} "
+                    f"{'did not run' if labels else 'ran'}")
+        for needle in detail:
+            if needle not in text:
+                problems.append(f"phase 7 {label}: output lacks "
+                                f"{needle!r}:\n{text}")
+        # Cleanup is unconditional and bounded: a hide was always asked
+        # for, and the loop ended (the fake clock proves it did not hang).
+        if f"world.hide('{CUSTOM_PAGE}')" not in fake.sent:
+            problems.append(f"phase 7 {label}: the custom page was never "
+                            f"hidden")
+        if fake.t > CUSTOM_ACTIVE_SECS + PAGE_RESTORE_SECS + 5:
+            problems.append(f"phase 7 {label}: waited {fake.t:.0f}s, past "
+                            f"the bounds")
+
+    ok = dict(restored=True, fails=0, panel=True, labels=True)
+    expect("immediate correct reading",
+           _FakeEngine(show_after=0, panel=_UNAVAILABLE_PANEL), **ok)
+    for stale in (1, 4):
+        fake = _FakeEngine(show_after=stale, panel=_UNAVAILABLE_PANEL)
+        expect(f"{stale} stale main_world reading(s) then custom",
+               fake, **ok)
+        if fake.reads <= stale:
+            problems.append(f"phase 7 stale={stale}: only {fake.reads} "
+                            f"readings, so the wait never saw a stale one")
+    expect("a late cleanup",
+           _FakeEngine(show_after=0, hide_after=4,
+                       panel=_UNAVAILABLE_PANEL), **ok)
+
+    # Never activated: no panel is opened or graded, the failure names the
+    # page and the last id seen, and the restoration can NOT be verified —
+    # the show may still be queued, so main_world readings prove nothing.
+    expect("permanent non-activation",
+           _FakeEngine(show_after=None, panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("requested page 'custom'", "'main_world'", "unverifiable"))
+    expect("a malformed reading",
+           _FakeEngine(readings="<<garbage>>", panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("requested page 'custom'", "malformed", "<<garbage>>"))
+    expect("an empty reading",
+           _FakeEngine(readings="", panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("malformed",))
+    # A different id that merely CONTAINS 'custom' is not the page.
+    expect("a look-alike page id",
+           _FakeEngine(shown_id="my_custom_world", panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("'my_custom_world'",))
+
+    # Cleanup that never takes effect fails, and says what it saw.
+    expect("a cleanup that never takes effect",
+           _FakeEngine(show_after=0, hide_after=None,
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=1, panel=True, labels=True,
+           detail=("custom",))
+    # An unreadable panel dump is an early return in the grading, and the
+    # cleanup after it must still run and verify.
+    for label, dump in (("an unreadable panel dump", None),
+                        ("a panel dump that is text", "oops")):
+        expect(label, _FakeEngine(panel=dump), restored=True, fails=1,
+               panel=True, labels=False,
+               detail=("panel dump readable",))
+    # Communication failures are counted failures, never exceptions that
+    # skip the cleanup (and the teardown and warning grading after it).
+    reset = ConnectionResetError("console reset")
+    expect("a reset after the show was accepted",
+           _FakeEngine(raise_on={"world.show(": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("kept its console connection",))
+    expect("a reset on the init",
+           _FakeEngine(raise_on={"world.init(": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("kept its console connection",))
+    expect("a reset on the activation reads",
+           _FakeEngine(raise_on={"getActiveWorldId": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("malformed",))
+    expect("a panel read that raises",
+           _FakeEngine(panel_raises=True), restored=True, fails=1,
+           panel=True, labels=False,
+           detail=("kept its console connection",))
+    fake = _FakeEngine(panel_raises=True)
+    _drive_phase7(fake)
+    if not fake.panel_closed:
+        problems.append("phase 7: the panel was not closed after a failed "
+                        "panel read")
+    fake = _FakeEngine(panel=None)
+    _drive_phase7(fake)
+    if not fake.panel_closed:
+        problems.append("phase 7: the panel was not closed after an "
+                        "unreadable dump")
 
 
 def self_test() -> int:
@@ -1552,10 +1938,13 @@ def self_test() -> int:
         if got != want:
             problems.append(f"{label} exits {got}, expected {want}")
 
+    # --- phase 7's page-activation wait and cleanup (#2771) -----------
+    phase7_self_test(problems)
+
     for line in problems:
         print(f"FAIL: {line}", file=sys.stderr)
-    print(f"--- self-test ---\n  fixture, rebuild-resource and "
-          f"log-window cases: "
+    print(f"--- self-test ---\n  fixture, rebuild-resource, log-window "
+          f"and phase 7 page-activation cases: "
           f"{'OK' if not problems else f'{len(problems)} FAILED'}")
     return 0 if not problems else 1
 
@@ -1597,8 +1986,15 @@ def main() -> int:
             # switches the active page to a custom-named one, and every
             # query here resolves the ACTIVE page.
             phase6_scrolling(args.port)
-            phase7_unavailable(args)
-            phase8_lifecycle(args.port)
+            if phase7_unavailable(args):
+                phase8_lifecycle(args.port)
+            else:
+                # Phase 8 resolves the ACTIVE page. Phase 7 could not
+                # verify it put the main page back, so grading the panel
+                # now would measure whichever world happens to be active
+                # (#2771). The failure is already counted by phase 7.
+                print("\n[8] SKIPPED: phase 7 did not verify the active "
+                      "page is back to " + repr(PAGE))
     finally:
         quit_engine(args.port, proc)
 
