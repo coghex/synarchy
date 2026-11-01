@@ -6387,7 +6387,7 @@ for any instance in the harvest map and never calls
 ALIVE. Once it is dead, condition wins and the dead order runs — a
 deliberate, narrow change from today, where a plant inside its regrowth
 window at its lifespan keeps drawing harvested stubble. Invariant 4
-requires it, and EFM-7 owns and gates it.
+requires it; EFM-7 (#2555) implements and gates it.
 
 **Two behaviour changes, both deliberate.** The depletion change above
 is one. The other is cultivated expiry: `floraGrowth` derives a
@@ -6452,7 +6452,8 @@ flora regenerates and row crops replay, then each finds its record by
 id, so a death survives eviction, regeneration and a save/load with its
 same-tile siblings untouched. `markFloraDead` refuses a second record
 for an occurrence rather than overwriting it; selecting the retention
-outcome from species policy is not the store's job (EFM-7/EFM-10). A
+outcome from species policy is not the store's job (the seam does it,
+#2555; expiry is EFM-10). A
 record also carries the species' authored NAME and the occurrence's
 canonical tile, as validation provenance only (the frozen life phase and annual stage are each optional: a species with no phases or no annual cycle freezes none, and the legacy dead token is refused as a phase at death): the id cannot recover
 either, and a record for an unloaded wild occurrence must still be
@@ -6467,8 +6468,8 @@ the canonical name of a tile in the page's OWN frame, and a planted id —
 which encodes neither page nor tile — is checked only against that
 page's own planting). A record whose planting the page's log does not
 hold, or whose chunk is not resident, is the tolerated dangling case.
-Nothing renders, ticks or reads a record yet: the mutation/query seam is
-EFM-7 and expiry is EFM-10.
+Since #2555 (EFM-7) growth, every render form and the forage queries read a
+record (below); expiry is EFM-10.
 
 **A groundcover plot embeds the same record in its own value (#2552,
 EFM-6).** A plot has no instance identity — it is tile-keyed, and its
@@ -6494,12 +6495,73 @@ the page and the plot's tile as stored in the payload key, a tag outside
 its vocabulary, a stored condition other than dead, an expiry before the
 begin day, a successor that contradicts the render context, a context
 other than `cultivated`, and a species or tile that disagrees with the
-plot. This slice is persistence-only: a stored `dead` condition does not
-alter growth, rendering, planting eligibility or the harvest window (an
-otherwise harvest-open conditioned plot is still harvested, taking its
-condition with it, and a growth-derived dead plot still returns `nil`) —
-EFM-7 owns condition-aware growth and harvest refusal, and EFM-10 owns
-expiry and automatic replanting.
+plot. EFM-6 itself was persistence-only; EFM-7 (#2555, below) made a stored
+`dead` condition alter growth, rendering and the harvest window, and EFM-10
+owns expiry and automatic replanting.
+
+**The condition seam is the ONLY writer of a condition (#2555, EFM-7).** Two
+world-thread commands, `WorldSetFloraCondition` and `WorldClearFloraCondition`
+(`World.Thread.Command.Flora.Condition`), are the only code that creates or
+removes a record, in the identity-keyed store or in a plot's embedded value;
+Lua only enqueues them (`world.setFloraCondition(gx, gy, instanceId | nil,
+cause)`, `world.clearFloraCondition(gx, gy, instanceId | nil)`), and its
+boolean is QUEUE ADMISSION, never proof of mutation. A wild or row-flora
+occurrence is addressed by tile plus `FloraInstanceId`, a groundcover plot by
+its canonical tile alone (`nil` id); the page is captured at enqueue and the
+tile and occurrence are validated again where the world thread owns the
+state, accepting any seam alias. A malformed request (non-number coordinate, a
+non-positive or reserved id, a non-string cause) returns `false` and
+enqueues nothing; an unknown occurrence, an already-conditioned occurrence
+and an unrecognized cause token (`unknown` IS a cause) are semantic refusals
+recorded as `flora.condition.set` / `.clear` action outcomes naming the
+reason, changing nothing and leaving the quad cache alone. A SET builds its
+record in `World.Flora.ConditionSeam`: the life phase and annual stage are
+FROZEN from the growth state on that world day (exactly what the render
+adapter presents, so the freeze cannot disagree with the screen; the LAST
+LIVING phase when the occurrence is already inside its natural dead window),
+and the retention outcome is SNAPSHOTTED from the species `corpsePolicy`
+(phase+cause override, then phase, then cause, then the species level;
+nothing inherited) and the occurrence's context (a cultivated successor is
+always `await_replanting`, D-19). A plot edit reads the plot out of the very
+map it edits inside one atomic step, so it preserves every other plot and can
+never restore a removed or replaced plot from a stale snapshot. A CLEAR
+removes only the addressed explicit condition (idempotent, recorded as a
+no-op when there is none) and never resets planting time, generation or a
+harvest timer; the occurrence returns to its clock-derived behaviour.
+
+`World.Flora.Growth.floraGrowth` takes the occurrence's condition
+(`Maybe GrowthCondition`, the record rebased onto the occurrence's own clock:
+the world day, or a plot's elapsed days) and is the SINGLE point every
+consumer reads: a `dead` record reports `fgDead`, the age and generation of
+the day it began, and the record's frozen phase and stage
+(`growthPhaseTag`, `growthVisualPhase`, `growthVisualStage`,
+`growthReportedStage`), and stops advancing — across a calendar-stage change,
+past the stored expiry (stored and ignored until EFM-10) and across a
+save/load. So a dead bush is not harvest-open, a dead tree whose authored
+wood tag is ungated stays chop-eligible (the §Farming contract), forage AI
+skips it and `world.getFloraAt(...).dead` is true, with no consumer-specific
+branch: the Chop hit test, the Chop commit, the forage queries, the harvest
+verbs, the draws and the cursor markers each pass the page's condition into
+the same call. Every render form builds its selector from the occurrence's
+context, the frozen phase/stage, `dead` and the cause
+(`World.Flora.Render.floraVisualSelectorFor`): wild and row instances through
+`chunkFloraDraws` (and so the picker and the markers), plots through
+`resolveCropPlotTexture`. Harvest depletion applies to LIVING occurrences only
+(`occurrenceAppearance`): a dead one resolves through the dead order whether
+or not a regrowth timer is running, and setting or clearing a condition never
+touches that timer.
+
+Lua reads are additive: `world.getFloraAt` (for the occurrence it selects,
+selection unchanged), `world.getFloraGrowthAt` and `world.getCropPlotAt` gain
+`condition` (effective: a natural dead window is `dead`), `context`, `cause`
+(`natural` in a natural window, absent while alive), `phaseAtDeath`,
+`stageAtDeath` and `retention {visibility, expiryDay, successor}` as STORED,
+never recomputed; death metadata is absent where no record exists.
+`world.getFloraVisualAt(gx, gy, instanceId | nil)` returns the registered
+texture name, the winning candidate and the ordered tried candidates (the
+fallback trace), or nil for an unknown target. The seam has no hazard
+producer, no expiry or reseed, no player-facing UI and no art; scripts under
+`scripts/` do not call it.
 
 Design record:
 [`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
@@ -6560,19 +6622,26 @@ and unrelated page data intact, and v7 bytes proven not to read as the
 four-field crop layout; every component-validation refusal driven through
 the real decode and validate path with the page and tile asserted; the
 production capture, envelope and staging of a conditioned plot beside an
-unconditioned sibling; and, through the real Lua verbs, an otherwise
-harvest-open conditioned plot still harvesting and taking its condition
-with it, replanting making a fresh unconditioned plot, planting over an
-occupied plot refused whatever its condition, and a growth-derived dead plot
-still refusing with `nil`),
+unconditioned sibling; and, through the real Lua verbs, a conditioned plot
+refusing harvest (#2555) until its condition is cleared and then harvesting
+and replanting as a fresh unconditioned plot, planting over an occupied plot
+refused whatever its condition, and a growth-derived dead plot still
+refusing with `nil`), and, since #2555, `--match "flora condition seam"` (the
+cause vocabulary and corpse-policy precedence; the frozen phase/stage and snapshotted retention; the growth state
+dead and frozen for every clock day, harvest-closed and chop-eligible where
+the tag is ungated; the store and plot transitions — refusals change
+nothing, a plot edit preserves unrelated entries and never resurrects a
+removed plot; the three render forms and the trace with synthetic handles;
+depletion versus death; and, through the real world-command handlers and
+Lua verbs, a co-tenant killed alone, the additive query fields, alias
+addressing, named refusals and malformed requests) and
+`python3 tools/flora_condition_probe.py` (CI-eligible: the same seam on an
+arena scenario end to end, ending in a real save and load),
 `--match "save migrations"` and `python3 tools/save_compat_audit.py`
 (the v8 fixture), and `python3 tools/persistence_inventory_audit.py` (the
 `wsFloraConditionsRef`, `wpsFloraConditions`, `wsCropPlotsRef` and
 `wpsCropPlots` rows). OWED by the epic's children, each with its own
-issue: EFM-7 owes
-the depletion-versus-death gate above (a depleted harvestable species,
-killed, renders its dead candidate; alive and depleted, it still
-renders `harvested_texture`); EFM-10 owes retention and successor
+issue: EFM-10 owes retention and successor
 behaviour, including the wild-reseeds/cultivated-empties pair above; and EFM-9 owes the pilot's
 end-to-end headless and preview evidence.
 
