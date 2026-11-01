@@ -202,6 +202,18 @@ becomes an absent/tombstoned site, or awaits replanting. Merely deleting its
 mortality overlay would make deterministically regenerated wild flora appear
 alive again and is therefore not a valid cleanup implementation.
 
+The selected outcome is stored at death and measured against the owning page's
+calendar. Reconciliation processes each crossed day on rollover and
+`world.setDate`, even while paused; a multi-day jump matches sequential day
+evaluation. Wild reseeds start at age zero on the stored expiry day and retain
+the anchor through save/load and regeneration. Wild absence retains a durable
+tombstone and suppresses existing-flora consumers. Cultivated rows use an
+exact-identity edit, while an expired plot is removed only if it is still the
+same plot at its tile. Both cultivated forms await deliberate replanting.
+Persistent corpses have no expiry. Retain per-occurrence state until compacting
+it preserves current and future presence, age, phase/stage, generation and
+death/expiry boundaries.
+
 The initial foundation exposes a safe mutation seam and proves persistence,
 but does not decide or implement real hazard formulas. Future systems may
 accumulate exposure over time—for example, a juvenile plant outside its
@@ -444,8 +456,11 @@ remains in page-owned persistence and is joined to regenerated flora.
 
 Repository-owned species explicitly declare their policy. For compatibility,
 legacy content without `corpsePolicy` retains the current 60-day visible window
-and generational reseed behavior. Policy is never inferred from the placement
-category at runtime. Mature trees persist regardless of death cause; tree
+and wild `reseed` successor, measured in elapsed whole calendar days
+independent of health. This intentionally changes the reseeding dates of
+sub-full-health plants; living growth and lifespan selection remain
+health-scaled. Policy is never inferred from the placement category at runtime.
+Mature trees persist regardless of death cause; tree
 sprouts, wildflowers, grasses, ferns, and crops are transient. Individual bush
 policies are explicit: the current bracken fern and red raspberry definitions
 are both transient for 60 days, while future woody shrubs may opt into
@@ -596,8 +611,7 @@ to it.
 Every repository-owned species declares `corpsePolicy`, with optional
 phase/cause overrides. Runtime code does not infer mortality behavior from the
 free-text placement category. Missing policy remains accepted only as a legacy
-compatibility path equivalent to the current 60-day/reseed behavior, so older
-content continues loading while shipped definitions stay self-documenting.
+compatibility path equivalent to a 60-calendar-day wild reseed independent of health. This intentionally changes reseeding dates for low-health plants; older content continues loading while shipped definitions stay self-documenting.
 
 ### D-15. Texture variants are declared explicitly in YAML
 
@@ -761,8 +775,8 @@ relates to the cultivated rule.
 ### Q-9. Is corpse policy always declared per species?
 
 Resolved by D-14. Repository-owned species always declare policy. Legacy
-content may omit it and receives the current 60-day/reseed behavior. The
-rejected inference alternative would have turned free-text placement categories
+content may omit it and receives a 60-calendar-day wild reseed independent
+of health. The rejected inference alternative would have turned free-text placement categories
 into an unrelated mortality contract.
 
 ### Q-10. What policies do the current bush species declare?
@@ -778,8 +792,9 @@ remains.
   order independently of engine or GPU state.
 - Loader tests prove legacy YAML normalizes unchanged, new sparse selectors
   reject duplicate/unknown combinations, every repository-owned species has an
-  explicit valid corpse policy, omitted legacy policy retains 60-day/reseed
-  behavior, and every declared path is included in the texture-subset audit.
+  explicit valid corpse policy, omitted legacy policy retains 60 elapsed
+  calendar days with the wild reseed/cultivated await-replanting outcomes, and
+  every declared path is included in the texture-subset audit.
 - Growth/render tests use synthetic handles to prove a dead sprout never
   resolves adult art when a juvenile fallback exists and a one-texture species
   always returns its base.
@@ -937,8 +952,9 @@ remains.
 ### EFM-10. Apply corpse retention and successor policy
 
 - **Outcome:** Dead occurrences remain visible for their snapshotted retention
-  period and then take exactly one explicit successor transition; persistent
-  structural remains stay until cleared.
+  period measured in elapsed page-calendar days, independent of plant health,
+  then take one durable successor transition; persistent remains have no
+  expiry. The legacy default follows the same 60-day rule.
 - **Scope:** Retention-policy selection, elapsed-time evaluation, transient
   cleanup, wild reseed/absence behavior, cultivated replanting behavior,
   tombstone or generation handling, and boundary/persistence tests.
@@ -947,11 +963,12 @@ remains.
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-5, D-6, D-9, D-10, D-12 through D-14, D-18
   through D-21
-- **Acceptance signals:** A 60-day transient corpse crosses its boundary once
-  without accidental revival; a persistent corpse survives that boundary,
-  eviction, and reload; expired state is compacted when its successor permits;
-  a cultivated corpse becomes an empty awaiting-replanting site regardless of
-  the species' wild `successor`.
+- **Acceptance signals:** A transient corpse crosses its calendar-day boundary
+  once without accidental revival; a persistent corpse survives that boundary,
+  eviction, and reload; reseed anchors, absence tombstones, row removal edits
+  and plot expiry survive reload; compaction preserves future behavior; a
+  cultivated corpse becomes empty and awaits replanting regardless of its
+  species' wild `successor`.
 - **Out of scope:** Hazard simulation, staged decomposition, nutrients,
   salvage, and unit cleanup jobs.
 - **Open questions:** None

@@ -636,6 +636,19 @@ displayed; it never changes the stored death state.
 The **selected retention outcome is snapshotted when death occurs**, so a later
 content-pack edit cannot silently reinterpret an existing save.
 
+Transient duration counts elapsed whole calendar days on the owning page,
+independent of plant health. Natural death and explicit death share the same
+stored outcome. Day rollover and `world.setDate` reconcile every crossed day,
+even while paused. A wild reseed starts at age zero on its stored expiry day;
+the anchor survives eviction, regeneration and save/load. Wild `absent` keeps
+a durable tombstone and is omitted from drawing, hit testing, harvest and
+existing-flora queries. Cultivated rows are removed by exact identity through
+the edit log; expired groundcover plots are deleted only if the same plot is
+still at the tile. Both cultivated outcomes await deliberate replanting.
+Persistent remains do not expire. Compact an anchor or tombstone only when
+current and future presence, age, phase/stage, generation and death boundaries
+remain equivalent.
+
 ### 7.5 Class defaults
 
 These are **authoring guidance** for new species, not runtime inference.
@@ -656,8 +669,10 @@ override and keeps `lifecycle: perennial`. D-20 adds no `lifecycle:` token.
 ### 7.6 The legacy default
 
 A species with **no `corpsePolicy` takes today's values**: `transient`
-visibility for 60 days with the wild successor `reseed`, matching
-`World.Flora.Growth.deadWindowDays`. A cultivated occurrence under that legacy
+visibility for 60 elapsed calendar days with the wild successor `reseed`.
+The 60-day window is independent of health. This intentionally changes
+low-health reseeding dates; living growth and lifespan selection are unchanged.
+A cultivated occurrence under that legacy
 default still becomes empty and awaits replanting per §7.2 — the legacy default
 supplies today's window and today's WILD successor, not an exemption from D-13.
 That is compatibility change (b) in §9, and it is deliberate. Repository-owned
@@ -719,17 +734,16 @@ regrowth timer.
    |---|---|---|---|
    | a | A depleted plant that dies draws dead art rather than `harvested_texture` (§8 rule 2) | harvestable species reaching their natural lifespan | EFM-7 |
    | b | A **cultivated** occurrence whose corpse window expires becomes empty and awaits replanting instead of reseeding (§7.2) | row crops and groundcover `CropPlot`s, under both an explicit and an omitted `corpsePolicy` | EFM-10 |
+   | c | Transient retention counts calendar days independent of plant health, so low-health plants reseed earlier than under the former health-scaled dead window | transient wild and cultivated corpses, including the legacy default | EFM-10 |
 
-   Change (b) is unavoidable, not incidental: `World.Flora.Growth.floraGrowth`
-   today derives a generation arithmetically — `gen = floor(total / (lifespan +
-   deadWindowDays))` — with no occurrence state and no notion of context, so
-   every occurrence wraps to a fresh sprout. D-13 requires cultivated
-   occurrences to stop doing that. §7.6's "keeps today's behaviour" therefore
-   means the legacy default supplies today's 60-day window and today's WILD
-   successor; it cannot preserve wild reseeding for a cultivated occurrence,
-   because the two are the same code path today. EFM-10 owes the gate on both
-   sides: a wild occurrence still reseeds at expiry, and a cultivated one
-   becomes empty.
+   Change (b) replaces the old automatic wrap for cultivated occurrences with
+   the authored await-replanting outcome. Change (c) makes transient corpse
+   retention an elapsed page-calendar duration; health continues to scale
+   living growth and lifespan, but not the stored corpse window. The legacy
+   default remains 60 days with wild `reseed`, and its cultivated outcome
+   remains empty and await-replanting. Natural and explicit deaths share the
+   stored outcome, and reseed anchors/tombstones remain until safe semantic
+   compaction.
 2. **Undeclared cultivated variants change no visual** (§6).
 3. **Persisted state records semantic tags only** — context, condition, cause,
    phase, stage, the retention outcome and its expiry — and **never a texture
@@ -742,12 +756,9 @@ regrowth timer.
 
 ## 10. Scope of this document
 
-This contract is documentation. It introduces no loader, resolver, persistence,
-or retention behaviour. Its implementers are EFM-2 (loading and auditing
-declarations), EFM-3 (the pure resolver), EFM-4 through EFM-6 (occurrence
-identity, render context, persisted condition), EFM-7 and EFM-10 (the
-mutation/query seam and retention), and EFM-8/EFM-9 (pilot art and the saguaro
-demonstration).
+This contract records loader, resolver, persistence and retention behavior
+delivered by EFM-2 through EFM-7 and EFM-10. EFM-8/EFM-9 own the remaining
+pilot art and saguaro demonstration.
 
 Hazard producers — temperature exposure, drought, fire contact, disease, direct
 damage — are out of scope for the whole epic. This contract fixes the cause

@@ -6397,7 +6397,7 @@ cultivated occurrences doing that — they become empty and await
 replanting — under an explicit policy AND under the omitted legacy one,
 since the two are the same code path. An omitted `corpsePolicy`
 therefore supplies today's 60-day window and today's WILD successor,
-not an exemption from D-13. EFM-10 owes the gate on both sides.
+not an exemption from D-13. EFM-10 applies this boundary at each expiry.
 
 **Two fallbacks, not one.** The final SEMANTIC fallback is the
 species' own base texture — the first `phases` entry's texture, or
@@ -6435,8 +6435,10 @@ replanting by rule, so `await_replanting` is a documented cultivated
 outcome and a REJECTED species token. A corpse freezes its phase and
 annual stage at death and snapshots its retention outcome, so a later
 content edit cannot reinterpret an existing save. An omitted policy
-keeps today's behaviour: transient, 60 days, wild successor `reseed`,
-matching `World.Flora.Growth.deadWindowDays`.
+keeps the 60-day transient window and wild successor `reseed`, measured
+in elapsed whole calendar days on the owning page. Retention does not
+scale with plant health; this intentionally changes low-health reseed
+dates while living growth and lifespan selection remain health-scaled.
 
 **Persisted state is semantic.** Condition records carry tags —
 context, condition, cause, frozen phase and stage, retention outcome
@@ -6447,20 +6449,34 @@ be added or renamed without migrating a save.
 `World.Flora.Condition` holds at most one record per occurrence, keyed
 by the #1854 `FloraInstanceId`, in `wsFloraConditionsRef` beside
 `wsFloraHarvestsRef`; `wpsFloraConditions` carries it and
-`world-activity` v7 persists it (v1–v6 decode to an empty map; v8, below, adds a plot's embedded condition). Wild
-flora regenerates and row crops replay, then each finds its record by
+`world-activity` v8 persists it (v1–v7 decode to an empty map; v8 also adds
+a plot's embedded condition). Wild flora regenerates and row crops replay,
+then each finds its record by
 id, so a death survives eviction, regeneration and a save/load with its
 same-tile siblings untouched. `markFloraDead` refuses a second record
 for an occurrence rather than overwriting it; selecting the retention
 outcome from species policy is not the store's job (the seam does it,
-#2555; expiry is EFM-10). A
+#2555). Natural deaths use the same record and successor semantics as
+explicit deaths, and the stored selection remains authoritative after a
+content edit. Page-day rollover and `world.setDate` reconcile every crossed
+day while paused as well as during normal time advancement, using the
+addressed page's own calendar. A multi-day jump is equivalent to stepping each
+day. A wild reseed starts at age zero on its stored expiry day and retains its
+anchor through eviction, regeneration and save/load. Wild `absent` keeps a
+tombstone that suppresses drawing, hit testing, harvest, existing-flora
+queries and AI. A cultivated row is removed through an identity-specific
+`world-edits` entry; a plot is deleted only if the same plot still occupies
+its tile. Both await deliberate replanting. Persistent remains have no expiry.
+Compact a marker only when its removal preserves current and future presence,
+age, phase/stage, generation and natural-death boundaries. A
 record also carries the species' authored NAME and the occurrence's
 canonical tile, as validation provenance only (the frozen life phase and annual stage are each optional: a species with no phases or no annual cycle freezes none, and the legacy dead token is refused as a phase at death): the id cannot recover
 either, and a record for an unloaded wild occurrence must still be
 checked. Three boundaries judge a record, each naming the page and key:
 `validateWorldActivity` (reserved key, a wire tag outside its
-vocabulary, a stored condition other than dead, an expiry before the
-begin day, a successor that contradicts the render context),
+vocabulary, a stored condition marker that contradicts its retention or
+context, an expiry before the begin day, or a successor that contradicts
+the render context),
 `missingFloraReferences` (a species the build lacks fails the load like
 any other flora reference, resolved by `resolveFloraReferences` at
 staging), and `sessionIntegrityErrors` at save and load (the tile must be
@@ -6468,8 +6484,9 @@ the canonical name of a tile in the page's OWN frame, and a planted id —
 which encodes neither page nor tile — is checked only against that
 page's own planting). A record whose planting the page's log does not
 hold, or whose chunk is not resident, is the tolerated dangling case.
-Since #2555 (EFM-7) growth, every render form and the forage queries read a
-record (below); expiry is EFM-10.
+Since #2555 (EFM-7), every render form and forage query reads the record
+(below); #2557 (EFM-10) adds natural death, calendar-day expiry and durable
+successors.
 
 **A groundcover plot embeds the same record in its own value (#2552,
 EFM-6).** A plot has no instance identity — it is tile-keyed, and its
@@ -6496,8 +6513,8 @@ its vocabulary, a stored condition other than dead, an expiry before the
 begin day, a successor that contradicts the render context, a context
 other than `cultivated`, and a species or tile that disagrees with the
 plot. EFM-6 itself was persistence-only; EFM-7 (#2555, below) made a stored
-`dead` condition alter growth, rendering and the harvest window, and EFM-10
-owns expiry and automatic replanting.
+`dead` condition alter growth, rendering and the harvest window; EFM-10
+reconciles retention and successors through the page calendar.
 
 **The condition seam is the ONLY writer of a condition (#2555, EFM-7).** Two
 world-thread commands, `WorldSetFloraCondition` and `WorldClearFloraCondition`
@@ -6525,9 +6542,10 @@ nothing inherited) and the occurrence's context (a cultivated successor is
 always `await_replanting`, D-19). A plot edit reads the plot out of the very
 map it edits inside one atomic step, so it preserves every other plot and can
 never restore a removed or replaced plot from a stale snapshot. A CLEAR
-removes only the addressed explicit condition (idempotent, recorded as a
-no-op when there is none) and never resets planting time, generation or a
-harvest timer; the occurrence returns to its clock-derived behaviour.
+removes only an ordinary explicit condition (idempotent, recorded as a no-op
+when there is none). Natural-death records and completed successor markers
+cannot be cleared; clearing never resets planting time, generation or a
+harvest timer.
 
 `World.Flora.Growth.floraGrowth` takes the occurrence's condition
 (`Maybe GrowthCondition`, the record rebased onto the occurrence's own clock:
@@ -6535,9 +6553,9 @@ the world day, or a plot's elapsed days) and is the SINGLE point every
 consumer reads: a `dead` record reports `fgDead`, the age and generation of
 the day it began, and the record's frozen phase and stage
 (`growthPhaseTag`, `growthVisualPhase`, `growthVisualStage`,
-`growthReportedStage`), and stops advancing — across a calendar-stage change,
-past the stored expiry (stored and ignored until EFM-10) and across a
-save/load. So a dead bush is not harvest-open, a dead tree whose authored
+`growthReportedStage`), and stops advancing across calendar-stage changes
+until its stored expiry. At expiry the selected successor is applied. So a
+dead bush is not harvest-open, a dead tree whose authored
 wood tag is ungated stays chop-eligible (the §Farming contract), forage AI
 skips it and `world.getFloraAt(...).dead` is true, with no consumer-specific
 branch: the Chop hit test, the Chop commit, the forage queries, the harvest
@@ -6560,8 +6578,8 @@ never recomputed; death metadata is absent where no record exists.
 `world.getFloraVisualAt(gx, gy, instanceId | nil)` returns the registered
 texture name, the winning candidate and the ordered tried candidates (the
 fallback trace), or nil for an unknown target. The seam has no hazard
-producer, no expiry or reseed, no player-facing UI and no art; scripts under
-`scripts/` do not call it.
+producer, no player-facing UI and no art; scripts under `scripts/` do not
+call it.
 
 Design record:
 [`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
@@ -6635,15 +6653,13 @@ removed plot; the three render forms and the trace with synthetic handles;
 depletion versus death; and, through the real world-command handlers and
 Lua verbs, a co-tenant killed alone, the additive query fields, alias
 addressing, named refusals and malformed requests) and
-`python3 tools/flora_condition_probe.py` (CI-eligible: the same seam on an
-arena scenario end to end, ending in a real save and load),
-`--match "save migrations"` and `python3 tools/save_compat_audit.py`
-(the v8 fixture), and `python3 tools/persistence_inventory_audit.py` (the
-`wsFloraConditionsRef`, `wpsFloraConditions`, `wsCropPlotsRef` and
-`wpsCropPlots` rows). OWED by the epic's children, each with its own
-issue: EFM-10 owes retention and successor
-behaviour, including the wild-reseeds/cultivated-empties pair above; and EFM-9 owes the pilot's
-end-to-end headless and preview evidence.
+`python3 tools/flora_condition_probe.py` (CI-eligible: the same seam and
+retention boundaries on an arena scenario through save/load),
+`--match "flora corpse retention"`, `--match "save migrations"` and
+`python3 tools/save_compat_audit.py` (the current fixture and retained
+layouts), and `python3 tools/persistence_inventory_audit.py` (the condition,
+edit and plot rows). EFM-10's retention and successor behavior is implemented;
+EFM-9 still owns the pilot's end-to-end headless and preview evidence.
 
 ---
 
