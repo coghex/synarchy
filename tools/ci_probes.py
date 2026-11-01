@@ -103,6 +103,14 @@ CI_ELIGIBLE = {
     # and cost ~2 s together — the probe stays in the seconds range that
     # makes it CI-eligible.
     "debug_console_boot",
+    # #2555: the only automated end-to-end proof of the flora condition seam
+    # (set/clear through the real Lua verbs and world thread, the additive
+    # query fields, the fallback trace, and a save/load round trip). One
+    # headless arena boot with an authored scenario fixture: no worldgen, no
+    # GPU, no AI decisions, no timing — every wait is on the command's own
+    # observable effect or a published save/load transaction. The ordinary
+    # hspec group `flora condition seam` covers the same rules in-process.
+    "flora_condition",
     # #2809: fluid_exact_restart, infection and medic_coord left this set for
     # owner decision z3hd4feg (2026-10-08): actual game simulations are
     # optional, local only and never CI. Their grounds are recorded in

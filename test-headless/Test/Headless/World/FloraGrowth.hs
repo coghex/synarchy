@@ -462,21 +462,21 @@ spec = do
 
     describe "floraGrowth (derived age + phases)" $ do
         it "a fresh seedling is a sprout on day 0" $ do
-            let g = floraGrowth berry 0 seedling
+            let g = floraGrowth Nothing berry 0 seedling
             fgAge g `shouldBe` 0.0
             growthPhaseTag berry g `shouldBe` Just PhaseSprout
             fgGeneration g `shouldBe` 0
         it "phases progress as world days elapse" $ do
-            let g = floraGrowth berry 400 seedling
+            let g = floraGrowth Nothing berry 400 seedling
             growthPhaseTag berry g `shouldBe` Just PhaseMatured
         it "health slows the growth rate" $ do
             let weak = seedling { fiHealth = 0.0 }
-                g = floraGrowth berry 400 weak
+                g = floraGrowth Nothing berry 400 weak
             -- 400 days at the 0.25 floor = age 100 — still a sprout
             fgAge g `shouldBe` 100.0
             growthPhaseTag berry g `shouldBe` Just PhaseSprout
         it "evergreens never die or wrap" $ do
-            let g = floraGrowth evergreen 100000 seedling
+            let g = floraGrowth Nothing evergreen 100000 seedling
             fgDead g `shouldBe` False
             fgGeneration g `shouldBe` 0
             growthPhaseTag evergreen g `shouldBe` Just PhaseMatured
@@ -486,7 +486,7 @@ spec = do
         -- [1080, 3600]; past maxLife + the dead window (3660 days) it
         -- must have died and reseeded at least once.
         it "a perennial eventually wraps into the next generation" $ do
-            let g = floraGrowth berry (12 * daysPerYear) seedling
+            let g = floraGrowth Nothing berry (12 * daysPerYear) seedling
             fgGeneration g `shouldSatisfy` (≥ 1)
         it "the dead window presents the dead phase, then a sprout follows" $ do
             let l = case instanceLifespan berry seedling of
@@ -497,8 +497,8 @@ spec = do
                 deadDay   = ceiling l
                 -- first day of the next generation
                 rebornDay = ceiling (l + deadWindowDays) + 1
-                gDead   = floraGrowth berry deadDay seedling
-                gReborn = floraGrowth berry rebornDay seedling
+                gDead   = floraGrowth Nothing berry deadDay seedling
+                gReborn = floraGrowth Nothing berry rebornDay seedling
             fgDead gDead `shouldBe` True
             growthPhaseTag berry gDead `shouldBe` Just PhaseDead
             fgDead gReborn `shouldBe` False
@@ -510,9 +510,9 @@ spec = do
             -- computed from the value under test. Both examples stand:
             -- this one cannot be satisfied by a constant mixer, that
             -- one still covers the hashed-lifetime path.
-            let gAlive  = floraGrowth annualHerb 359 seedling
-                gDead   = floraGrowth annualHerb 360 seedling
-                gReborn = floraGrowth annualHerb 421 seedling
+            let gAlive  = floraGrowth Nothing annualHerb 359 seedling
+                gDead   = floraGrowth Nothing annualHerb 360 seedling
+                gReborn = floraGrowth Nothing annualHerb 421 seedling
             fgDead gAlive `shouldBe` False
             fgDead gDead `shouldBe` True
             growthPhaseTag annualHerb gDead `shouldBe` Just PhaseDead
@@ -547,26 +547,26 @@ spec = do
     describe "harvestOpen (fruiting window)" $ do
         let mature = seedling { fiAge = 400.0 }
         it "a mature berry yields in the fruiting window" $
-            harvestOpen berry fruitingDay (floraGrowth berry 0 mature)
+            harvestOpen berry fruitingDay (floraGrowth Nothing berry 0 mature)
                 `shouldBe` True
         it "a mature berry does NOT yield out of season" $
-            harvestOpen berry dormantDay (floraGrowth berry 0 mature)
+            harvestOpen berry dormantDay (floraGrowth Nothing berry 0 mature)
                 `shouldBe` False
         it "the window closes again at senescing (unharvested fruit is lost)" $
-            harvestOpen berry 280 (floraGrowth berry 0 mature)
+            harvestOpen berry 280 (floraGrowth Nothing berry 0 mature)
                 `shouldBe` False
         it "a species without a fruiting stage is open year-round" $ do
-            let g = floraGrowth clover 60 seedling
+            let g = floraGrowth Nothing clover 60 seedling
             harvestOpen clover dormantDay g `shouldBe` True
             harvestOpen clover 250 g `shouldBe` True
         it "sprouts are too young to yield even in season" $
-            harvestOpen berry fruitingDay (floraGrowth berry 0 seedling)
+            harvestOpen berry fruitingDay (floraGrowth Nothing berry 0 seedling)
                 `shouldBe` False
         it "dead plants never yield" $ do
             let l = case instanceLifespan berry seedling of
                         Just x  → x
                         Nothing → error "perennial must have a lifespan"
-                gDead = floraGrowth berry (ceiling l) seedling
+                gDead = floraGrowth Nothing berry (ceiling l) seedling
             harvestOpen berry fruitingDay gDead `shouldBe` False
 
     describe "harvestOpen tag policy: the authored window exemption \
@@ -575,7 +575,7 @@ spec = do
         -- predicate the Chop hit test, the world-thread designation
         -- commit, both harvest verbs and the tagged finder consult.
         let admits sp tag i = floraHarvestAdmits sp tag dormantDay
-                                  (floraGrowth sp 0 i)
+                                  (floraGrowth Nothing sp 0 i)
         it "a species that AUTHORS the tag as ungated is taken in every \
            \growth state — a sprout and a standing-dead tree both chop" $ do
             admits oak (Just "wood") oakSprout  `shouldBe` True
@@ -585,19 +585,19 @@ spec = do
            \so the case above is not vacuously open" $ do
             -- Without this the exemption could be passing because every
             -- instance happens to be mature.
-            harvestOpen oak dormantDay (floraGrowth oak 0 oakSprout)
+            harvestOpen oak dormantDay (floraGrowth Nothing oak 0 oakSprout)
                 `shouldBe` False
-            harvestOpen oak dormantDay (floraGrowth oak 0 oakMatured)
+            harvestOpen oak dormantDay (floraGrowth Nothing oak 0 oakMatured)
                 `shouldBe` True
-            harvestOpen oak dormantDay (floraGrowth oak 0 oakDead)
+            harvestOpen oak dormantDay (floraGrowth Nothing oak 0 oakDead)
                 `shouldBe` False
-            growthPhaseTag oak (floraGrowth oak 0 oakSprout)
+            growthPhaseTag oak (floraGrowth Nothing oak 0 oakSprout)
                 `shouldBe` Just PhaseSprout
-            growthPhaseTag oak (floraGrowth oak 0 oakMatured)
+            growthPhaseTag oak (floraGrowth Nothing oak 0 oakMatured)
                 `shouldBe` Just PhaseMatured
-            growthPhaseTag oak (floraGrowth oak 0 oakDead)
+            growthPhaseTag oak (floraGrowth Nothing oak 0 oakDead)
                 `shouldBe` Just PhaseDead
-            fgDead (floraGrowth oak 0 oakDead) `shouldBe` True
+            fgDead (floraGrowth Nothing oak 0 oakDead) `shouldBe` True
         it "a species that authors NO exemption is refused in exactly the \
            \states a BARE call is — the absent-schema default" $ do
             -- The whole point of #2212: before it, ANY tagged call
@@ -612,7 +612,7 @@ spec = do
            \species" $
             forM_ [oakSprout, oakMatured, oakDead] $ \i →
                 admits elm (Just "wood") i
-                    `shouldBe` harvestOpen elm dormantDay (floraGrowth elm 0 i)
+                    `shouldBe` harvestOpen elm dormantDay (floraGrowth Nothing elm 0 i)
         it "refuses a tag the species does not carry, exemption or not" $ do
             admits oak (Just "fruit") oakMatured `shouldBe` False
             admits elm (Just "fruit") oakMatured `shouldBe` False
@@ -632,19 +632,19 @@ spec = do
                   ,(elm, oakSprout), (elm, oakMatured), (elm, oakDead)] $
                 \(sp, i) →
                     admits sp Nothing i
-                        `shouldBe` harvestOpen sp dormantDay (floraGrowth sp 0 i)
+                        `shouldBe` harvestOpen sp dormantDay (floraGrowth Nothing sp 0 i)
         it "still gates a bare fruiting-window forage by the season" $ do
             let mature = seedling { fiAge = 400.0 }
             floraHarvestAdmits berry Nothing fruitingDay
-                (floraGrowth berry 0 mature) `shouldBe` True
+                (floraGrowth Nothing berry 0 mature) `shouldBe` True
             floraHarvestAdmits berry Nothing dormantDay
-                (floraGrowth berry 0 mature) `shouldBe` False
+                (floraGrowth Nothing berry 0 mature) `shouldBe` False
 
     describe "harvestOpen phase yields: what an accepted harvest pays \
              \(#2212)" $ do
         let yieldOf sp i = case fsHarvest sp of
                 Nothing → error "fixture species must author a harvest"
-                Just fh → floraHarvestYield sp fh (floraGrowth sp 0 i)
+                Just fh → floraHarvestYield sp fh (floraGrowth Nothing sp 0 i)
         it "an authored EMPTY override pays nothing — a felled sprout" $
             yieldOf oak oakSprout `shouldBe` []
         it "an unauthored phase inherits the block's own roll" $ do
@@ -665,7 +665,7 @@ spec = do
         it "a species with no phases has no key to hit and always \
            \inherits" $ do
             let phaseless = oak { fsPhases = HM.empty }
-            growthPhaseTag phaseless (floraGrowth phaseless 0 oakSprout)
+            growthPhaseTag phaseless (floraGrowth Nothing phaseless 0 oakSprout)
                 `shouldBe` Nothing
             yieldOf phaseless oakSprout `shouldBe` [("test_log", 3, 6)]
 

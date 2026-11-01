@@ -72,6 +72,9 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldDesignatePlantCommand
                                    , handleWorldCancelPlantCommand
                                    , handleWorldSetPlantDesignateTextureCommand)
+import World.Thread.Command.Flora.Condition
+    ( handleWorldSetFloraConditionCommand
+    , handleWorldClearFloraConditionCommand )
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import Scenario.Capture.Service (runScenarioCapture)
 import Scenario.Placement.Install (handleWorldInstallScenarioPlacementCommand)
@@ -197,6 +200,10 @@ handleWorldCommand env logger (WorldEraseChopInstances pageId iids)
   = handleWorldEraseChopInstancesCommand env logger pageId iids
 handleWorldCommand env logger (WorldCancelChop pageId gx gy mIid)
   = handleWorldCancelChopCommand env logger pageId gx gy mIid
+handleWorldCommand env logger (WorldSetFloraCondition pageId gx gy mIid cause)
+  = handleWorldSetFloraConditionCommand env logger pageId gx gy mIid cause
+handleWorldCommand env logger (WorldClearFloraCondition pageId gx gy mIid)
+  = handleWorldClearFloraConditionCommand env logger pageId gx gy mIid
 handleWorldCommand env logger (WorldSetChopDesignateTexture pageId texHandle)
   = handleWorldSetChopDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetTillAnchor pageId gx gy)

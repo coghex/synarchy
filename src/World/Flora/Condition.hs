@@ -6,10 +6,12 @@
 --   as a small overlay joined back onto the regenerated occurrence by
 --   its 'FloraInstanceId' — the shape 'World.Flora.Harvest.FloraHarvests'
 --   and 'World.Chop.Types.ChopDesignations' already have. This module is
---   that overlay's vocabulary and its pure operations. It changes no
---   rendering, growth, tick, hazard or crop-plot behaviour: a record's
---   only observable effect is that it exists, survives, and can be
---   looked up.
+--   that overlay's vocabulary and its pure operations. It does not itself
+--   change growth, rendering or any tick: the one world-thread writer
+--   ("World.Thread.Command.Flora.Condition", via
+--   "World.Flora.ConditionSeam", #2555) creates and removes records, and
+--   'World.Flora.Growth.floraGrowth' is what makes a record observable
+--   to every consumer. No hazard producer exists.
 --
 --   == What a record holds
 --
@@ -50,6 +52,9 @@ module World.Flora.Condition
     , FloraConditionRecord
     , SavedFloraConditionRecord
     , traverseConditionSpecies
+      -- * The growth view of a record (#2555)
+    , GrowthCondition(..)
+    , conditionAtClock
       -- * The store
     , FloraConditions
     , SavedFloraConditions
@@ -100,8 +105,8 @@ data RetentionSuccessor
 
 -- | The retention outcome snapshotted when death occurs, so a later
 --   content-pack edit cannot silently reinterpret an existing save (D-5).
---   Selecting it from species policy is EFM-7\/EFM-10's job; this issue
---   stores whatever the caller supplies.
+--   Selecting it from species policy is "World.Flora.ConditionSeam"'s job
+--   (#2555); this store keeps whatever the caller supplies.
 data ConditionRetention
     = RetentionPersistent
       -- ^ Visible until explicitly cleared, replaced or revived. Has no
@@ -147,6 +152,32 @@ data FloraConditionRecordOf s = FloraConditionRecord
       --   with no annual cycle, which is valid.
     , fcrRetention ∷ !ConditionRetention
     } deriving (Show, Eq, Generic, Serialize, NFData)
+
+-- | A record as the growth derivation consumes it (#2555, EFM-7): the
+--   record and the day the occurrence's OWN growth clock read when the
+--   condition began.
+--
+--   'World.Flora.Growth.floraGrowth' is fed one clock per occurrence
+--   kind: wild and row flora read the absolute world day, a groundcover
+--   plot reads the days elapsed since it was planted
+--   ('World.Flora.CropPlot.cropPlotElapsedDays'). A record's begin day is
+--   always ABSOLUTE, so the growth view rebases it once, here, and
+--   growth never has to know which clock it was handed.
+data GrowthCondition = GrowthCondition
+    { gcRecord       ∷ !FloraConditionRecord
+    , gcBeganClockDay ∷ !Int
+      -- ^ 'fcrBeganDay' on the occurrence's own clock, floored at day
+      --   zero like every growth reading.
+    } deriving (Show, Eq)
+
+-- | The growth view of @record@, for an occurrence whose clock reads
+--   (absolute day − @clockOffset@): @0@ for wild and row flora, the
+--   planted day for a plot.
+conditionAtClock ∷ Int → FloraConditionRecord → GrowthCondition
+conditionAtClock clockOffset record = GrowthCondition
+    { gcRecord        = record
+    , gcBeganClockDay = max 0 (fcrBeganDay record - clockOffset)
+    }
 
 -- | The LIVE record: species by runtime handle.
 type FloraConditionRecord = FloraConditionRecordOf FloraId

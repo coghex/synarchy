@@ -443,8 +443,9 @@ data FloraInstance = FloraInstance
       --   persists it: the creation record (the world-edit log, the crop
       --   plot table, or the deterministic generator) already determines
       --   it, so a chunk eviction and regeneration, a load, and the
-      --   legacy @world-edits@ v1 rewrite all reconstruct it. Nothing
-      --   reads it yet; passing it to the visual selector is EFM-7.
+      --   legacy @world-edits@ v1 rewrite all reconstruct it. The visual
+      --   selector is built from it ('World.Flora.Render.floraVisualSelectorFor',
+      --   #2555).
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData FloraInstance where
     rnf (FloraInstance s tx ty ou ov z a h v bw i cd cx) =

@@ -735,7 +735,7 @@ assertCattailTextures def = do
             , fiChopDesignated = False
             , fiContext = ContextWild
             }
-        resolve day inst = resolveFloraTexture catalog 360 day inst
+        resolve day inst = resolveFloraTexture catalog 360 day HM.empty inst
         adult = mkInstance 300 1
         juvenile = mkInstance 0 0
 

@@ -35,6 +35,7 @@ module World.Flora.CropPlot
     , markCropPlotDead
     , clearCropPlotCondition
     , cropPlotCondition
+    , cropPlotGrowthCondition
     ) where
 
 import UPrelude
@@ -43,8 +44,9 @@ import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import World.Flora.Condition
-    ( ConditionProblem, FloraConditionRecordOf(..), recordShapeProblems
-    , renderConditionProblem, traverseConditionSpecies )
+    ( ConditionProblem, FloraConditionRecordOf(..), GrowthCondition
+    , conditionAtClock, recordShapeProblems, renderConditionProblem
+    , traverseConditionSpecies )
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Reference (FloraRef)
 import World.Flora.Types (FloraContext(..), FloraId, FloraInstance(..))
@@ -187,6 +189,14 @@ clearCropPlotCondition cp = cp { cpCondition = Nothing }
 -- | The stored condition, or its absence.
 cropPlotCondition ∷ CropPlotOf s → Maybe (FloraConditionRecordOf s)
 cropPlotCondition = cpCondition
+
+-- | The plot's condition as 'World.Flora.Growth.floraGrowth' consumes it
+--   (#2555): the stored record with its begin day rebased onto the plot's
+--   own ELAPSED-days clock, which is the clock every plot growth reading
+--   is taken on ('cropPlotElapsedDays').
+cropPlotGrowthCondition ∷ CropPlot → Maybe GrowthCondition
+cropPlotGrowthCondition cp =
+    conditionAtClock (cpPlantedDay cp) <$> cpCondition cp
 
 -- | Days elapsed since planting, clamped to non-negative (a plot can't
 --   have gone negative-age even if queried before its planted day).

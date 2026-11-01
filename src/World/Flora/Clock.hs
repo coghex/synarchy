@@ -18,6 +18,7 @@
 --   which is the same value by construction.
 module World.Flora.Clock
     ( growthClock
+    , growthCalendar
     ) where
 
 import UPrelude
@@ -25,7 +26,8 @@ import Data.IORef (readIORef)
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldState(..))
 import World.Time.Types
-    (defaultCalendarConfig, worldAbsoluteDay, worldDateToDayOfYear)
+    ( calendarDaysPerYear, defaultCalendarConfig, worldAbsoluteDay
+    , worldDateToDayOfYear )
 
 -- | @(dayOfYear, absoluteDay)@ for the page's current date, under the
 --   page's own calendar (falling back to the default calendar for a
@@ -39,4 +41,18 @@ growthClock ws = do
     date ← readIORef (wsDateRef ws)
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
     pure ( worldDateToDayOfYear calendar date
+         , worldAbsoluteDay calendar date )
+
+-- | 'growthClock' with the calendar's year length appended:
+--   @(daysPerYear, dayOfYear, absoluteDay)@. The condition seam needs the
+--   year length to freeze an occurrence's annual stage exactly as the
+--   render adapter derives it ('World.Flora.Growth.growthVisualStage');
+--   all three come from ONE date sample.
+growthCalendar ∷ WorldState → IO (Int, Int, Int)
+growthCalendar ws = do
+    paramsM ← readIORef (wsGenParamsRef ws)
+    date ← readIORef (wsDateRef ws)
+    let calendar = maybe defaultCalendarConfig wgpCalender paramsM
+    pure ( calendarDaysPerYear calendar
+         , worldDateToDayOfYear calendar date
          , worldAbsoluteDay calendar date )

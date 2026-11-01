@@ -70,6 +70,8 @@ import World.Render.ViewBounds (computeViewBounds)
 import World.State.Types
 import World.Thread.Command.Cursor.Chop
     (handleWorldDesignateChopInstancesCommand)
+import World.Thread.Command.Flora.Condition
+    (handleWorldSetFloraConditionCommand)
 import World.Tile.Types (WorldTileData(..))
 import World.Time.Types
     (defaultCalendarConfig, defaultWorldDate, worldDateAddDays)
@@ -307,7 +309,8 @@ viewOf tiles =
         , fhvWorldSize = worldSize, fhvEffDepth = effDepth
         , fhvViewBounds = computeViewBounds cam fbW fbH effDepth
         , fhvTiles = tiles, fhvCatalog = catalog
-        , fhvHarvests = HM.empty, fhvDesignated = HM.empty
+        , fhvHarvests = HM.empty, fhvConditions = HM.empty
+        , fhvDesignated = HM.empty
         , fhvTexSizes = texSizes
         , fhvDaysPerYear = 360, fhvAbsDay = 0
         , fhvFrontWall = noFrontWallLift
@@ -379,6 +382,52 @@ spec = describe "Chop tag policy" $ beforeAll setup $ do
           `shouldBe`
           ( "selects", "commits", "finds", "fells"
           , plAdmitted p, plAdmitted p, plAdmitted p, plAdmitted p )
+
+  describe "a persistent dead condition (#2555) keeps the four surfaces \
+           \in agreement" $
+    forM_ [ (plantAt "oak matured", True)
+          , (plantAt "elm matured", False) ] $ \(p, admitted) →
+      it ("gives one answer for a conditioned-dead " ⧺ plLabel p
+          ⧺ " (wood admitted: " ⧺ show admitted ⧺ ")") $ \(env, ls) → do
+        -- The SAME plant, killed through the real world-thread command:
+        -- the growth state is dead whatever its matured age says, and
+        -- the authored ungated tag (and only it) keeps it fellable.
+        let (gx, gy) = plantTile p
+            kill = do
+                ws ← resetPageWith env [plInstance p]
+                logger ← readIORef (loggerRef env)
+                handleWorldSetFloraConditionCommand env logger fixturePage
+                    gx gy (Just (plantId p)) "fire"
+                pure ws
+        ws0 ← kill
+        conds ← readIORef (wsFloraConditionsRef ws0)
+        HM.member (plantId p) conds `shouldBe` True
+        let view = (viewOf (tilesWith [plInstance p]))
+                       { fhvConditions = conds }
+            selects = plantId p `elem` map (fpInstanceId . fst)
+                (floraSelectCandidates view (SelectChoppable "wood"))
+        -- commit
+        ws1 ← kill
+        logger ← readIORef (loggerRef env)
+        handleWorldDesignateChopInstancesCommand env logger fixturePage
+            [plantId p] "wood"
+        commits ← HM.member (plantId p) <$> readIORef (wsChopDesignationsRef ws1)
+        -- finder
+        _ ← kill
+        found ← evalDebug ls (T.concat
+            [ "local f = world.findHarvestableFlora(", tshow gx, ", ", tshow gy
+            , ", 8, 'wood'); return f and f.id or 'nil'" ])
+        -- fell
+        _ ← kill
+        felled ← evalDebug ls (T.concat
+            [ "local r = world.harvestFloraInstance(", tshow gx, ", ", tshow gy
+            , ", ", tshow (idNum (plantId p)), ", 'wood'); "
+            , "return r and #r or -1" ])
+        ( "selects", "commits", "finds", "fells"
+          , selects, commits, found ≢ "nil", felled ≢ "-1" )
+          `shouldBe`
+          ( "selects", "commits", "finds", "fells"
+          , admitted, admitted, admitted, admitted )
 
   describe "what a tagged fell returns and leaves behind \
            \(requirements 4 and 5)" $ do

@@ -28,13 +28,15 @@ import World.Types
 import World.Flora.Clock (growthClock)
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            floraHarvestAdmits, floraHarvestYield,
-                           growthPhaseTag, activeStageTag,
+                           growthPhaseTag, growthReportedStage,
+                           instanceGrowthCondition,
                            lifePhaseText, annualStageText)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
-                             cropPlotInstance)
+                             cropPlotGrowthCondition, cropPlotInstance)
 import World.Generate.Coordinates (globalToChunk, chunkToGlobal,
                                   chunkInSeamRegion, seamTileDist2)
 import Item.Types (ItemDef(..), ItemFood(..), lookupItemDef)
+import Engine.Scripting.Lua.API.Forage.Condition (pushConditionFields)
 import Engine.Scripting.Lua.API.Forage.Lookup
     (canonicalPageTile, floraAt)
 
@@ -98,9 +100,13 @@ worldGetFloraAtFn env = do
                         (gx, gy) ← canonicalPageTile ws rawGX rawGY
                         insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        conditions ← readIORef (wsFloraConditionsRef ws)
                         (doy, absDay) ← growthClock ws
-                        let open (i, sp) =
-                                harvestOpen sp doy (floraGrowth sp absDay i)
+                        let growthOf i sp = floraGrowth
+                                (instanceGrowthCondition conditions i)
+                                sp absDay i
+                            open (i, sp) =
+                                harvestOpen sp doy (growthOf i sp)
                             harvestables =
                                 [ p | p@(_, sp) ← insts
                                     , isJust (fsHarvest sp) ]
@@ -122,10 +128,13 @@ worldGetFloraAtFn env = do
                                         , timer
                                         , maybe [] fhTags (fsHarvest sp)
                                         , fiInstanceId i
-                                        , fiChopDesignated i )
+                                        , fiChopDesignated i
+                                        , growthOf i sp
+                                        , fiContext i )
             case mResult of
                 Nothing → Lua.pushnil
-                Just (name, harvestable, timer, tags, iid, designated) → do
+                Just (name, harvestable, timer, tags, iid, designated
+                     , g, ctx) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 name)
                     Lua.setfield (-2) "id"
@@ -141,6 +150,12 @@ worldGetFloraAtFn env = do
                     Lua.setfield (-2) "instanceId"
                     Lua.pushboolean designated
                     Lua.setfield (-2) "chopDesignated"
+                    -- #2555, ADDITIVE: the SELECTED occurrence's
+                    -- effective state, so a dead bush reads dead here
+                    -- without a second query. Selection is unchanged.
+                    Lua.pushboolean (fgDead g)
+                    Lua.setfield (-2) "dead"
+                    pushConditionFields ctx g
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] tags) $ \(i, tg) → do
                         Lua.pushstring (TE.encodeUtf8 tg)
@@ -185,6 +200,7 @@ worldGetFloraGrowthAtFn env = do
                         (gx, gy) ← canonicalPageTile ws rawGX rawGY
                         insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        conditions ← readIORef (wsFloraConditionsRef ws)
                         (doy, absDay) ← growthClock ws
                         -- #1854: one timer per PLANT, so each entry
                         -- reports its own rather than the tile's.
@@ -192,14 +208,17 @@ worldGetFloraGrowthAtFn env = do
                             [ ( fsName sp, g
                               , fiHealth i
                               , lifePhaseText <$> growthPhaseTag sp g
-                              , annualStageText <$> activeStageTag sp doy
+                              , annualStageText <$> growthReportedStage sp doy g
                               , isJust (fsHarvest sp) ∧ timer ≤ 0
                                   ∧ harvestOpen sp doy g
                               , timer
                               , fiInstanceId i
-                              , fiChopDesignated i )
+                              , fiChopDesignated i
+                              , fiContext i )
                             | (i, sp) ← insts
-                            , let g = floraGrowth sp absDay i
+                            , let g = floraGrowth
+                                      (instanceGrowthCondition conditions i)
+                                      sp absDay i
                                   timer = HM.lookupDefault 0
                                               (fiInstanceId i) harvests
                             ]
@@ -209,7 +228,7 @@ worldGetFloraGrowthAtFn env = do
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] entries) $
                         \(n, (name, g, health, mPhase, mStage
-                             , harvestable, timer, iid, designated)) → do
+                             , harvestable, timer, iid, designated, ctx)) → do
                             Lua.newtable
                             Lua.pushstring (TE.encodeUtf8 name)
                             Lua.setfield (-2) "id"
@@ -240,6 +259,7 @@ worldGetFloraGrowthAtFn env = do
                             Lua.setfield (-2) "instanceId"
                             Lua.pushboolean designated
                             Lua.setfield (-2) "chopDesignated"
+                            pushConditionFields ctx g
                             Lua.rawseti (-2) (fromIntegral n)
             return 1
         _ → Lua.pushnil >> return 1
@@ -311,6 +331,7 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        conditions ← readIORef (wsFloraConditionsRef ws)
                         cropPlots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                         (doy, absDay) ← growthClock ws
                         itemMgr ← readReadOnlyRef
@@ -389,7 +410,9 @@ worldFindHarvestableFloraFn env = do
                                 , Just fh ← [fsHarvest sp]
                                 -- Derived BEFORE the edible-yield test,
                                 -- which is now phase-aware (#2212).
-                                , let g = floraGrowth sp absDay i
+                                , let g = floraGrowth
+                                          (instanceGrowthCondition conditions i)
+                                          sp absDay i
                                 , wanted sp fh g
                                 , floraHarvestAdmits sp tagFilter doy g
                                 , let (tgx, tgy) = chunkToGlobal coord
@@ -421,7 +444,9 @@ worldFindHarvestableFloraFn env = do
                                     , Just sp ← [lookupSpecies (cpSpecies cp) cat]
                                     , Just fh ← [fsHarvest sp]
                                     , let elapsed = cropPlotElapsedDays absDay cp
-                                          g = floraGrowth sp elapsed
+                                          g = floraGrowth
+                                                  (cropPlotGrowthCondition cp)
+                                                  sp elapsed
                                                   (cropPlotInstance cp)
                                     -- Same ordering as the wild branch
                                     -- above, and for the same reason:
@@ -537,7 +562,9 @@ worldGetCropPlotAtFn env = do
                                 pure $ do
                                     sp ← lookupSpecies (cpSpecies cp) cat
                                     let elapsed = cropPlotElapsedDays absDay cp
-                                        g = floraGrowth sp elapsed
+                                        g = floraGrowth
+                                                (cropPlotGrowthCondition cp)
+                                                sp elapsed
                                                 (cropPlotInstance cp)
                                     -- elapsed is the plot's own age clock
                                     -- (fine for fgAge/phase); the annual
@@ -548,7 +575,7 @@ worldGetCropPlotAtFn env = do
                                     Just ( fsName sp, g, cpHealth cp
                                          , lifePhaseText ⊚ growthPhaseTag sp g
                                          , annualStageText ⊚
-                                               activeStageTag sp doy
+                                               growthReportedStage sp doy g
                                          , isJust (fsHarvest sp)
                                              ∧ harvestOpen sp doy g )
             case mResult of
@@ -577,5 +604,7 @@ worldGetCropPlotAtFn env = do
                     Lua.setfield (-2) "dead"
                     Lua.pushboolean harvestable
                     Lua.setfield (-2) "harvestable"
+                    -- #2555, ADDITIVE: a plot is cultivated by definition.
+                    pushConditionFields ContextCultivated g
             return 1
         _ → Lua.pushnil >> return 1

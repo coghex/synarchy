@@ -175,18 +175,18 @@ spec = do
                           , fsPhases = HM.fromList
                 [(PhaseSeedling, LifePhase PhaseSeedling 50 (TextureHandle 8))
                 ,(PhaseMatured, LifePhase PhaseMatured 10 (TextureHandle 9))] }
-        resolveFloraTexture (catalog sp) 360 60 inst `shouldBe` TextureHandle 9
+        resolveFloraTexture (catalog sp) 360 60 HM.empty inst `shouldBe` TextureHandle 9
 
     it "freezes distinct dead-stage handles across stage and year boundaries" $ do
         forM_ [(1, 100, 99, CycleDormant, 6), (0, 110, 100, CycleFlowering, 7)
               ,(-259, 370, 359, CycleFlowering, 7), (-260, 370, 360, CycleDormant, 6)] $
             \(age, day, death, stage, texture) → do
                 let fi = inst { fiAge = age }
-                    g = floraGrowth seasonal day fi
+                    g = floraGrowth Nothing seasonal day fi
                 fgDead g `shouldBe` True
                 growthDeathDay seasonal fi g `shouldBe` Just death
                 growthVisualStage seasonal 360 day fi g `shouldBe` Just stage
-                resolveFloraTexture (catalog seasonal) 360 day fi `shouldBe` TextureHandle texture
+                resolveFloraTexture (catalog seasonal) 360 day HM.empty fi `shouldBe` TextureHandle texture
                 growthPhaseTag seasonal g `shouldBe` Just PhaseDead
                 growthVisualPhase seasonal fi g `shouldBe` Just PhaseMatured
                 harvestOpen seasonal (day `mod` 360) g `shouldBe` False
@@ -196,7 +196,7 @@ spec = do
               ,(0,1,270,260,1), (110,1,0,0,0)] $
             \(age,health,day,death,generation) → do
                 let fi = inst { fiAge = age, fiHealth = health }
-                    g = floraGrowth seasonal day fi
+                    g = floraGrowth Nothing seasonal day fi
                 fgDead g `shouldBe` True
                 fgGeneration g `shouldBe` generation
                 growthDeathDay seasonal fi g `shouldBe` Just death
@@ -204,23 +204,23 @@ spec = do
                     activeStageTag seasonal (death `mod` 360)
         let edge = seasonal { fsPhases = HM.insert PhaseWithering
                     (LifePhase PhaseWithering 100 (TextureHandle 55)) (fsPhases seasonal) }
-        growthVisualPhase edge inst (floraGrowth edge 100 inst)
+        growthVisualPhase edge inst (floraGrowth Nothing edge 100 inst)
             `shouldBe` Just PhaseMatured
 
     it "derives the first observed death day for arbitrary finite baselines and health" $
         property $ forAll (choose (0, 99)) $ \age →
             forAll (choose (0, 1)) $ \health →
                 let fi = inst { fiAge = age, fiHealth = health }
-                    firstDead = find (\day → fgDead (floraGrowth seasonal day fi)) [0..400]
+                    firstDead = find (\day → fgDead (floraGrowth Nothing seasonal day fi)) [0..400]
                 in case firstDead of
                     Nothing → False
-                    Just day → growthDeathDay seasonal fi (floraGrowth seasonal day fi)
+                    Just day → growthDeathDay seasonal fi (floraGrowth Nothing seasonal day fi)
                                 ≡ Just day
 
     it "uses the actual growth threshold when Float rounding precedes the inverse date" $ do
         let fi = inst { fiAge = 91.12911224365234, fiHealth = 0.2891849875450134 }
-            g = floraGrowth seasonal 19 fi
-        fgDead (floraGrowth seasonal 18 fi) `shouldBe` False
+            g = floraGrowth Nothing seasonal 19 fi
+        fgDead (floraGrowth Nothing seasonal 18 fi) `shouldBe` False
         fgDead g `shouldBe` True
         growthDeathDay seasonal fi g `shouldBe` Just 19
 
@@ -231,15 +231,20 @@ spec = do
         resolveCropPlotTexture (catalog sp) 360 260 plot `shouldBe` TextureHandle 5
         resolveCropPlotTexture (catalog sp) 360 140 plot `shouldBe` TextureHandle 4
 
-    it "preserves the harvested bypass even when dead, and suppresses handle zero" $ do
+    it "keeps the harvested bypass for LIVING occurrences, lets death \
+       \supersede it (#2555), and suppresses handle zero" $ do
         let harvest tex = FloraHarvest [] [] [] HM.empty 100 tex
             draws tex day taken = chunkFloraDraws
                 (catalog (seasonal { fsHarvest = Just (harvest tex) })) 360 day
                 (if taken then HM.singleton (fiInstanceId inst) 1 else HM.empty)
-                (ChunkCoord 0 0) (chunkWith inst)
-        map fdTexture (draws (TextureHandle 88) 110 True) `shouldBe` [TextureHandle 88]
+                HM.empty (ChunkCoord 0 0) (chunkWith inst)
+        -- Alive (day 10): the depleted art, or nothing if it has none.
         map fdTexture (draws (TextureHandle 88) 10 True) `shouldBe` [TextureHandle 88]
-        map fdTexture (draws (TextureHandle 0) 110 True) `shouldBe` []
+        map fdTexture (draws (TextureHandle 0) 10 True) `shouldBe` []
+        -- Dead (day 110): the dead order runs whatever the regrowth timer
+        -- says — EFM-7's deliberate change from today's stubble.
+        map fdTexture (draws (TextureHandle 88) 110 True) `shouldBe` [TextureHandle 7]
+        map fdTexture (draws (TextureHandle 0) 110 True) `shouldBe` [TextureHandle 7]
         map fdTexture (draws (TextureHandle 88) 110 False) `shouldBe` [TextureHandle 7]
 
 chunkWith ∷ FloraInstance → LoadedChunk

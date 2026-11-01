@@ -346,6 +346,21 @@ data WorldCommand
         --   restored-job fallback (which knows its tile but not which of
         --   its plants it had claimed) and the legacy migration drain.
         --   The PLAYER's erase is 'WorldEraseChopInstances'.
+    | WorldSetFloraCondition WorldPageId Int Int (Maybe FloraInstanceId) Text
+        -- ^ The flora condition seam's SET (#2555, EFM-7): mark the
+        --   occurrence at canonical-or-alias tile (gx, gy) dead of the
+        --   named cause token. @Just id@ addresses a wild or row-flora
+        --   occurrence; @Nothing@ addresses the groundcover plot planted
+        --   on the tile. The cause stays TEXT across the queue on
+        --   purpose: an unrecognized token is a semantic refusal the
+        --   world thread records as an action outcome, not a Lua-side
+        --   rejection. The page is captured when the verb enqueues; the
+        --   occurrence and its condition are validated again here.
+        --   The ONLY writer of a persistent flora condition.
+    | WorldClearFloraCondition WorldPageId Int Int (Maybe FloraInstanceId)
+        -- ^ The symmetric CLEAR: remove exactly the addressed explicit
+        --   condition, leaving planting time, generation and harvest
+        --   timers alone. A no-op on an unconditioned occurrence.
     | WorldSetChopDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed chop-designation markers.
     | WorldSetTillAnchor WorldPageId Int Int

@@ -92,6 +92,7 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
     harvests ← readIORef (wsFloraHarvestsRef worldState)
+    conditions ← readIORef (wsFloraConditionsRef worldState)
     cropPlots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef worldState))
 
     let (fbW, fbH) = wcsFbSize snap
@@ -274,7 +275,8 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                 !floraQuads =
                     [ bump (fdGX fd) (fdGY fd) fq
                     | fd ← chunkFloraDraws floraCat daysPerYear absDay
-                               harvests coord lc { lcFlora = floraData }
+                               harvests conditions coord
+                               lc { lcFlora = floraData }
                     , Just fq ← [floraToQuad lookupSlot textures facing
                                      (fdGX fd) (fdGY fd) (fdInstance fd)
                                      (fdTexture fd) zSlice effectiveDepth

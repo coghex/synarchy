@@ -16,8 +16,11 @@
 --   * the terrain-derived @actualZ@ (@findTopSolid@), which overrides
 --     the stored 'fiZ' — a designation record's captured z is a marker
 --     hint, never the placement;
---   * the harvested/depleted texture swap, read by INSTANCE id (#1854);
---   * the growth-stage texture for everything else.
+--   * the harvested/depleted texture swap, read by INSTANCE id (#1854),
+--     for LIVING occurrences only (a dead one resolves through its
+--     condition, #2555);
+--   * the semantic texture — growth stage, or the persistent condition's
+--     frozen state — for everything else.
 module World.Render.FloraDraws
     ( FloraDraw(..)
     , chunkFloraDraws
@@ -25,14 +28,14 @@ module World.Render.FloraDraws
     ) where
 
 import UPrelude
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Chunk.Types (ChunkCoord, ColumnTiles(..), LoadedChunk(..)
                          , columnIndex)
+import World.Flora.Condition (FloraConditions)
 import World.Flora.Harvest (FloraHarvests)
-import World.Flora.Render (resolveFloraTexture)
+import World.Flora.Render (appearanceTexture, occurrenceAppearance)
 import World.Flora.Types
 import World.Generate (chunkToGlobal)
 
@@ -56,10 +59,11 @@ chunkFloraDraws
     → Int                                 -- ^ days per year
     → Int                                 -- ^ absolute day
     → FloraHarvests                       -- ^ live regrowth timers
+    → FloraConditions                     -- ^ the page's persistent conditions
     → ChunkCoord
     → LoadedChunk
     → [FloraDraw]
-chunkFloraDraws floraCat daysPerYear absDay harvests coord lc =
+chunkFloraDraws floraCat daysPerYear absDay harvests conditions coord lc =
     [ FloraDraw { fdInstance = inst'
                 , fdGX = gx, fdGY = gy, fdTexture = texHandle }
     | inst ← fcdInstances (lcFlora lc)
@@ -69,12 +73,9 @@ chunkFloraDraws floraCat daysPerYear absDay harvests coord lc =
           actualZ = findTopSolid col
           inst' = inst { fiZ = actualZ }
           (gx, gy) = chunkToGlobal coord tileX tileY
-          mHarvest = lookupSpecies (fiSpecies inst) floraCat ⌦ fsHarvest
-          harvested = isJust mHarvest
-                    ∧ HM.member (fiInstanceId inst) harvests
-          texHandle = case (harvested, mHarvest) of
-              (True, Just fh) → fhHarvestedTexture fh
-              _ → resolveFloraTexture floraCat daysPerYear absDay inst'
+          texHandle = maybe (TextureHandle 0) appearanceTexture $
+              occurrenceAppearance floraCat daysPerYear absDay
+                  conditions harvests inst'
     , actualZ > minBound
     , texHandle ≢ TextureHandle 0
     ]

@@ -399,8 +399,11 @@ data WorldState = WorldState
       --   reason 'wsFloraHarvestsRef' is: chunk eviction cannot wipe it,
       --   and the regenerated occurrence finds its record again by its
       --   deterministic id (wild) or its edit-log id (row crops).
-      --   Persisted in saves (wpsFloraConditions). Nothing reads it yet
-      --   (EFM-7 owns the mutation/query seam and rendering).
+      --   Persisted in saves (wpsFloraConditions). Written ONLY by
+      --   "World.Thread.Command.Flora.Condition" (#2555, EFM-7: the
+      --   @WorldSetFloraCondition@ / @WorldClearFloraCondition@ commands);
+      --   read by growth ('World.Flora.Growth.floraGrowth'), every render
+      --   form and the forage queries. Expiry is EFM-10's.
     , wsChopDesignationsRef ∷ IORef ChopDesignations
       -- ^ Chop-designation set (#97): flora INSTANCE id → designation
       --   (surface z + the plant's canonical tile; see
