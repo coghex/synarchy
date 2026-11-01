@@ -128,7 +128,8 @@ No new state is stored and lifecycle timing is unchanged.
 EFM-3's occurrence adapter requests wild context. `resolveCropPlotTexture`
 retains the groundcover adapter's elapsed-since-planting clock for both growth
 and annual stages. The harvested-texture bypass, including suppression by
-handle zero, remains outside the resolver and unchanged until EFM-7.
+handle zero, remains outside the resolver and, since #2555, applies to LIVING
+occurrences only (§8): a dead occurrence resolves through the dead order.
 
 ---
 
@@ -531,9 +532,9 @@ planting) all reconstruct the same value, and no save component or chunk store
 gains a field. (`FloraInstance`'s derived `Serialize` encoding changes with the
 added field, but no component writes `FloraChunkData`.)
 
-Nothing reads the context yet. Handing it to the visual selector is EFM-7's
-render integration; no shipped species declares a cultivated variant, so every
-render path behaves as before. A future transplant feature must choose a
+Since #2555 (EFM-7) the occurrence's own context is the selector's context
+(`World.Flora.Render.floraVisualSelectorFor`); no shipped species declares a
+cultivated variant, so every render path behaves as before. A future transplant feature must choose a
 context explicitly for the occurrence it moves.
 
 ---
@@ -692,11 +693,13 @@ since a dead plant does not regrow.
 
 Scope: no producer can create a non-natural death until a later arc, so the only
 occurrences this reaches today are harvestable species dying at their natural
-lifespan. **EFM-7 owns this change** — it is the child that moves rendering onto
-the condition seam — and owes the gate: a harvestable species inside its
+lifespan. **EFM-7 (#2555) made this change** — it moved rendering onto the condition
+seam — and gates it (`--match "flora condition seam"` and
+`--match "World.FloraVisualResolver"`): a harvestable species inside its
 regrowth window, killed, renders its dead candidate rather than
 `harvested_texture`, and the same species alive and depleted still renders
-`harvested_texture`.
+`harvested_texture`. Setting or clearing a condition never touches the
+regrowth timer.
 
 ---
 
