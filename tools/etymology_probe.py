@@ -1128,27 +1128,37 @@ def phase7_unavailable(args) -> bool:
     # expression, which is requirement 7's first case. Deliberately TINY
     # regardless of --size — this needs an identity, not terrain, and a
     # second full-size generation would only cost minutes.
-    send(port, f"world.init('{CUSTOM_PAGE}', {args.seed}, 16, 3, "
-               f"'Player Name')", timeout=20)
-    send(port, "return world.waitForInit(600)", timeout=620)
-    send(port, f"world.show('{CUSTOM_PAGE}')", timeout=20)
     custom_was_active = False
     try:
-        # Assert the switch actually happened before reading anything
-        # through it: openFor('world') resolves the ACTIVE page, so a page
-        # that never became active would silently re-answer for the
-        # previous world and every check below would be measuring the
-        # wrong thing. The show is only QUEUED, so wait for it (#2771).
-        custom_was_active, why = wait_for_active_page(
-            port, CUSTOM_PAGE, CUSTOM_ACTIVE_SECS)
-        if check(custom_was_active,
-                 "the custom-named page became the active world",
-                 why or ""):
-            grade_unavailable_panel(port)
+        # Everything that changes engine state sits INSIDE the cleanup
+        # scope: a console reset after the engine accepted the show must
+        # still reach the hide, and a communication failure is a counted
+        # failure rather than an exception that skips the engine
+        # teardown and the resource-warning grading after this phase.
+        try:
+            send(port, f"world.init('{CUSTOM_PAGE}', {args.seed}, 16, 3, "
+                       f"'Player Name')", timeout=20)
+            send(port, "return world.waitForInit(600)", timeout=620)
+            send(port, f"world.show('{CUSTOM_PAGE}')", timeout=20)
+            # Assert the switch actually happened before reading anything
+            # through it: openFor('world') resolves the ACTIVE page, so a
+            # page that never became active would silently re-answer for
+            # the previous world and every check below would be measuring
+            # the wrong thing. The show is only QUEUED, so wait for it
+            # (#2771).
+            custom_was_active, why = wait_for_active_page(
+                port, CUSTOM_PAGE, CUSTOM_ACTIVE_SECS)
+            if check(custom_was_active,
+                     "the custom-named page became the active world",
+                     why or ""):
+                grade_unavailable_panel(port)
+        except OSError as err:
+            check(False, "phase 7 kept its console connection",
+                  f"{type(err).__name__}: {err}")
     finally:
-        # Bounded and unconditional: success, activation failure and an
-        # unreadable panel all end here. (`closeIfOpen` is a no-op when
-        # the panel never opened.)
+        # Bounded and unconditional: success, activation failure, an
+        # unreadable panel and a console failure all end here.
+        # (`closeIfOpen` is a no-op when the panel never opened.)
         restored = restore_main_page(port, custom_was_active)
         try:
             send(port, "local ep = package.loaded['scripts.etymology_panel']; "
@@ -1353,7 +1363,10 @@ class _FakeEngine:
     """
 
     def __init__(self, show_after=0, hide_after=0, shown_id=CUSTOM_PAGE,
-                 readings=None, panel=None) -> None:
+                 readings=None, panel=None, raise_on=None,
+                 panel_raises=False) -> None:
+        self.raise_on = raise_on or {}   # lua substring -> exception
+        self.panel_raises = panel_raises
         self.t = 0.0
         self.active = PAGE
         self.show_after, self.hide_after = show_after, hide_after
@@ -1373,6 +1386,16 @@ class _FakeEngine:
         self.t += secs
 
     def send(self, port, lua, timeout=10.0, **_kw):
+        # A fault AFTER the engine accepted the command: the command is
+        # recorded and queued, then the console connection resets.
+        try:
+            return self._send(lua)
+        finally:
+            for needle, exc in self.raise_on.items():
+                if needle in lua:
+                    raise exc
+
+    def _send(self, lua):
         self.sent.append(lua)
         if lua.startswith("world.show("):
             self.queue.append(["show", self.show_after])
@@ -1402,6 +1425,8 @@ class _FakeEngine:
         return "ok"
 
     def panel_dump(self, port):
+        if self.panel_raises:
+            raise ConnectionResetError("panel read reset")
         return self.panel
 
 
@@ -1522,6 +1547,33 @@ def phase7_self_test(problems: list) -> None:
         expect(label, _FakeEngine(panel=dump), restored=True, fails=1,
                panel=True, labels=False,
                detail=("panel dump readable",))
+    # Communication failures are counted failures, never exceptions that
+    # skip the cleanup (and the teardown and warning grading after it).
+    reset = ConnectionResetError("console reset")
+    expect("a reset after the show was accepted",
+           _FakeEngine(raise_on={"world.show(": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("kept its console connection",))
+    expect("a reset on the init",
+           _FakeEngine(raise_on={"world.init(": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("kept its console connection",))
+    expect("a reset on the activation reads",
+           _FakeEngine(raise_on={"getActiveWorldId": reset},
+                       panel=_UNAVAILABLE_PANEL),
+           restored=False, fails=2, panel=False, labels=False,
+           detail=("malformed",))
+    expect("a panel read that raises",
+           _FakeEngine(panel_raises=True), restored=True, fails=1,
+           panel=True, labels=False,
+           detail=("kept its console connection",))
+    fake = _FakeEngine(panel_raises=True)
+    _drive_phase7(fake)
+    if not fake.panel_closed:
+        problems.append("phase 7: the panel was not closed after a failed "
+                        "panel read")
     fake = _FakeEngine(panel=None)
     _drive_phase7(fake)
     if not fake.panel_closed:
