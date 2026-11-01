@@ -126,6 +126,12 @@ class Report:
         return ok
 
 
+#: Everything a query reports about an occurrence's effective state.
+EFFECTIVE_KEYS = ("dead", "condition", "cause", "context", "phase", "stage",
+                  "phaseAtDeath", "stageAtDeath", "age", "generation",
+                  "harvestable", "retention")
+
+
 def growth(port, tile):
     got = send_json(port, f"return world.getFloraGrowthAt({tile[0]},{tile[1]})")
     return got if isinstance(got, list) else []
@@ -421,44 +427,91 @@ def run_checks(port, art, rep, slot):
                              and o.get("outcome") == "noop"])
     rep.check(bool(noop), "a repeat clear is a recorded no-op")
 
-    # --- 7. persistence through the real save/load transaction ---
+    # --- 7. frozen state survives a stage change, the stored expiry and
+    #        a real save/load ---
     rep.check(set_cond(port, HERB_TILE, sib_b, "disease"),
               "re-kill one co-tenant before saving")
     rep.check(bool(wait_for(lambda: is_dead(entry_of(port, HERB_TILE, sib_b)))),
               "the re-kill applied")
-    before = {
-        "herb": entry_of(port, HERB_TILE, sib_b),
-        "oak": entry_of(port, OAK_TILE, oak),
-        "plain": entry_of(port, PLAIN_TILE, plain),
-        "row": entry_of(port, ROW_TILE, row),
-        "plot": plot_of(port, PLOT_TILE),
+
+    subjects = {
+        "herb": (HERB_TILE, sib_b),
+        "oak": (OAK_TILE, oak),
+        "plain": (PLAIN_TILE, plain),
+        "row": (ROW_TILE, row),
+        "plot": (PLOT_TILE, None),
     }
+
+    def effective():
+        """What each condition currently MEANS: the effective growth state
+        (phase, stage, age, generation, harvestability), the stored
+        metadata, and what is drawn (the trace's winner and texture)."""
+        out = {}
+        for name, (tile, iid) in subjects.items():
+            e = plot_of(port, tile) if iid is None else \
+                entry_of(port, tile, iid)
+            e = e or {}
+            keep = {k: e.get(k) for k in EFFECTIVE_KEYS}
+            trace = visual(port, tile, iid)
+            if isinstance(trace, dict):
+                keep["winner"] = trace.get("winner")
+                keep["texture"] = trace.get("texture")
+            out[name] = keep
+        return out
+
+    def absolute_day():
+        d = send_json(port, f"return world.getDate('{page}')")
+        return d.get("absoluteDay") if isinstance(d, dict) else None
+
+    snapshot = effective()
+    control_before = entry_of(port, HERB_TILE, sib_a)
+    day_before = absolute_day()
+    expiries = {n: ((v.get("retention") or {}).get("expiryDay"))
+                for n, v in snapshot.items()}
+    transient = {n: x for n, x in expiries.items() if x is not None}
+    rep.check(len(transient) >= 3 and all(snapshot[n].get("dead")
+                                          for n in snapshot),
+              f"transient corpses are in play (stored expiry days): "
+              f"{transient}")
+
+    # Advance the calendar across a stage boundary AND past every stored
+    # expiry. A living control on the same clock must visibly move, which
+    # is what proves the clock really crossed something.
+    set_date(port, page, 4, 2, 5)
+    day_after = absolute_day()
+    rep.check(isinstance(day_after, int) and isinstance(day_before, int)
+              and day_after > max(transient.values()) > day_before,
+              f"the calendar moved past every stored expiry: day "
+              f"{day_before} -> {day_after} (expiries {transient})")
+    control_after = entry_of(port, HERB_TILE, sib_a)
+    rep.check(control_before is not None and control_after is not None
+              and (control_after.get("stage"), control_after.get("age"))
+              != (control_before.get("stage"), control_before.get("age")),
+              f"a living control moved with the clock: "
+              f"{control_before and (control_before.get('stage'), control_before.get('age'))}"
+              f" -> {control_after and (control_after.get('stage'), control_after.get('age'))}")
+    moved = effective()
+    for name in subjects:
+        rep.check(moved[name] == snapshot[name],
+                  f"{name}: effective growth and appearance stay frozen "
+                  f"across the stage change and past its expiry: "
+                  f"{moved[name]}")
+
     failure = save_and_reload(port, page, slot)
     if failure:
         rep.check(False, failure)
         return
     send(port, f"world.show('{page}'); return 'ok'")
 
-    def back():
-        return {
-            "herb": entry_of(port, HERB_TILE, sib_b),
-            "oak": entry_of(port, OAK_TILE, oak),
-            "plain": entry_of(port, PLAIN_TILE, plain),
-            "row": entry_of(port, ROW_TILE, row),
-            "plot": plot_of(port, PLOT_TILE),
-        }
-    after = wait_for(lambda: back() if all(is_dead(v) or (k == "plot" and v
-                                           and v.get("dead"))
-                                           for k, v in back().items()) else None)
-    after = after or back()
-    for name, was in before.items():
-        now = after.get(name) or {}
-        keep = {k: was.get(k) for k in ("dead", "condition", "cause",
-                                         "context", "phaseAtDeath",
-                                         "stageAtDeath", "retention")}
-        got = {k: now.get(k) for k in keep}
-        rep.check(got == keep,
-                  f"{name}'s condition survives save/load unchanged: {got}")
+    after = wait_for(lambda: effective() if all(
+        v.get("dead") is True for v in effective().values()) else None)
+    after = after or effective()
+    rep.check(absolute_day() == day_after,
+              f"the calendar survived the load: {absolute_day()}")
+    for name in subjects:
+        rep.check(after[name] == snapshot[name],
+                  f"{name}: the frozen state survives save/load unchanged: "
+                  f"{after[name]}")
     victim_after = entry_of(port, HERB_TILE, victim)
     rep.check(bool(victim_after) and victim_after.get("dead") is False,
               "the occurrence cleared before the save is still alive")

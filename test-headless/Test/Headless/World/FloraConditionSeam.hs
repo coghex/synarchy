@@ -263,8 +263,9 @@ spec = describe "flora condition seam" $ do
         growthPhaseTag speciesTree (dead 150) `shouldBe` Just PhaseMatured
         growthReportedStage speciesTree 250 (dead 150) `shouldBe` Just CycleFlowering
         -- A calendar-stage change (flowering -> senescing) and a day far
-        -- beyond both the stored expiry and the natural lifespan wrap
-        -- change nothing but the unconditioned control.
+        -- beyond the natural lifespan wrap change nothing but the
+        -- unconditioned control. (This record is PERSISTENT; the stored
+        -- transient expiry is exercised by the next example.)
         living 250 `shouldSatisfy` (not ∘ fgDead)
         growthVisualStage speciesTree daysPerYear 250 tree (living 250)
             `shouldBe` Just CycleSenescing
@@ -275,6 +276,56 @@ spec = describe "flora condition seam" $ do
                 `shouldBe` Just CycleFlowering
             fgAge (dead d) `shouldBe` fgAge (dead 150)
             fgGeneration (dead d) `shouldBe` fgGeneration (dead 150)
+    it "stays frozen past a TRANSIENT record's stored expiry and across a \
+       \calendar-stage change" $ do
+        let t = recordFor tree CauseDrought 150
+            gT d = floraGrowth (gcOf t) speciesTree d tree
+        -- The mature tree's drought corpse is transient: expiry 155.
+        fcrRetention t `shouldBe` RetentionTransient 155 RetainAbsent
+        forM_ [150, 154, 155, 156, 250, 360, 4000, 90000] $ \d → do
+            fgDead (gT d) `shouldBe` True
+            growthPhaseTag speciesTree (gT d) `shouldBe` Just PhaseMatured
+            growthVisualPhase speciesTree tree (gT d) `shouldBe` Just PhaseMatured
+            growthVisualStage speciesTree daysPerYear d tree (gT d)
+                `shouldBe` Just CycleFlowering
+            growthReportedStage speciesTree (d `mod` daysPerYear) (gT d)
+                `shouldBe` Just CycleFlowering
+            fgAge (gT d) `shouldBe` fgAge (gT 150)
+            fgGeneration (gT d) `shouldBe` fgGeneration (gT 150)
+        -- Control: the SAME instance, unconditioned, crosses the boundary
+        -- (flowering -> senescing) and the stored expiry day.
+        growthVisualStage speciesTree daysPerYear 250 tree (living 250)
+            `shouldBe` Just CycleSenescing
+        growthVisualStage speciesTree daysPerYear 250 tree (gT 250)
+            `shouldBe` Just CycleFlowering
+    it "freezes a plot on its OWN elapsed clock: across a stage change and \
+       \past the absolute expiry day" $ do
+        let plot = newCropPlot treeId 100 1.0
+            marked = right (setPlotCondition catalog daysPerYear (5, 7) 250
+                                CauseDrought (HM.singleton (5, 7) plot))
+                         HM.! (5, 7)
+            record = fromMaybe (error "plot condition") (cpCondition marked)
+            growthAt absDay = floraGrowth (cropPlotGrowthCondition marked)
+                speciesTree (cropPlotElapsedDays absDay marked)
+                (cropPlotInstance marked)
+        -- Died 150 elapsed days after planting (absolute day 250); the
+        -- transient cultivated corpse expires on absolute day 255.
+        fcrRetention record `shouldBe` RetentionTransient 255 RetainAwaitReplanting
+        forM_ [250, 255, 256, 300, 460, 9000, 100000] $ \absDay → do
+            let g = growthAt absDay
+            fgDead g `shouldBe` True
+            growthPhaseTag speciesTree g `shouldBe` Just PhaseMatured
+            growthReportedStage speciesTree (absDay `mod` daysPerYear) g
+                `shouldBe` Just CycleFlowering
+            fgAge g `shouldBe` fgAge (growthAt 250)
+            resolveCropPlotTexture catalog daysPerYear absDay marked
+                `shouldBe` TextureHandle 43
+        -- Control: the unconditioned plot's art moves with ITS clock
+        -- (elapsed 150 flowering -> elapsed 360 dormant).
+        resolveCropPlotTexture catalog daysPerYear 250 plot
+            `shouldBe` TextureHandle 5
+        resolveCropPlotTexture catalog daysPerYear 460 plot
+            `shouldBe` TextureHandle 4
     it "is the unconditioned lifecycle when there is no condition" $
         property $ forAll (choose (0, 3000)) $ \d →
             floraGrowth Nothing speciesTree d tree
