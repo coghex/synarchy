@@ -17,6 +17,7 @@ import World.Thread.Power (tickPowerNetworks)
 import World.Thread.Discovery (tickLocationDiscovery)
 import Unit.Faction.Membership (localController)
 import World.Thread.CraftBills (tickCraftBillOwners)
+import World.Thread.Command.Flora.Condition (reconcileFloraDays)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -66,6 +67,11 @@ tickWorldTime env dt = do
                         advanceWorldClock calendar effScale dt clock date
                 writeIORef (wsTimeRef worldState) clock'
                 writeIORef (wsDateRef worldState) date'
+                let oldDay = worldAbsoluteDay calendar date
+                    newDay = worldAbsoluteDay calendar date'
+                when (newDay > oldDay) $
+                    void $ reconcileFloraDays (toWorldSimCapability env)
+                        pageId worldState oldDay newDay
                 -- Flora regrowth (#94) follows the same clock: timers
                 -- count GAME-seconds (timeScale = game-minutes per
                 -- real-second, so dtGame = dt·scale·60) and freeze with

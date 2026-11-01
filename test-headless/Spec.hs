@@ -1349,6 +1349,7 @@ restLane = do
     aroundAll withHeadlessEngine CropPlotCondition.engineSpec
     FloraConditionSeam.spec
     FloraConditionSeam.engineSpec
+    FloraConditionSeam.corpseRetentionSpec
     FloraRenderContext.spec
     describe "World.CropPlant" CropPlant.spec
     describe "World.CropPlant (engine)" CropPlant.engineSpec

@@ -167,8 +167,12 @@ setOccurrenceCondition catalog daysPerYear tile worldDay inst cause store = do
                   (lookupSpecies (fiSpecies inst) catalog)
     let record = buildDeathRecord species daysPerYear tile worldDay worldDay
                      inst cause
+    let replaceable = case lookupFloraCondition (fiInstanceId inst) store of
+            Just old | fcrCondition old ≡ ConditionReseeded →
+                clearFloraCondition (fiInstanceId inst) store
+            _ → store
     either (Left . fromStoreRefusal) Right
-        (markFloraDead (fiInstanceId inst) record store)
+        (markFloraDead (fiInstanceId inst) record replaceable)
   where
     fromStoreRefusal (AlreadyRecorded _) = RefusedAlreadyConditioned
     fromStoreRefusal (InvalidRecord ps) =

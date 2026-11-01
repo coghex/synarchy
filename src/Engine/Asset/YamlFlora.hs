@@ -554,6 +554,8 @@ contextText ContextCultivated = "cultivated"
 conditionText ∷ FloraCondition → Text
 conditionText ConditionAlive = "alive"
 conditionText ConditionDead  = "dead"
+conditionText ConditionReseeded = "reseeded"
+conditionText ConditionAbsent = "absent"
 
 successorText ∷ CorpseSuccessor → Text
 successorText SuccessorReseed = "reseed"
@@ -563,7 +565,7 @@ contextVocabulary ∷ [Text]
 contextVocabulary = map contextText [minBound .. maxBound]
 
 conditionVocabulary ∷ [Text]
-conditionVocabulary = map conditionText [minBound .. maxBound]
+conditionVocabulary = map conditionText [ConditionAlive, ConditionDead]
 
 deathCauseVocabulary ∷ [Text]
 deathCauseVocabulary = map deathCauseText [minBound .. maxBound]

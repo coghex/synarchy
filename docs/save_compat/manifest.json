@@ -4379,6 +4379,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z20-crop-plot-condition.expected.json"
         }
       ]
+    },
+    {
+      "id": "z21-flora-corpse-retention",
+      "description": "Current complete-session fixture for #2557: an expired cultivated tomato row persists its identity-specific WeRemoveFlora edit through world-edits v7.",
+      "declaredAt": "2026-11-01",
+      "declaredByIssue": 2557,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z21-flora-corpse-retention",
+          "path": "test-headless/data/save-compat/z21-flora-corpse-retention.bin",
+          "kind": "complete-session",
+          "sha256": "374f7c6ce06162b01a8f45861b939935fc120c061ea9408fccc8ee15b4d46efa",
+          "sizeBytes": 905573,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml'); if not fs then return false end; local ps={}; for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end; table.sort(ps); for _,p in ipairs(ps) do engine.loadFloraYaml(p) end; return flora.exists('tomato_plant') end)(), settled 2.0s and held until `(function() local p='generated_page'; local x,y=-32,-32; local d=world.getDate(p); if not d then return false end; local f=world.getFloraAt(x,y); if d.absoluteDay>=60 then return f==nil end; if d.absoluteDay~=0 then world.setDate(p,1,1,1); return false end; if not f then if not world.isPlantable(x,y) then local z=world.getSurfaceAt(x,y); world.setVegAt(p,x,y,z,77) else world.plantRowCropAt(p,x,y,'tomato_plant') end; return false end; if f.dead then world.setDate(p,1,3,1) else world.setFloraCondition(x,y,f.instanceId,'disease') end; return false end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z21-flora-corpse-retention.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

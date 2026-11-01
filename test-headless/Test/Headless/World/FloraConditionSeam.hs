@@ -22,7 +22,8 @@
 --       world-command handlers.
 --
 --   Selected by @--match "flora condition seam"@.
-module Test.Headless.World.FloraConditionSeam (spec, engineSpec) where
+module Test.Headless.World.FloraConditionSeam
+    (spec, engineSpec, corpseRetentionSpec) where
 
 import UPrelude
 import Test.Hspec
@@ -64,6 +65,8 @@ import World.Flora.Identity
 import World.Flora.Render
 import World.Flora.Types
 import World.Flora.Visual
+import World.Edit.Apply (applyEdit)
+import World.Edit.Types (WorldEdit(..))
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (canonicalTile, tileAliasStep)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -216,6 +219,11 @@ spec = describe "flora condition seam" $ do
     it "inherits nothing: the legacy default is the 60-day wild reseed" $
         selectCorpseOutcome legacyCorpsePolicy (Just PhaseMatured) CauseFire
             `shouldBe` CorpseTransient 60 SuccessorReseed
+    it "keeps an authored whole-day expiry independent of plant health" $ do
+        let fullHealth = recordFor (bush { fiHealth = 1 }) CauseFire 5
+            lowHealth = recordFor (bush { fiHealth = 0.25 }) CauseFire 5
+        fcrRetention fullHealth `shouldBe` RetentionTransient 65 RetainReseed
+        fcrRetention lowHealth `shouldBe` RetentionTransient 65 RetainReseed
     it "snapshots an ABSOLUTE expiry, and awaits replanting when cultivated" $ do
         retentionFor ContextWild 150 (CorpseTransient 60 SuccessorAbsent)
             `shouldBe` RetentionTransient 210 RetainAbsent
@@ -815,6 +823,125 @@ engineSpec = beforeAll setup $ describe "flora condition seam" $ do
         evalDebug ls (T.concat
             [ "return tostring(world.getFloraVisualAt(1, 1, nil))" ])
             `shouldReturn` "nil"
+  where
+    setup = do
+        EngineInitResult env ← initializeEngineHeadlessQuiet
+        ls ← newBareLuaBackend env
+        pure (env, ls)
+
+-- | Production date-command coverage for the EFM-10 calendar boundary.
+--   The test deliberately jumps over the death day, the full corpse
+--   window and a repeated/backward date assignment.
+corpseRetentionSpec ∷ Spec
+corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
+    it "replays exact-ID removal without deleting a same-tile replacement" $
+      \_ → do
+        let iidA = plantedFloraInstanceId 7
+            iidB = plantedFloraInstanceId 8
+            x = fst homeTile
+            y = snd homeTile
+            place iid = WePlaceFloraWithId x y treeId 0 8 iid
+            removeA = WeRemoveFlora x y iidA
+            replay = foldl' (\chunk edit → applyEdit edit chunk)
+                ((chunkOf []) { lcCoord = homeChunk })
+                [place iidA, removeA, place iidB, removeA]
+        map fiInstanceId (fcdInstances (lcFlora replay)) `shouldBe` [iidB]
+
+    it "keeps the annual's 60-day expiry calendar-based at half health" $ \_ → do
+        let annual = speciesBush { fsLifecycle = Annual }
+            full = bush { fiHealth = 1 }
+            half = bush { fiHealth = 0.5 }
+            fullDeath = buildDeathRecord annual daysPerYear (5, 7)
+                360 360 full CauseNatural
+            halfDeath = buildDeathRecord annual daysPerYear (5, 7)
+                576 576 half CauseNatural
+        fgDead (floraGrowth Nothing annual 360 full) `shouldBe` True
+        fgDead (floraGrowth Nothing annual 576 half) `shouldBe` True
+        fcrRetention fullDeath `shouldBe` RetentionTransient 420 RetainReseed
+        fcrRetention halfDeath `shouldBe` RetentionTransient 636 RetainReseed
+
+    it "snapshots natural death and expires a wild reseed on calendar days" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', "
+                    , tshow y, ", ", tshow m, ", ", tshow d
+                    , "); return 'queued'" ]) `shouldReturn` "queued"
+                drained ← drainWorldQueue env
+                drained `shouldSatisfy` (≥ 1)
+            condition iid = do
+                records ← readIORef (wsFloraConditionsRef ws)
+                pure (fcrCondition <$> HM.lookup iid records)
+            growthAt name = evalDebug ls (T.concat
+                [ "local a = world.getFloraGrowthAt(", tshow (fst homeTile)
+                , ", ", tshow (snd homeTile), ") "
+                , "for _, e in ipairs(a) do if e.id == '", name
+                , "' then return tostring(e.dead) .. '|' .. "
+                , "string.format('%.1f', e.age) .. '|' .. "
+                , "tostring(e.generation) end end "
+                , "return 'missing'" ])
+        -- Day 999 is before the 1000-day perennial death boundary.
+        setDate 3 10 10
+        growthAt "seam_bush" `shouldReturn` "false|999.0|0"
+        -- The command jumps directly to day 1000. It must record the
+        -- natural death and its 60-calendar-day expiry once.
+        setDate 3 10 11
+        records ← readIORef (wsFloraConditionsRef ws)
+        let bushDeath = HM.lookup (fiInstanceId engBush) records
+        fmap fcrCondition bushDeath `shouldBe` Just ConditionDead
+        fmap fcrRetention bushDeath
+            `shouldBe` Just (RetentionTransient 1060 RetainReseed)
+        growthAt "seam_bush" `shouldReturn` "true|1000.0|0"
+        -- The day before expiry is still the frozen corpse.
+        setDate 3 12 10
+        condition (fiInstanceId engBush) `shouldReturn` Just ConditionDead
+        -- At expiry, it is generation 1 at age zero, based on day 1060.
+        setDate 3 12 11
+        condition (fiInstanceId engBush) `shouldReturn` Just ConditionReseeded
+        growthAt "seam_bush" `shouldReturn` "false|0.0|1"
+        -- A backward assignment cannot recreate the corpse or execute a
+        -- second successor; replaying the expiry date leaves its anchor.
+        setDate 3 12 10
+        condition (fiInstanceId engBush) `shouldReturn` Just ConditionReseeded
+        setDate 3 12 11
+        growthAt "seam_bush" `shouldReturn` "false|0.0|1"
+        -- Mature tree policy is persistent, so the same day jump does
+        -- not wrap it into another generation.
+        condition (fiInstanceId engTree) `shouldReturn` Just ConditionDead
+        growthAt "seam_tree" `shouldReturn` "true|1000.0|0"
+
+    it "applies absent as a durable non-queryable successor" $ \(env, ls) → do
+        ws ← resetPage env
+        evalDebug ls (setLua homeTile (Just (fiInstanceId engTree)) "'drought'")
+            `shouldReturn` "true"
+        drained ← drainWorldQueue env
+        drained `shouldSatisfy` (≥ 1)
+        let setDate = do
+                evalDebug ls
+                    "world.setDate('flora_condition_seam', 1, 6, 6); return 'queued'"
+                    `shouldReturn` "queued"
+                drained ← drainWorldQueue env
+                drained `shouldSatisfy` (≥ 1)
+        -- day 155 is the tree's authored drought expiry (5 days after 150).
+        setDate
+        records ← readIORef (wsFloraConditionsRef ws)
+        fmap fcrCondition (HM.lookup (fiInstanceId engTree) records)
+            `shouldBe` Just ConditionAbsent
+        evalDebug ls (T.concat
+            [ "local a = world.getFloraGrowthAt(", tshow (fst homeTile)
+            , ", ", tshow (snd homeTile), ") for _, e in ipairs(a) do "
+            , "if e.instanceId == ", tshow (floraInstanceIdToLua
+                    (fiInstanceId engTree)), " then return 'present' end end "
+            , "return 'absent'" ]) `shouldReturn` "absent"
+        -- Natural and explicit deaths are not clearable after they have
+        -- crossed into a durable successor.
+        evalDebug ls (clearLua homeTile (Just (fiInstanceId engTree)) "")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        afterClear ← readIORef (wsFloraConditionsRef ws)
+        fmap fcrCondition (HM.lookup (fiInstanceId engTree) afterClear)
+            `shouldBe` Just ConditionAbsent
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadlessQuiet

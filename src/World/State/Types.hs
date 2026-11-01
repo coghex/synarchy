@@ -403,7 +403,8 @@ data WorldState = WorldState
       --   "World.Thread.Command.Flora.Condition" (#2555, EFM-7: the
       --   @WorldSetFloraCondition@ / @WorldClearFloraCondition@ commands);
       --   read by growth ('World.Flora.Growth.floraGrowth'), every render
-      --   form and the forage queries. Expiry is EFM-10's.
+      --   form and the forage queries. EFM-10 reconciles natural death and
+      --   snapshotted expiry on this page's calendar.
     , wsChopDesignationsRef ∷ IORef ChopDesignations
       -- ^ Chop-designation set (#97): flora INSTANCE id → designation
       --   (surface z + the plant's canonical tile; see

@@ -36,6 +36,7 @@ module World.Flora.Growth
     , instanceGrowthCondition
     , floraTotalAge
     , floraTotalAgeAt
+    , floraOccurrencePresent
     , growthRate
     , instanceLifespan
     , deadWindowDays
@@ -65,6 +66,7 @@ import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import World.Flora.Condition
     ( FloraConditionRecordOf(..), FloraConditionRecord, FloraConditions
+    , ConditionRetention(..), RetentionSuccessor(..)
     , GrowthCondition(..), conditionAtClock, lookupFloraCondition )
 import World.Flora.Types
 
@@ -168,11 +170,35 @@ floraTotalAgeAt baseline health absDay =
 --   ignored.
 floraGrowth ∷ Maybe GrowthCondition → FloraSpecies → Int → FloraInstance
             → FloraGrowth
-floraGrowth (Just gc) sp _ fi
+floraGrowth (Just gc) sp absDay fi
     | fcrCondition (gcRecord gc) ≡ ConditionDead =
         (derivedGrowth sp (gcBeganClockDay gc) fi)
             { fgDead = True, fgCondition = Just (gcRecord gc) }
+    | fcrCondition (gcRecord gc) ≡ ConditionAbsent =
+        (derivedGrowth sp (gcBeganClockDay gc) fi)
+            { fgDead = True, fgCondition = Just (gcRecord gc) }
+    | fcrCondition (gcRecord gc) ≡ ConditionReseeded =
+        reseededGrowth sp (gcRecord gc) absDay fi
 floraGrowth _ sp absDay fi = derivedGrowth sp absDay fi
+
+-- | Growth after a durable wild reseed. The condition record's frozen
+--   death day and expiry identify the generation boundary even when its
+--   chunk was evicted at expiry. This keeps the age anchor and generation
+--   progression stable without retaining a history of earlier generations.
+reseededGrowth ∷ FloraSpecies → FloraConditionRecord → Int → FloraInstance
+               → FloraGrowth
+reseededGrowth sp record absDay fi = case fcrRetention record of
+    RetentionTransient expiry RetainReseed →
+        let atDeath = derivedGrowth sp (fcrBeganDay record) fi
+            generation = fgGeneration atDeath + 1
+            age = fromIntegral (max 0 (absDay - expiry)) * growthRate (fiHealth fi)
+        in case instanceLifespan sp fi of
+            Nothing → FloraGrowth age generation False Nothing
+            Just lifespan
+                | age < lifespan → FloraGrowth age generation False Nothing
+                | otherwise → FloraGrowth (deadPhaseAge sp lifespan)
+                                  generation True Nothing
+    _ → derivedGrowth sp absDay fi
 
 -- | The occurrence's persistent condition, as a plain (wild or row-flora)
 --   occurrence's clock sees it: looked up by identity in the page's
@@ -181,6 +207,12 @@ instanceGrowthCondition ∷ FloraConditions → FloraInstance
                         → Maybe GrowthCondition
 instanceGrowthCondition store fi =
     conditionAtClock 0 <$> lookupFloraCondition (fiInstanceId fi) store
+
+-- | A durable absent successor keeps its tombstone for regeneration, but
+--   consumers that enumerate existing flora must treat the identity as gone.
+floraOccurrencePresent ∷ Maybe GrowthCondition → Bool
+floraOccurrencePresent = maybe True
+    ((≢ ConditionAbsent) ∘ fcrCondition ∘ gcRecord)
 
 -- | The clock-derived lifecycle, ignoring any explicit condition.
 derivedGrowth ∷ FloraSpecies → Int → FloraInstance → FloraGrowth

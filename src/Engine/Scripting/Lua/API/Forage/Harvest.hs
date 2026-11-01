@@ -31,7 +31,7 @@ import World.Generate.Coordinates (canonicalTile)
 import World.Flora.Clock (growthClock)
 import World.Flora.Growth
     ( floraGrowth, floraHarvestAdmits, floraHarvestYield, harvestOpen
-    , instanceGrowthCondition )
+    , instanceGrowthCondition, floraOccurrencePresent )
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
                              cropPlotGrowthCondition, cropPlotInstance)
 import Item.Types (lookupItemDef)
@@ -233,6 +233,8 @@ harvestWildFlora env ws gx gy tagFilter mWanted doy absDay = do
             [ (i, sp, fh, g)
             | (i, sp) ← insts
             , maybe True (≡ fiInstanceId i) mWanted
+            , floraOccurrencePresent
+                (instanceGrowthCondition conditions i)
             , Just fh ← [fsHarvest sp]
             , let g = floraGrowth (instanceGrowthCondition conditions i)
                           sp absDay i

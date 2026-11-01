@@ -15,7 +15,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Flora.Condition
-    (FloraConditionRecordOf(..), FloraConditions, GrowthCondition)
+    (FloraConditionRecordOf(..), FloraConditions, GrowthCondition(..))
 import World.Flora.CropPlot
     (CropPlot, cropPlotElapsedDays, cropPlotGrowthCondition, cropPlotInstance)
 import World.Flora.Harvest (FloraHarvests)
@@ -73,8 +73,10 @@ occurrenceAppearance
     → FloraInstance → Maybe OccurrenceAppearance
 occurrenceAppearance catalog daysPerYear absDay conditions harvests inst = do
     species ← lookupSpecies (fiSpecies inst) catalog
+    let mCondition = instanceGrowthCondition conditions inst
+    guard (maybe True ((≢ ConditionAbsent) . fcrCondition . gcRecord) mCondition)
     let (growth, selector) = floraVisualSelectorFor species daysPerYear absDay
-            (instanceGrowthCondition conditions inst) inst
+            mCondition inst
     pure $ case fsHarvest species of
         Just fh
             | HM.member (fiInstanceId inst) harvests ∧ not (fgDead growth)
@@ -102,9 +104,11 @@ resolveFloraTexture catalog daysPerYear absDay conditions inst =
     case lookupSpecies (fiSpecies inst) catalog of
         Nothing → TextureHandle 0
         Just species →
-            ftrTexture $ resolveFloraVisual species $ snd $
-                floraVisualSelectorFor species daysPerYear absDay
-                    (instanceGrowthCondition conditions inst) inst
+            let mCondition = instanceGrowthCondition conditions inst
+            in if maybe False ((≡ ConditionAbsent) . fcrCondition . gcRecord) mCondition
+               then TextureHandle 0
+               else ftrTexture $ resolveFloraVisual species $ snd $
+                    floraVisualSelectorFor species daysPerYear absDay mCondition inst
 
 -- | Groundcover adapter: see 'plotAppearance'.
 resolveCropPlotTexture ∷ FloraCatalog → Int → Int → CropPlot → TextureHandle

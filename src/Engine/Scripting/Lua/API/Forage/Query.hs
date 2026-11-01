@@ -29,7 +29,7 @@ import World.Flora.Clock (growthClock)
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            floraHarvestAdmits, floraHarvestYield,
                            growthPhaseTag, growthReportedStage,
-                           instanceGrowthCondition,
+                           instanceGrowthCondition, floraOccurrencePresent,
                            lifePhaseText, annualStageText)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
                              cropPlotGrowthCondition, cropPlotInstance)
@@ -105,14 +105,17 @@ worldGetFloraAtFn env = do
                         let growthOf i sp = floraGrowth
                                 (instanceGrowthCondition conditions i)
                                 sp absDay i
+                            present i = floraOccurrencePresent
+                                (instanceGrowthCondition conditions i)
+                            existing = filter (present ∘ fst) insts
                             open (i, sp) =
                                 harvestOpen sp doy (growthOf i sp)
                             harvestables =
-                                [ p | p@(_, sp) ← insts
+                                [ p | p@(_, sp) ← existing
                                     , isJust (fsHarvest sp) ]
                             harvestFirst =
                                 filter open harvestables
-                                <> harvestables <> insts
+                                <> harvestables <> existing
                         pure $ case harvestFirst of
                             [] → Nothing
                             (p@(i, sp):_) →
@@ -216,6 +219,8 @@ worldGetFloraGrowthAtFn env = do
                               , fiChopDesignated i
                               , fiContext i )
                             | (i, sp) ← insts
+                            , floraOccurrencePresent
+                                (instanceGrowthCondition conditions i)
                             , let g = floraGrowth
                                       (instanceGrowthCondition conditions i)
                                       sp absDay i
@@ -406,6 +411,8 @@ worldFindHarvestableFloraFn env = do
                                 | (coord, lc) ← HM.toList (wtdChunks tileData)
                                 , inRange coord
                                 , i ← fcdInstances (lcFlora lc)
+                                , floraOccurrencePresent
+                                    (instanceGrowthCondition conditions i)
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
                                 , Just fh ← [fsHarvest sp]
                                 -- Derived BEFORE the edible-yield test,

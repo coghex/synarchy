@@ -286,6 +286,15 @@ applyEdit (WeSetFloraState gx gy iid z offU offV variant health baseline) lc
                           , fiAge = baseline }
                    | otherwise = fi
         in lc { lcFlora = FloraChunkData (map set (fcdInstances (lcFlora lc))) }
+applyEdit (WeRemoveFlora gx gy iid) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let (_, (lx, ly)) = globalToChunk gx gy
+            keep fi = fiInstanceId fi ≢ iid
+                   ∨ fromIntegral (fiTileX fi) ≢ lx
+                   ∨ fromIntegral (fiTileY fi) ≢ ly
+        in lc { lcFlora = FloraChunkData
+                    (filter keep (fcdInstances (lcFlora lc))) }
 applyEdit (WeSetCell gx gy z mat) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

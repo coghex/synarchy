@@ -255,6 +255,7 @@ data ConditionProblem
     | CultivatedNamesWildSuccessor !RetentionSuccessor
       -- ^ A cultivated occurrence's transient outcome is awaiting
       --   replanting (D-13).
+    | InvalidSuccessorMarker !FloraCondition !FloraContext !RetentionSuccessor
     | OutOfVocabulary !Text !Word8
       -- ^ A wire tag outside the named field's vocabulary — produced by
       --   the DTO decode in "World.Save.Component.PageActivity", never by
@@ -274,7 +275,7 @@ conditionRecordProblems key r =
 --   judges the record on exactly these terms, in the same order.
 recordShapeProblems ∷ FloraConditionRecordOf s → [ConditionProblem]
 recordShapeProblems r = concat
-    [ [ NotAStoredCondition | fcrCondition r ≢ ConditionDead ]
+    [ [ NotAStoredCondition | fcrCondition r ≡ ConditionAlive ]
     , [ PhaseDeadAtDeath | fcrPhase r ≡ Just PhaseDead ]
     , case fcrRetention r of
         RetentionPersistent → []
@@ -287,6 +288,18 @@ recordShapeProblems r = concat
                 (ContextCultivated, s) → [CultivatedNamesWildSuccessor s]
                 (ContextWild, _) → []
             ]
+    , case (fcrCondition r, fcrContext r, fcrRetention r) of
+        (ConditionReseeded, ContextWild, RetentionTransient _ RetainReseed) → []
+        (ConditionAbsent, ContextWild, RetentionTransient _ RetainAbsent) → []
+        (ConditionReseeded, cx, RetentionTransient _ s) →
+            [InvalidSuccessorMarker ConditionReseeded cx s]
+        (ConditionAbsent, cx, RetentionTransient _ s) →
+            [InvalidSuccessorMarker ConditionAbsent cx s]
+        (ConditionReseeded, cx, RetentionPersistent) →
+            [InvalidSuccessorMarker ConditionReseeded cx RetainReseed]
+        (ConditionAbsent, cx, RetentionPersistent) →
+            [InvalidSuccessorMarker ConditionAbsent cx RetainAbsent]
+        _ → []
     ]
 
 renderConditionProblem ∷ ConditionProblem → Text
@@ -305,6 +318,9 @@ renderConditionProblem p = case p of
     CultivatedNamesWildSuccessor s →
         "a cultivated occurrence's transient successor must await "
         <> "replanting, not " <> tshow s
+    InvalidSuccessorMarker condition context successor →
+        tshow condition <> " marker conflicts with " <> tshow context
+          <> " context or " <> tshow successor <> " successor"
     OutOfVocabulary field tag →
         field <> " tag " <> tshow tag <> " is outside its vocabulary"
 

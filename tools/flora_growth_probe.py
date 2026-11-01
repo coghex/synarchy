@@ -27,9 +27,9 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
      roll is salted from the species' own authored NAME rather than its
      catalog position, so registering them cannot move a shipped
      species' roll whatever order it happens in.
-  4. Aging + reseed: jumping the date years ahead grows ages; far
-     enough out a perennial has wrapped to generation >= 1 (the old
-     plant died through the dead window and reseeded).
+  4. Aging + reseed: jumping the date years ahead grows ages; past the
+     stored calendar-day corpse expiry, the perennial has wrapped to
+     generation >= 1.
   5. Persistence: the date (the growth clock) survives save -> load,
      so growth state does too — it derives from date + deterministic
      placement. The engine runs on a throwaway resource root, so that
@@ -754,15 +754,21 @@ def run_probe(args, art) -> bool:
         print(f"  [{'PASS' if ok4a else 'FAIL'}] age grows with the date: "
               f"{age_now:.1f} -> {e4['age'] if e4 else '?'} "
               f"(gen {e4['generation'] if e4 else '?'})")
-        # Far out: any perennial must have wrapped at least once — even
-        # at the minimum growth rate (0.25), year 80 ≈ 28.6k days is past
-        # max lifespan 3600 + dead window 60.
-        set_date(port, "probe", 80, 7, 21)
-        e5 = growth_entry(port, *rasp, "probe_berry")
+        # Calendar-day corpse retention replaces the former health-scaled
+        # dead window. This fixture's natural expiry is reached shortly
+        # after year 7; a decades-long jump would replay tens of thousands
+        # of page-day boundaries without adding coverage to this probe.
+        set_date(port, "probe", 7, 6, 10)
+        e5 = None
+        for _ in range(60):
+            e5 = growth_entry(port, *rasp, "probe_berry")
+            if e5 is not None and e5["generation"] >= 1:
+                break
+            time.sleep(0.1)
         ok4b = e5 is not None and e5["generation"] >= 1
         passed &= ok4b
-        print(f"  [{'PASS' if ok4b else 'FAIL'}] perennial reseeded (generation "
-              f">= 1) decades out: {e5}")
+        print(f"  [{'PASS' if ok4b else 'FAIL'}] perennial reseeded after its "
+              f"calendar-day corpse expiry: {e5}")
 
         # --- 5. The growth clock survives save/load ---
         set_date(port, "probe", 3, 2, 10)

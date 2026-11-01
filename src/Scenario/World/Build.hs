@@ -125,3 +125,4 @@ editTile e = case e of
     WePlaceFloraWithId gx gy _ _ _ _ → (gx, gy)
     WePlaceFloraRef gx gy _ _ _ _   → (gx, gy)
     WeSetFloraState gx gy _ _ _ _ _ _ _ → (gx, gy)
+    WeRemoveFlora gx gy _               → (gx, gy)

@@ -883,6 +883,15 @@
             "Float",
             "Float"
           ]
+        },
+        {
+          "name": "WeRemoveFlora",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraInstanceId"
+          ]
         }
       ]
     },
@@ -1091,6 +1100,16 @@
         },
         {
           "name": "ConditionDead",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ConditionReseeded",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ConditionAbsent",
           "arity": 0,
           "payload": []
         }
@@ -2239,6 +2258,15 @@
             "Float",
             "Float"
           ]
+        },
+        {
+          "name": "WeRemoveFloraD",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraInstanceId"
+          ]
         }
       ]
     },
@@ -2786,6 +2814,166 @@
             "Int",
             "Float",
             "FloraInstanceId"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.PageEdits.WorldEditDTOv6": {
+      "source": "src/World/Save/Component/PageEdits.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
+          "via": "WorldEditsDTOv6 → PageEditsDTOv6 → WorldEditDTOv6"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileDv6",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeSetFluidTileDv6",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
+        },
+        {
+          "name": "WeAddTileDv6",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetSlopeDv6",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetCellDv6",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetStructureDv6",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearStructureDv6",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetVegDv6",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WePlaceFloraDv6",
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
+        },
+        {
+          "name": "WeSetFluidSnapshotDv6",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearFluidSnapshotDv6",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WePlaceFloraWithIdDv6",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        },
+        {
+          "name": "WePlaceFloraRefDv6",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraRef",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        },
+        {
+          "name": "WeSetFloraStateDv6",
+          "arity": 9,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraInstanceId",
+            "Int",
+            "Float",
+            "Float",
+            "Word8",
+            "Float",
+            "Float"
           ]
         }
       ]
