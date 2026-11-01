@@ -156,6 +156,11 @@ LANDING_EPS = 0.05
 # anchor or a wrong size cannot hide inside it.
 GHOST_BOX_TOL = 2
 
+# Ignore low-level variation from the live world while retaining visible
+# sprite changes. The retained run showed noise up to 7 luma levels, so a
+# pixel is meaningful only at an absolute luma delta of at least 8.
+MEANINGFUL_LUMA_DELTA = 8
+
 # The 1x1 control's sprite is a third of the 2x3's on each axis, so its
 # box must come back visibly smaller. Stated as a loose bound (half),
 # not the exact 3x, because the two boxes are of DIFFERENT art and this
@@ -353,7 +358,7 @@ def png_stats(path: str):
 
 
 def png_diff_bbox(path_a: str, path_b: str):
-    """Bounding box (x0, y0, x1, y1) of the pixels that differ, or None.
+    """Bounding box of meaningful per-pixel luma changes, or None.
 
     #1845 grades SHAPE, not just magnitude: the box a designated ghost
     changes has to be the box the staked building occupies. A pixel
@@ -368,8 +373,10 @@ def png_diff_bbox(path_a: str, path_b: str):
     with Image.open(path_a) as a, Image.open(path_b) as b:
         if a.size != b.size:
             return None
-        diff = ImageChops.difference(a.convert("RGBA"), b.convert("RGBA"))
-        return diff.convert("L").getbbox()
+        diff = ImageChops.difference(a.convert("L"), b.convert("L"))
+        meaningful = diff.point(
+            lambda delta: 255 if delta >= MEANINGFUL_LUMA_DELTA else 0)
+        return meaningful.getbbox()
 
 
 def bbox_size(box):
@@ -387,7 +394,7 @@ def boxes_agree(box_a, box_b, tol: int) -> bool:
 
 
 def png_diff_count(path_a: str, path_b: str) -> int:
-    """# of pixels that differ between two same-size screenshots.
+    """# of pixels with meaningful luma changes between screenshots.
 
     Deliberately no getbbox() short-circuit: on RGBA, Pillow 10+ defaults
     it to alpha_only=True, and two fully-opaque frames always bbox to
@@ -397,8 +404,27 @@ def png_diff_count(path_a: str, path_b: str) -> int:
     with Image.open(path_a) as a, Image.open(path_b) as b:
         if a.size != b.size:
             return max(a.size[0] * a.size[1], b.size[0] * b.size[1])
-        diff = ImageChops.difference(a.convert("RGBA"), b.convert("RGBA"))
-        return sum(diff.convert("L").histogram()[1:])
+        diff = ImageChops.difference(a.convert("L"), b.convert("L"))
+        return sum(diff.histogram()[MEANINGFUL_LUMA_DELTA:])
+
+
+def png_size(path: str) -> tuple[int, int]:
+    from PIL import Image
+    with Image.open(path) as image:
+        return image.size
+
+
+def is_full_frame_box(box, size: tuple[int, int]) -> bool:
+    return box == (0, 0, size[0], size[1])
+
+
+def box_equality_detail(box_a, box_b, count_a: int, count_b: int,
+                        size: tuple[int, int]) -> str:
+    return (f"designated={box_a}, staked={box_b} "
+            f"(tolerance {GHOST_BOX_TOL}px per edge; "
+            f"meaningful changes designated={count_a}, staked={count_b}; "
+            f"frame={size[0]}x{size[1]}; "
+            f"full-frame box is an oracle failure)")
 
 
 # --------------------------------------------------------------------------
@@ -855,11 +881,18 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     # occupies exactly the rectangle the real building occupies. #807's
     # marker could not have satisfied this — six 96x64 diamonds tile a
     # different shape than one 96x96 sprite dropped by tile_bottom.
+    count_2x3 = png_diff_count(shot_before_2x3, shot_after_2x3)
+    count_staked = png_diff_count(shot_before_2x3, shot_staked)
+    size_2x3 = png_size(shot_before_2x3)
+    size_staked = png_size(shot_before_2x3)
+    full_frame_ghost = is_full_frame_box(box_2x3, size_2x3)
+    full_frame_staked = is_full_frame_box(box_staked, size_staked)
     check("the designated ghost's box IS the staked building's box "
           "(same dimensions and anchor offset as the placed sprite)",
-          boxes_agree(box_2x3, box_staked, GHOST_BOX_TOL),
-          f"designated={box_2x3}, staked={box_staked} "
-          f"(tolerance {GHOST_BOX_TOL}px per edge)")
+          not full_frame_ghost and not full_frame_staked
+          and boxes_agree(box_2x3, box_staked, GHOST_BOX_TOL),
+          box_equality_detail(box_2x3, box_staked, count_2x3,
+                              count_staked, size_2x3))
 
     # …and the transition between them is invisible: staking changes far
     # less than designating did. Not "zero": the two records coexist for
@@ -912,6 +945,61 @@ def self_test() -> int:
         if cause is None or needle not in cause:
             problems.append(
                 f"{label}: expected a cause naming {needle!r}, got {cause!r}")
+
+    # --- production PNG oracle: suppress frame-wide noise, keep sprites -
+    from PIL import Image
+    with tempfile.TemporaryDirectory(prefix="footprint_oracle_selftest_") as tmp:
+        baseline = Image.new("L", (64, 48), 100)
+        noise = Image.new("L", (64, 48))
+        for y in range(48):
+            for x in range(64):
+                noise.putpixel((x, y), 100 + ((x + y) % 15) - 7)
+        base_path = os.path.join(tmp, "base.png")
+        noise_path = os.path.join(tmp, "noise.png")
+        sprite_path = os.path.join(tmp, "sprite.png")
+        full_change_path = os.path.join(tmp, "full-change.png")
+        displaced_path = os.path.join(tmp, "displaced.png")
+        baseline.save(base_path)
+        noise.save(noise_path)
+        expect("noise through seven luma levels has no meaningful pixels",
+               png_diff_count(base_path, noise_path), 0)
+        expect("noise through seven luma levels has no box",
+               png_diff_bbox(base_path, noise_path), None)
+
+        sprite = noise.copy()
+        for y in range(12, 25):
+            for x in range(10, 20):
+                sprite.putpixel((x, y), sprite.getpixel((x, y)) + 40)
+        sprite.save(sprite_path)
+        expect("localized sprite plus whole-frame noise count",
+               png_diff_count(base_path, sprite_path), 10 * 13)
+        expect("localized sprite plus whole-frame noise box",
+               png_diff_bbox(base_path, sprite_path), (10, 12, 20, 25))
+
+        full_change = Image.new("L", (64, 48), 120)
+        full_change.save(full_change_path)
+        full_box = png_diff_bbox(base_path, full_change_path)
+        full_count = png_diff_count(base_path, full_change_path)
+        expect("meaningful full-frame change count", full_count, 64 * 48)
+        expect("meaningful full-frame change box", full_box, (0, 0, 64, 48))
+        expect("full-frame changes are rejected by the box oracle",
+               is_full_frame_box(full_box, (64, 48)), True)
+        full_detail = box_equality_detail(full_box, full_box,
+                                          full_count, full_count, (64, 48))
+        expect_named("full-frame diagnostic names the change count", full_detail,
+                     "designated=3072, staked=3072")
+        expect_named("full-frame diagnostic names the box", full_detail,
+                     "designated=(0, 0, 64, 48), staked=(0, 0, 64, 48)")
+
+        displaced = Image.new("L", (64, 48), 100)
+        for y in range(28, 41):
+            for x in range(18, 28):
+                displaced.putpixel((x, y), 150)
+        displaced.save(displaced_path)
+        displaced_box = png_diff_bbox(base_path, displaced_path)
+        expect("meaningful sprite displacement remains detectable",
+               boxes_agree((10, 12, 20, 25), displaced_box, GHOST_BOX_TOL),
+               False)
 
     # --- the site search: both anchors present is the only clean case --
     expect("both anchors found", site_cause((0, 0, 5), (5, 5, 6), "0000002A"),
