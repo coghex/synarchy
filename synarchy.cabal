@@ -496,6 +496,7 @@ library
                      Engine.Scripting.Lua.API.Forage.Query
                      Engine.Scripting.Lua.API.Forage.Harvest
                      Engine.Scripting.Lua.API.Forage.Crop
+                     Engine.Scripting.Lua.API.Forage.Condition
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
@@ -910,6 +911,7 @@ library
                      World.Thread.Command.Cursor.Mine
                      World.Thread.Command.Cursor.Construct
                      World.Thread.Command.Cursor.Chop
+                     World.Thread.Command.Flora.Condition
                      World.Thread.Command.Cursor.Till
                      World.Thread.Command.Cursor.Plant
                      World.Thread.Command.Texture
@@ -1172,6 +1174,7 @@ library
                      World.Flora.CropPlot
                      World.Flora.Condition
                      World.Flora.ConditionQuery
+                     World.Flora.ConditionSeam
                      World.Fluid.Types
                      World.Fluid.Exact
                      World.Fluid.Internal
@@ -1946,6 +1949,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FloraCondition
                    Test.Headless.World.CropPlotCondition
                    Test.Headless.World.FloraIdentity
+                   Test.Headless.World.FloraConditionSeam
                    Test.Headless.World.FloraOrder
                    Test.Headless.World.FloraRenderContext
                    Test.Headless.River.CalderaHazard

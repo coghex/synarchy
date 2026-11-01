@@ -69,8 +69,10 @@ import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Chop.Types (ChopDesignations)
 import World.Chunk.Types (LoadedChunk(..))
+import World.Flora.Condition (FloraConditions)
 import World.Flora.Growth
-    (floraDayOfYear, floraGrowth, floraHarvestAdmits)
+    (floraDayOfYear, floraGrowth, floraHarvestAdmits
+    , instanceGrowthCondition)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.Identity (FloraInstanceId)
 import World.Flora.Types
@@ -141,6 +143,9 @@ data FloraHitView = FloraHitView
     , fhvTiles       ∷ !WorldTileData
     , fhvCatalog     ∷ !FloraCatalog
     , fhvHarvests    ∷ !FloraHarvests
+    , fhvConditions  ∷ !FloraConditions
+      -- ^ The page's persistent conditions (#2555), the same snapshot
+      --   the frame's draws and the eligibility growth read.
     , fhvDesignated  ∷ !ChopDesignations
     , fhvTexSizes    ∷ !(HM.HashMap TextureHandle (Int, Int))
     , fhvDaysPerYear ∷ !Int
@@ -166,6 +171,7 @@ floraHitView env worldState = do
     tileData     ← readIORef (wsTilesRef worldState)
     catalog      ← readIORef (wsFloraCatalogRef wsc)
     harvests     ← readIORef (wsFloraHarvestsRef worldState)
+    conditions   ← readIORef (wsFloraConditionsRef worldState)
     designated   ← readIORef (wsChopDesignationsRef worldState)
     paramsM      ← readIORef (wsGenParamsRef worldState)
     worldDate    ← readIORef (wsDateRef worldState)
@@ -214,6 +220,7 @@ floraHitView env worldState = do
         , fhvTiles       = tileData
         , fhvCatalog     = catalog
         , fhvHarvests    = harvests
+        , fhvConditions  = conditions
         , fhvDesignated  = designated
         , fhvTexSizes    = texSizes
         , fhvDaysPerYear = calendarDaysPerYear calendar
@@ -235,7 +242,8 @@ floraSelectCandidates view mode =
                           (fhvWorldSize view) (fhvViewBounds view)
                           (fhvPlaceCamX view) (fhvPlaceCamY view) coord]
     , fd ← chunkFloraDraws (fhvCatalog view) (fhvDaysPerYear view)
-               (fhvAbsDay view) (fhvHarvests view) (lcCoord lc) lc
+               (fhvAbsDay view) (fhvHarvests view) (fhvConditions view)
+               (lcCoord lc) lc
     , let inst = fdInstance fd
     , floraVisibleInSlice (fhvZSlice view) (fhvEffDepth view) inst
     , eligible view mode inst
@@ -272,7 +280,8 @@ eligible view (SelectChoppable tag) inst = fromMaybe False $ do
     -- (daysPerYear, absDay) pair 'chunkFloraDraws' picked this plant's
     -- texture with, so the rule and the pixels agree.
     let doy = floraDayOfYear (fhvDaysPerYear view) (fhvAbsDay view)
-        g   = floraGrowth sp (fhvAbsDay view) inst
+        g   = floraGrowth (instanceGrowthCondition (fhvConditions view) inst)
+                  sp (fhvAbsDay view) inst
     pure $ floraHarvestAdmits sp (Just tag) doy g
          ∧ HM.lookupDefault 0 (fiInstanceId inst) (fhvHarvests view) ≤ 0
 eligible view SelectDesignated inst =

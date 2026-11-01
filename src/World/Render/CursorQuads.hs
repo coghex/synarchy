@@ -212,6 +212,7 @@ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
     cachedQuads ← readIORef (wsQuadCacheRef worldState)
     floraCat    ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     harvests    ← readIORef (wsFloraHarvestsRef worldState)
+    conditions  ← readIORef (wsFloraConditionsRef worldState)
     worldDate   ← readIORef (wsDateRef worldState)
     texSizes    ← readIORef (rvTextureSizeRef rv)
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
@@ -261,7 +262,7 @@ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
                                           (wcsFacing placed) worldSize
                                           markerBounds placeX placeY coord]
                     , fd ← chunkFloraDraws floraCat daysPerYear absDay
-                               harvests (lcCoord lc) lc
+                               harvests conditions (lcCoord lc) lc
                     , let inst = fdInstance fd
                     , HM.member (fiInstanceId inst) chopDesigns
                     , floraVisibleInSlice (wcsZSlice placed) markerDepth inst

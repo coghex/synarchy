@@ -22,8 +22,14 @@ module Engine.Scripting.Lua.API.Forage
     , module Engine.Scripting.Lua.API.Forage.Harvest
       -- * Crop-plot planting verb
     , module Engine.Scripting.Lua.API.Forage.Crop
+      -- * Condition seam verbs, trace and additive fields (#2555)
+    , worldSetFloraConditionFn, worldClearFloraConditionFn
+    , worldGetFloraVisualAtFn
     ) where
 
 import Engine.Scripting.Lua.API.Forage.Query
 import Engine.Scripting.Lua.API.Forage.Harvest
 import Engine.Scripting.Lua.API.Forage.Crop
+import Engine.Scripting.Lua.API.Forage.Condition
+    ( worldSetFloraConditionFn, worldClearFloraConditionFn
+    , worldGetFloraVisualAtFn )

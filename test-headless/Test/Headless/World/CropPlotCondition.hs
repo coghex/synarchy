@@ -684,8 +684,9 @@ engineSpec = describe "crop plot condition persistence" $ do
 
   describe "harvest and replanting through the existing Lua verbs" $ do
 
-    it "harvests an otherwise harvest-open CONDITIONED plot; plot and \
-       \condition disappear, and planting makes a fresh unconditioned plot" $
+    it "refuses to harvest a CONDITIONED plot (#2555 closes the window); \
+       \once the condition is cleared the plot harvests, and planting \
+       \makes a fresh unconditioned plot" $
         \env → do
           ws ← resetScene env
           putPlot ws plotTile deadPlot
@@ -693,11 +694,18 @@ engineSpec = describe "crop plot condition persistence" $ do
           -- Occupied: planting over a conditioned plot is refused.
           plantResult ls plotTile `shouldReturn` "false"
           plotAt ws plotTile `shouldReturn` Just deadPlot
-          -- The existing harvest path still succeeds (a persistence-only
-          -- slice does not close the harvest window)…
+          -- EFM-7 owns condition-aware harvest refusal: the otherwise
+          -- harvest-open plot is dead, so the harvest verb is refused
+          -- with nil and the plot AND its condition are untouched.
+          runOk ls (harvestExpr plotTile) `shouldReturn` "nil"
+          groundNames ws `shouldReturn` []
+          plotAt ws plotTile `shouldReturn` Just deadPlot
+          -- Clearing the condition (the seam's job; here the pure store
+          -- operation) returns the plot to its clock-derived behaviour…
+          putPlot ws plotTile (clearCropPlotCondition deadPlot)
           runOk ls (harvestExpr plotTile) `shouldReturn` "1"
           groundNames ws `shouldReturn` ["probe_grain"]
-          -- …and deletes the whole plot, condition included.
+          -- …and the harvest deletes the whole plot.
           plotAt ws plotTile `shouldReturn` Nothing
           -- Replanting on the emptied tile creates a FRESH plot.
           plantResult ls plotTile `shouldReturn` "true"

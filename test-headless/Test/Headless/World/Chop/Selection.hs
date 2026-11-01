@@ -219,7 +219,8 @@ viewOfWith facing (camX, camY) tiles designated =
         , fhvWorldSize = worldSize, fhvEffDepth = effDepth
         , fhvViewBounds = computeViewBounds cam fbW fbH effDepth
         , fhvTiles = tiles, fhvCatalog = catalog
-        , fhvHarvests = HM.empty, fhvDesignated = designated
+        , fhvHarvests = HM.empty, fhvConditions = HM.empty
+        , fhvDesignated = designated
         , fhvTexSizes = texSizes
         , fhvDaysPerYear = 360, fhvAbsDay = 100
         , fhvFrontWall = frameFrontWallLift facing worldSize zSlice
@@ -979,7 +980,7 @@ spec = describe "Chop selection" $ do
             -- tree (requirement 8). The durable entry is separately
             -- swept by World.Flora.Designation.forgetFloraInstances.
             let felled = chunkWith flatChunk flat []
-                draws = chunkFloraDraws catalog 360 100 HM.empty
+                draws = chunkFloraDraws catalog 360 100 HM.empty HM.empty
                             flatChunk felled
             map (fiInstanceId . fdInstance) draws `shouldBe` []
 

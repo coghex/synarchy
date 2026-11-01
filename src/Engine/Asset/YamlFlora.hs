@@ -51,10 +51,11 @@ import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlListOutcome)
 import World.Flora.Types
     ( LifePhaseTag(..), AnnualStageTag(..), FloraContext(..)
-    , FloraCondition(..), FloraDeathCause(..), FloraVariantSelector(..)
+    , FloraCondition(..), FloraVariantSelector(..)
     , CorpseSuccessor(..), CorpseOutcome(..), CorpseOverrideSelector(..)
     , CorpsePolicyProvenance(..), FloraCorpsePolicy(..)
     , legacyCorpsePolicy )
+import World.Flora.ConditionSeam (deathCauseText)
 import World.Flora.Growth (lifePhaseText, annualStageText)
 
 -- * Closed vocabularies (#2315)
@@ -553,15 +554,6 @@ contextText ContextCultivated = "cultivated"
 conditionText ∷ FloraCondition → Text
 conditionText ConditionAlive = "alive"
 conditionText ConditionDead  = "dead"
-
-deathCauseText ∷ FloraDeathCause → Text
-deathCauseText CauseNatural = "natural"
-deathCauseText CauseDrought = "drought"
-deathCauseText CauseFrost   = "frost"
-deathCauseText CauseFire    = "fire"
-deathCauseText CauseDisease = "disease"
-deathCauseText CauseDamage  = "damage"
-deathCauseText CauseUnknown = "unknown"
 
 successorText ∷ CorpseSuccessor → Text
 successorText SuccessorReseed = "reseed"

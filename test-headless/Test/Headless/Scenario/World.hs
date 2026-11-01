@@ -301,9 +301,9 @@ floraSpec = describe "flora" $ do
         fiInstanceId o `shouldBe` fst (nextPlantedFloraCursor firstPlantedFloraCursor)
         -- the CURRENT age at the initialized clock is the authored one
         derivedOccurrenceAge 400 o `shouldBe` 120
-        fgAge (floraGrowth sp 400 o) `shouldBe` 120
+        fgAge (floraGrowth Nothing sp 400 o) `shouldBe` 120
         -- ...and it grows from there at the health-scaled rate
-        fgAge (floraGrowth sp 410 o) `shouldBe` 120 + 10 * growthRate 0.5
+        fgAge (floraGrowth Nothing sp 410 o) `shouldBe` 120 + 10 * growthRate 0.5
         wcHarvests c `shouldBe` [(fiInstanceId o, 90)]
         wcCursor c `shouldBe` firstPlantedFloraCursor + 1
         wcOccurrenceTags c `shouldBe` [(fiInstanceId o, (3, 4), Set.fromList [tag "grove"])]
@@ -361,7 +361,7 @@ floraSpec = describe "flora" $ do
             let e = (floraEntry "m" "beet" 2 2) { feAge = Authored age, feHealth = Authored 1 }
                 c = content Nothing 100 [] [] [e]
                 o = sole (occurrencesIn Nothing (wcEdits c))
-                g = floraGrowth (speciesOf (FloraId 3)) 100 o
+                g = floraGrowth Nothing (speciesOf (FloraId 3)) 100 o
                 cw = captureWorldContent Set.empty (snapshotOf Nothing 100 c False)
                 c' = buildWorldContent (envAt Nothing 100 firstPlantedFloraCursor) []  []
                         (withPaths "flora" (cwFlora cw))
@@ -369,7 +369,7 @@ floraSpec = describe "flora" $ do
             (fgDead g, fgGeneration g) `shouldBe` (dead, gen)
             -- capture exports the TOTAL growth, and the plant survives its own round trip
             map feAge (cwFlora cw) `shouldBe` [Authored age]
-            floraGrowth (speciesOf (FloraId 3)) 100 o' `shouldBe` g
+            floraGrowth Nothing (speciesOf (FloraId 3)) 100 o' `shouldBe` g
 
     it "rejects an authored z other than the column's top: a plant stands there whatever its z says" $ do
         let c = content Nothing 0

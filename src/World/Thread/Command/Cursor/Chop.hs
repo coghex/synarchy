@@ -36,7 +36,8 @@ import World.Types
 import World.Generate (chunkToGlobal)
 import World.Chop.Types (chopDesignationTile)
 import World.Flora.Clock (growthClock)
-import World.Flora.Growth (floraGrowth, floraHarvestAdmits)
+import World.Flora.Growth
+    (floraGrowth, floraHarvestAdmits, instanceGrowthCondition)
 import World.Flora.Designation
     (designateChopInstances, setChopDesignations
     , cancelChopAtTile, cancelChopForInstance)
@@ -75,6 +76,7 @@ handleWorldDesignateChopInstancesCommand env logger pageId iids tag = do
         Just worldState → do
             resident ← residentPlants env worldState
             harvests ← readIORef (wsFloraHarvestsRef worldState)
+            conditions ← readIORef (wsFloraConditionsRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
             (doy, absDay) ← growthClock worldState
             let entries =
@@ -83,7 +85,8 @@ handleWorldDesignateChopInstancesCommand env logger pageId iids tag = do
                     , Just (inst, gx, gy, z) ← [HM.lookup iid resident]
                     , Just sp ← [lookupSpecies (fiSpecies inst) cat]
                     , floraHarvestAdmits sp (Just tag) doy
-                          (floraGrowth sp absDay inst)
+                          (floraGrowth (instanceGrowthCondition conditions inst)
+                              sp absDay inst)
                     , HM.lookupDefault 0 iid harvests ≤ 0
                     ]
             designateChopInstances worldState entries

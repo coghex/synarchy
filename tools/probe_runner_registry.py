@@ -120,6 +120,13 @@ PROBES = [
      "(#923, #2640)"),
     ("farm_ai", "farm_ai_probe.py",
      "farm AI: world.plantRowCropAt + CropPlot auto-harvest scan + rot/occupancy gating (#336)"),
+    ("flora_condition", "flora_condition_probe.py",
+     "the persistent flora condition seam on an arena scenario: one of three "
+     "co-tenants killed through the Lua verb and the world thread with its "
+     "siblings alive and harvestable, a dead tree still fellable, a row crop "
+     "and a groundcover plot killed, the fallback trace naming its winner for "
+     "generic-dead and base-only art, named refusals, clear, and every "
+     "condition surviving a save and load (#2555)"),
     ("flora_growth", "flora_growth_probe.py",
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",
@@ -584,6 +591,9 @@ PROBE_EXPECTED_SECONDS: dict[str, float] = {
     # #2535: measured locally (macOS/aarch64) rather than on a PR run,
     # since it is new; refresh it from CI's per-probe line like the rest.
     "fluid_exact_restart": 13.0,
+    # #2555: new and unmeasured on a PR run; one arena boot, a scenario
+    # load and one save/load round trip. Refresh from CI's per-probe line.
+    "flora_condition": 50.0,
     "persistence_contract": 206.0,
     "craft": 97.0,
     "repair_item": 88.0,

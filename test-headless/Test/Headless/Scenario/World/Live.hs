@@ -526,7 +526,7 @@ spec = describe "on a live arena page (through the world thread)" $ do
             let steady cw = cw { cwFlora = [ e { feRegrowth = fmap (const 0) (feRegrowth e) } | e ← cwFlora cw ] }
                 capture = captureWorldContent Set.empty ⊚ liveSnapshot env ws b 0
             before ← capture
-            growthBefore ← map (\o → (fiSpecies o, floraGrowth (speciesOf (fiSpecies o)) 0 o)) ⊚ liveOccurrences ws
+            growthBefore ← map (\o → (fiSpecies o, floraGrowth Nothing (speciesOf (fiSpecies o)) 0 o)) ⊚ liveOccurrences ws
             -- evict: the camera loader spends its budget on the far window
             atomicModifyIORef' (wsTilesRef ws) $ \td → (td { wtdMaxChunks = 25 }, ())
             goToChunk env away
@@ -554,7 +554,7 @@ spec = describe "on a live arena page (through the world thread)" $ do
             liveColumn ws (15, 15) ≫= (`shouldSatisfy` maybe False (\(_, _, sl, _) → sl ≡ 5))   -- the slope survived the admission recompute
             liveFluid ws (6, 5) `shouldReturn` Just (FluidCell Lake 35)
             os ← liveOccurrences ws
-            map (\o → (fiSpecies o, floraGrowth (speciesOf (fiSpecies o)) 0 o)) os `shouldMatchList` growthBefore
+            map (\o → (fiSpecies o, floraGrowth Nothing (speciesOf (fiSpecies o)) 0 o)) os `shouldMatchList` growthBefore
             -- every plant stands where the renderer and picker put it
             forM_ os $ \o → do
                 mc ← chunkAtTile ws (fromIntegral (fiTileX o), fromIntegral (fiTileY o))

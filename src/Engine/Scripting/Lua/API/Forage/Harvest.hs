@@ -30,9 +30,10 @@ import World.Types
 import World.Generate.Coordinates (canonicalTile)
 import World.Flora.Clock (growthClock)
 import World.Flora.Growth
-    (floraGrowth, floraHarvestAdmits, floraHarvestYield, harvestOpen)
+    ( floraGrowth, floraHarvestAdmits, floraHarvestYield, harvestOpen
+    , instanceGrowthCondition )
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
-                             cropPlotInstance)
+                             cropPlotGrowthCondition, cropPlotInstance)
 import Item.Types (lookupItemDef)
 import Item.Ground (spawnGroundItem)
 import Item.Materialize (materializeItem, pristineItem)
@@ -100,7 +101,8 @@ worldHarvestFloraFn env = do
                                 sp ← lookupSpecies (cpSpecies cp) cat
                                 fh ← fsHarvest sp
                                 let elapsed = cropPlotElapsedDays absDay cp
-                                    g = floraGrowth sp elapsed (cropPlotInstance cp)
+                                    g = floraGrowth (cropPlotGrowthCondition cp)
+                                            sp elapsed (cropPlotInstance cp)
                                 -- elapsed is the plot's own age clock; the
                                 -- fruiting-window gate reads the real
                                 -- calendar day (doy), matching
@@ -220,6 +222,7 @@ harvestWildFlora
 harvestWildFlora env ws gx gy tagFilter mWanted doy absDay = do
     insts ← floraAt (toWorldSimCapability env) ws gx gy
     harvests ← readIORef (wsFloraHarvestsRef ws)
+    conditions ← readIORef (wsFloraConditionsRef ws)
     let -- #2212: the SHARED eligibility predicate — tag membership plus
         -- the growth window, which a tagged call skips only where the
         -- species' harvest block AUTHORS that tag as ungated. A bare
@@ -231,7 +234,8 @@ harvestWildFlora env ws gx gy tagFilter mWanted doy absDay = do
             | (i, sp) ← insts
             , maybe True (≡ fiInstanceId i) mWanted
             , Just fh ← [fsHarvest sp]
-            , let g = floraGrowth sp absDay i
+            , let g = floraGrowth (instanceGrowthCondition conditions i)
+                          sp absDay i
             , floraHarvestAdmits sp tagFilter doy g
             , HM.lookupDefault 0 (fiInstanceId i) harvests ≤ 0
             ]

@@ -179,6 +179,9 @@ registerWorldAPI callStats env backendState = do
     (worldFindHarvestableFloraFn env)
   registerLuaFunction callStats "world" "plantCropAt" (worldPlantCropAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getCropPlotAt" (worldGetCropPlotAtFn env)
+  registerLuaFunction callStats "world" "setFloraCondition" (worldSetFloraConditionFn env)
+  registerLuaFunction callStats "world" "clearFloraCondition" (worldClearFloraConditionFn env)
+  registerLuaFunction callStats "world" "getFloraVisualAt" (worldGetFloraVisualAtFn env)
   registerLuaFunction callStats "world" "getPlantSuitability" (worldGetPlantSuitabilityFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "plantRowCropAt" (worldPlantRowCropAtFn (toWorldSimCapability env))
 

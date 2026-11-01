@@ -30,24 +30,24 @@ spec = beforeAll shipped $ do
                 -- the placement baseline, independently of production helpers.
                 let fi = instanceAt (lpAge phase - fromIntegral day)
                 assertSame sp day fi
-                fgDead (floraGrowth sp day fi) `shouldBe` False
+                fgDead (floraGrowth Nothing sp day fi) `shouldBe` False
     it "covers all 12 mortal dead windows and leaves the four evergreens alive" $ \species → do
         length (filter ((≢ Evergreen) . fsLifecycle) species) `shouldBe` 12
         forM_ species $ \sp → forM_ [0..359] $ \day →
             case oldLifespan sp (instanceAt 0) of
                 Nothing → do
                     let fi = instanceAt 100000
-                    fgDead (floraGrowth sp day fi) `shouldBe` False
+                    fgDead (floraGrowth Nothing sp day fi) `shouldBe` False
                     assertSame sp day fi
                 Just lifespan → do
                     let fi = instanceAt (lifespan + 10 - fromIntegral day)
-                    fgDead (floraGrowth sp day fi) `shouldBe` True
+                    fgDead (floraGrowth Nothing sp day fi) `shouldBe` True
                     assertSame sp day fi
 
 assertSame ∷ FloraSpecies → Int → FloraInstance → Expectation
 assertSame sp day fi = do
     let actual = resolveFloraTexture
-            (insertSpecies (FloraId 1) sp emptyFloraCatalog) 360 day fi
+            (insertSpecies (FloraId 1) sp emptyFloraCatalog) 360 day HM.empty fi
         expected = oldTexture sp day fi
     unless (actual ≡ expected) $ expectationFailure $
         show (fsName sp, day, fiAge fi, actual, expected)

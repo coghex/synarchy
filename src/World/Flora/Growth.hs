@@ -33,6 +33,7 @@ module World.Flora.Growth
     ( -- * Derived growth state
       FloraGrowth(..)
     , floraGrowth
+    , instanceGrowthCondition
     , floraTotalAge
     , floraTotalAgeAt
     , growthRate
@@ -45,6 +46,7 @@ module World.Flora.Growth
     , growthDeathDay
     , growthVisualStage
     , growthPhaseTag
+    , growthReportedStage
     , activeStageTag
       -- * Harvest window
     , harvestOpen
@@ -61,6 +63,9 @@ module World.Flora.Growth
 import UPrelude
 import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
+import World.Flora.Condition
+    ( FloraConditionRecordOf(..), FloraConditionRecord, FloraConditions
+    , GrowthCondition(..), conditionAtClock, lookupFloraCondition )
 import World.Flora.Types
 
 -- | A flora instance's growth state at some absolute world day, fully
@@ -74,7 +79,18 @@ data FloraGrowth = FloraGrowth
       -- ^ How many times this spot has reseeded (0 = the original
       --   worldgen plant). Observable so tests can pin the wrap.
     , fgDead       ∷ !Bool
-      -- ^ Inside the dead window between generations.
+      -- ^ Inside the dead window between generations, or explicitly
+      --   conditioned dead (#2555).
+    , fgCondition  ∷ !(Maybe FloraConditionRecord)
+      -- ^ The explicit persistent condition this state was derived
+      --   under (#2555, EFM-7), or 'Nothing' for the clock-derived
+      --   lifecycle. When present the state is FROZEN at the moment the
+      --   condition began: age and generation are the clock-derived
+      --   values on that day, and the life phase and annual stage are
+      --   the record's own snapshot ('growthPhaseTag',
+      --   'growthVisualPhase', 'growthVisualStage'). Every consumer
+      --   reads these through the accessors, never off the record, so
+      --   none carries a condition-specific branch.
     } deriving (Show, Eq)
 
 -- | Health → growth speed. A plant at full habitat fitness ages one
@@ -134,19 +150,51 @@ floraTotalAgeAt ∷ Float → Float → Int → Float
 floraTotalAgeAt baseline health absDay =
     baseline + fromIntegral (max 0 absDay) * growthRate health
 
--- | Derive an instance's growth state at an absolute world day.
-floraGrowth ∷ FloraSpecies → Int → FloraInstance → FloraGrowth
-floraGrowth sp absDay fi =
+-- | Derive an instance's growth state at the occurrence's clock day
+--   @absDay@, under its explicit condition if it has one (#2555).
+--
+--   THE one growth entry point: every consumer — render, hit test, chop
+--   commit, forage queries, harvest — calls this, and each passes the
+--   condition its page holds for the occurrence. An occurrence with a
+--   stored @dead@ record reports 'fgDead', stops advancing (its age and
+--   generation are the clock-derived values on the day the condition
+--   began) and presents the record's frozen phase and stage. Everything
+--   else about the lifecycle is untouched, so a harvest, a chop and a
+--   forage skip all see the corpse through their existing predicates.
+--
+--   The record is the growth VIEW ('GrowthCondition') so the begin day is
+--   already on this occurrence's own clock; a living record
+--   ('World.Flora.Types.ConditionAlive', which no store ever holds) is
+--   ignored.
+floraGrowth ∷ Maybe GrowthCondition → FloraSpecies → Int → FloraInstance
+            → FloraGrowth
+floraGrowth (Just gc) sp _ fi
+    | fcrCondition (gcRecord gc) ≡ ConditionDead =
+        (derivedGrowth sp (gcBeganClockDay gc) fi)
+            { fgDead = True, fgCondition = Just (gcRecord gc) }
+floraGrowth _ sp absDay fi = derivedGrowth sp absDay fi
+
+-- | The occurrence's persistent condition, as a plain (wild or row-flora)
+--   occurrence's clock sees it: looked up by identity in the page's
+--   store, on the absolute world day.
+instanceGrowthCondition ∷ FloraConditions → FloraInstance
+                        → Maybe GrowthCondition
+instanceGrowthCondition store fi =
+    conditionAtClock 0 <$> lookupFloraCondition (fiInstanceId fi) store
+
+-- | The clock-derived lifecycle, ignoring any explicit condition.
+derivedGrowth ∷ FloraSpecies → Int → FloraInstance → FloraGrowth
+derivedGrowth sp absDay fi =
     let total = floraTotalAge absDay fi
     in case instanceLifespan sp fi of
-        Nothing → FloraGrowth total 0 False
+        Nothing → FloraGrowth total 0 False Nothing
         Just lifespan →
             let cycleLen = lifespan + deadWindowDays
                 gen = floor (total / cycleLen) ∷ Int
                 r   = total - fromIntegral gen * cycleLen
             in if r < lifespan
-               then FloraGrowth r gen False
-               else FloraGrowth (deadPhaseAge sp lifespan) gen True
+               then FloraGrowth r gen False Nothing
+               else FloraGrowth (deadPhaseAge sp lifespan) gen True Nothing
 
 -- | The age to present while dead: the species' authored dead-phase
 --   threshold when it has one (so 'findActivePhase' lands on the dead
@@ -182,13 +230,25 @@ findActiveCycleStage stages dayOfYear =
 -- | The life-phase tag a grown instance presents (Nothing when the
 --   species defines no phases).
 growthPhaseTag ∷ FloraSpecies → FloraGrowth → Maybe LifePhaseTag
-growthPhaseTag sp g = lpTag <$> findActivePhase (fsPhases sp) (fgAge g)
+growthPhaseTag sp g = case fgCondition g of
+    Just r  → fcrPhase r
+    Nothing → lpTag <$> findActivePhase (fsPhases sp) (fgAge g)
+
+-- | The annual stage a query REPORTS for a state: the record's frozen
+--   stage when the state is conditioned, otherwise the live calendar
+--   stage on @dayOfYear@.
+growthReportedStage ∷ FloraSpecies → Int → FloraGrowth → Maybe AnnualStageTag
+growthReportedStage sp dayOfYear g = case fgCondition g of
+    Just r  → fcrStage r
+    Nothing → activeStageTag sp dayOfYear
 
 -- | Visual phase only: keep gameplay's dead-phase pin unchanged. At natural
 -- death use the last living phase strictly before the lifespan threshold;
 -- a phase beginning at the death threshold was never a living phase.
 growthVisualPhase ∷ FloraSpecies → FloraInstance → FloraGrowth → Maybe LifePhaseTag
-growthVisualPhase sp fi g = lpTag <$> findActivePhase living age
+growthVisualPhase sp fi g
+    | Just r ← fgCondition g = fcrPhase r
+    | otherwise = lpTag <$> findActivePhase living age
   where
     living = HM.filter (\lp → lpTag lp ≢ PhaseDead
                       ∧ (not (fgDead g) ∨ lpAge lp < age)) (fsPhases sp)
@@ -206,7 +266,7 @@ growthDeathDay sp fi g
     | otherwise = firstDay <$> instanceLifespan sp fi
   where
     reached day =
-        let observed = floraGrowth sp day fi
+        let observed = derivedGrowth sp day fi
         in fgGeneration observed > fgGeneration g
            ∨ (fgGeneration observed ≡ fgGeneration g ∧ fgDead observed)
     firstDay lifespan =
@@ -225,8 +285,9 @@ growthDeathDay sp fi g
 -- derived death day. CropPlot callers deliberately supply their elapsed clock.
 growthVisualStage ∷ FloraSpecies → Int → Int → FloraInstance → FloraGrowth
                   → Maybe AnnualStageTag
-growthVisualStage sp daysPerYear absDay fi g =
-    activeStageTag sp (floraDayOfYear daysPerYear
+growthVisualStage sp daysPerYear absDay fi g
+    | Just r ← fgCondition g = fcrStage r
+    | otherwise = activeStageTag sp (floraDayOfYear daysPerYear
         (fromMaybe absDay (growthDeathDay sp fi g)))
 
 -- | The annual-cycle stage active on a given day-of-year (Nothing when
