@@ -754,11 +754,9 @@ def run_probe(args, art) -> bool:
         print(f"  [{'PASS' if ok4a else 'FAIL'}] age grows with the date: "
               f"{age_now:.1f} -> {e4['age'] if e4 else '?'} "
               f"(gen {e4['generation'] if e4 else '?'})")
-        # Calendar-day corpse retention replaces the former health-scaled
-        # dead window. This fixture's natural expiry is reached shortly
-        # after year 7; a decades-long jump would replay tens of thousands
-        # of page-day boundaries without adding coverage to this probe.
-        set_date(port, "probe", 7, 6, 10)
+        # Calendar-day corpse retention and event-boundary reconciliation
+        # keep a decades-long date jump bounded by flora/record count.
+        set_date(port, "probe", 80, 7, 21)
         e5 = None
         for _ in range(60):
             e5 = growth_entry(port, *rasp, "probe_berry")

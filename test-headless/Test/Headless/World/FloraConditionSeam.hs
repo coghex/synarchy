@@ -57,6 +57,7 @@ import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 
 import Structure.Types (emptyChunkStructures)
 import World.Chunk.Types
+import World.Chop.Types (newChopDesignation)
 import World.Command.Types (WorldCommand)
 import World.Flora.Condition
 import World.Flora.ConditionSeam
@@ -70,13 +71,17 @@ import World.Edit.Apply (applyEdit)
 import World.Edit.Types (WorldEdit(..))
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (canonicalTile, tileAliasStep)
-import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Types
+    ( WorldGenParams(..), defaultWorldGenParams )
 import World.Page.Types (WorldPageId(..))
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.State.Types
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.Flora.Condition (reconcileAdmittedFlora)
+import World.Thread.Time (tickWorldTime)
 import World.Tile.Types (WorldTileData(..), lookupChunk)
+import World.Vegetation (vegTilledSoil)
 import World.Time.Types (WorldDate(..))
 import Gameplay.Tags.Page (CropPlotStore(..), emptyCropPlotStore)
 
@@ -850,7 +855,12 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         map fiInstanceId (fcdInstances (lcFlora replay)) `shouldBe` [iidB]
 
     it "keeps the annual's 60-day expiry calendar-based at half health" $ \_ → do
-        let annual = speciesBush { fsLifecycle = Annual }
+        let annual = speciesBush
+                { fsLifecycle = Annual
+                , fsCorpsePolicy = FloraCorpsePolicy
+                    { fcpOutcome = CorpseTransient 60 SuccessorReseed
+                    , fcpOverrides = HM.empty
+                    , fcpProvenance = CorpsePolicyAuthored } }
             full = bush { fiHealth = 1 }
             half = bush { fiHealth = 0.5 }
             fullDeath = buildDeathRecord annual daysPerYear (5, 7)
@@ -906,6 +916,298 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         edits ← readIORef (wsEditsRef ws)
         any (elem (WeRemoveFlora (fst homeTile) (snd homeTile)
                 (fiInstanceId row))) (HM.elems edits) `shouldBe` True
+
+    it "removes an expired row durably while evicted and clears its identity state" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let row = engBush { fiContext = ContextCultivated }
+            iid = fiInstanceId row
+            setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', ", tshow y, ", "
+                    , tshow m, ", ", tshow d, "); return 'queued'" ])
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+        tiles ← readIORef (wsTilesRef ws)
+        let original = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.singleton homeChunk original }
+        -- The row dies on day 1000 and expires on day 1060.
+        setDate 3 10 11
+        death ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        fmap fcrRetention death
+            `shouldBe` Just (RetentionTransient 1060 RetainAwaitReplanting)
+        writeIORef (wsFloraHarvestsRef ws) (HM.singleton iid 12)
+        writeIORef (wsChopDesignationsRef ws)
+            (HM.singleton iid (newChopDesignation 1 (fst homeTile) (snd homeTile)))
+        writeIORef (wsTilesRef ws) tiles { wtdChunks = HM.empty }
+        setDate 3 12 11
+        HM.member iid <$> readIORef (wsFloraConditionsRef ws)
+            `shouldReturn` False
+        HM.member iid <$> readIORef (wsFloraHarvestsRef ws)
+            `shouldReturn` False
+        HM.member iid <$> readIORef (wsChopDesignationsRef ws)
+            `shouldReturn` False
+        edits ← readIORef (wsEditsRef ws)
+        any (elem (WeRemoveFlora (fst homeTile) (snd homeTile) iid))
+            (HM.elems edits) `shouldBe` True
+        let replayed = foldl' (flip applyEdit) original
+                (HM.lookupDefault [] homeChunk edits)
+        map fiInstanceId (fcdInstances (lcFlora replayed))
+            `shouldBe` [fiInstanceId engTree, fiInstanceId engPlain]
+
+    it "accepts a seam alias and removes only that addressed identity" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let row = engBush { fiContext = ContextCultivated }
+            iid = fiInstanceId row
+            alias = ( fst homeTile + tileAliasStep worldSize
+                    , snd homeTile - tileAliasStep worldSize )
+        tiles ← readIORef (wsTilesRef ws)
+        let chunk = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.singleton homeChunk chunk }
+        evalDebug ls (setLua alias (Just iid) "'fire'") `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        set ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        set `shouldSatisfy` isJust
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 8, 1); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        edits ← readIORef (wsEditsRef ws)
+        HM.lookupDefault [] homeChunk edits
+            `shouldContain` [WeRemoveFlora (fst homeTile) (snd homeTile) iid]
+        finalTiles ← readIORef (wsTilesRef ws)
+        case lookupChunk homeChunk finalTiles of
+            Nothing → expectationFailure "resident chunk missing after expiry"
+            Just current → map fiInstanceId (fcdInstances (lcFlora current))
+                `shouldBe` [fiInstanceId engTree, fiInstanceId engPlain]
+
+    it "applies an explicit wild reseed on the stored expiry boundary" $
+      \(env, ls) → do
+        ws ← resetPage env
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 1, 1); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        evalDebug ls (setLua homeTile (Just (fiInstanceId engTree)) "'fire'")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        dead ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrRetention dead `shouldBe`
+            Just (RetentionTransient 10 RetainReseed)
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 1, 10); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        before ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition before `shouldBe` Just ConditionDead
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 1, 11); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        after ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition after `shouldBe` Just ConditionReseeded
+        fmap fcrRetention after `shouldBe`
+            Just (RetentionTransient 10 RetainReseed)
+
+    it "keeps an explicit persistent corpse beyond the former growth window" $
+      \(env, ls) → do
+        ws ← resetPage env
+        evalDebug ls (setLua homeTile (Just (fiInstanceId engTree)) "'fire'")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        dead ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrRetention dead `shouldBe` Just RetentionPersistent
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 6, 7, 21); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        retained ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition retained `shouldBe` Just ConditionDead
+        case retained of
+            Nothing → expectationFailure "persistent condition disappeared"
+            Just record → fcrRetention record `shouldBe` RetentionPersistent
+
+    it "replants expired row and plot tiles through their production operations" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let rowId = FloraId 4
+            rowSpecies = (newFloraSpecies "seam_retained_row" (TextureHandle 0))
+                { fsLifecycle = Annual }
+            plotSpecies = (newFloraSpecies "seam_retained_plot" (TextureHandle 0))
+                { fsLifecycle = Annual }
+            worldGen category = FloraWorldGen
+                { fwCategory = category
+                , fwMinTemp = -100, fwMaxTemp = 100, fwIdealTemp = 15
+                , fwMinPrecip = 0, fwMaxPrecip = 100, fwIdealPrecip = 50
+                , fwMinAlt = -1000, fwMaxAlt = 1000, fwIdealAlt = 0
+                , fwMinHumidity = 0, fwMaxHumidity = 1, fwIdealHumidity = 0.5
+                , fwMaxSlope = 255, fwDensity = 0, fwSoils = [], fwFootprint = 1 }
+            setDate = do
+                evalDebug ls
+                    "world.setDate('flora_condition_seam', 1, 8, 1); return 'queued'"
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+        writeIORef (floraCatalogRef env) catalog
+            { fcSpecies = HM.insert 5 plotSpecies
+                        (HM.insert 4 rowSpecies (fcSpecies catalog))
+            , fcWorldGen = HM.fromList
+                [(4, worldGen "row_crop"), (5, worldGen "groundcover_crop")] }
+        writeIORef (wsCropPlotsRef ws) emptyCropPlotStore
+        tiles ← readIORef (wsTilesRef ws)
+        let chunk0 = (fromMaybe (chunkOf []) (lookupChunk homeChunk tiles))
+                { lcFlora = FloraChunkData [] }
+            soilTiles = foldl' (\chunk (gx, gy) →
+                let (_, (lx, ly)) = globalToChunk gx gy
+                    index = ly * chunkSize + lx
+                    column = lcTiles chunk V.! index
+                    column' = column { ctVeg = VU.replicate
+                        (VU.length (ctVeg column)) vegTilledSoil }
+                in chunk { lcTiles = lcTiles chunk V.// [(index, column')] })
+                chunk0 [homeTile, plotTile]
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.singleton homeChunk soilTiles }
+        let (rowGX, rowGY) = homeTile
+            (plotGX, plotGY) = plotTile
+        evalDebug ls (T.concat
+            [ "return tostring(world.plantRowCropAt('flora_condition_seam', "
+            , tshow rowGX, ", ", tshow rowGY, ", 'seam_retained_row'))" ])
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        tilesAfterRow ← readIORef (wsTilesRef ws)
+        rowChunk ← case lookupChunk homeChunk tilesAfterRow of
+            Nothing → expectationFailure "planted row chunk missing"
+                        >> pure soilTiles
+            Just c → pure c
+        let findRow c = listToMaybe (filter ((≡ rowId) ∘ fiSpecies)
+                (fcdInstances (lcFlora c)))
+        firstRow ← maybe (expectationFailure "row planting did not materialize"
+                            >> pure engBush)
+            pure (findRow rowChunk)
+        evalDebug ls (setLua homeTile (Just (fiInstanceId firstRow)) "'fire'")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        evalDebug ls (T.concat
+            [ "return tostring(world.plantCropAt(", tshow plotGX, ", "
+            , tshow plotGY, ", 'seam_retained_plot'))" ])
+            `shouldReturn` "true"
+        evalDebug ls (setLua plotTile Nothing "'fire'") `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        setDate
+        HM.member plotTile . cpsPlots <$> readIORef (wsCropPlotsRef ws)
+            `shouldReturn` False
+        tilesAfterExpiry ← readIORef (wsTilesRef ws)
+        let rowAfterExpiry = fromMaybe soilTiles
+                (lookupChunk homeChunk tilesAfterExpiry)
+        findRow rowAfterExpiry `shouldBe` Nothing
+        evalDebug ls (T.concat
+            [ "return tostring(world.plantRowCropAt('flora_condition_seam', "
+            , tshow rowGX, ", ", tshow rowGY, ", 'seam_retained_row'))" ])
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        evalDebug ls (T.concat
+            [ "return tostring(world.plantCropAt(", tshow plotGX, ", "
+            , tshow plotGY, ", 'seam_retained_plot'))" ])
+            `shouldReturn` "true"
+        tilesAfterReplant ← readIORef (wsTilesRef ws)
+        let secondRowChunk = fromMaybe soilTiles
+                (lookupChunk homeChunk tilesAfterReplant)
+        secondRow ← maybe (expectationFailure "replanted row missing"
+                             >> pure engBush)
+            pure (findRow secondRowChunk)
+        fiInstanceId secondRow `shouldSatisfy` (> fiInstanceId firstRow)
+        secondPlot ← HM.lookup plotTile . cpsPlots <$> readIORef
+            (wsCropPlotsRef ws)
+        fmap cpCondition secondPlot `shouldBe` Just Nothing
+
+    it "keeps a half-health reseed anchor through explicit clear and its next death" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let annual = speciesBush { fsLifecycle = Annual }
+            row = engBush { fiHealth = 0.5 }
+            setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', ", tshow y, ", "
+                    , tshow m, ", ", tshow d, "); return 'queued'" ])
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+            growthAt = do
+                growth ← evalDebug ls (T.concat
+                    [ "local a = world.getFloraGrowthAt(", tshow (fst homeTile)
+                    , ", ", tshow (snd homeTile), ") "
+                    , "for _, e in ipairs(a) do if e.id == 'seam_bush' then "
+                    , "return tostring(e.dead) .. '|' .. "
+                    , "string.format('%.1f', e.age) .. '|' .. "
+                    , "tostring(e.generation) end end return 'missing'" ])
+                pure growth
+        writeIORef (floraCatalogRef env) catalog
+            { fcSpecies = HM.insert 2 annual (fcSpecies catalog) }
+        tiles ← readIORef (wsTilesRef ws)
+        let chunk = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.insert homeChunk chunk (wtdChunks tiles) }
+        -- Half-health annual death is day 576; the fixed 60-day retention
+        -- expires at day 636 and establishes generation 1 at age zero.
+        setDate 2 8 7
+        death ← HM.lookup (fiInstanceId row) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrBeganDay death `shouldBe` Just 576
+        setDate 2 10 7
+        reseed ← HM.lookup (fiInstanceId row) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition reseed `shouldBe` Just ConditionReseeded
+        -- Day 700 has generation 1 at age 40. A temporary explicit record
+        -- materializes that anchor before replacing the reseed marker.
+        setDate 2 12 11
+        growthAt `shouldReturn` "false|40.0|1"
+        evalDebug ls (setLua homeTile (Just (fiInstanceId row)) "'fire'")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        evalDebug ls (clearLua homeTile (Just (fiInstanceId row)) "")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        HM.lookup (fiInstanceId row) <$> readIORef (wsFloraConditionsRef ws)
+            `shouldReturn` Nothing
+        setDate 2 12 12
+        growthAt `shouldReturn` "false|40.6|1"
+        -- The next death is day 1212 (636 + 576), not the spurious day
+        -- 540 inferred by replaying the anchored baseline from epoch.
+        setDate 4 5 13
+        later ← HM.lookup (fiInstanceId row) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrBeganDay later `shouldBe` Just 1212
+        fmap fcrRetention later `shouldBe`
+            Just (RetentionTransient 1272 RetainReseed)
+
+    it "reconciles natural death on ordinary time rollover" $ \(env, ls) → do
+        ws ← resetPage env
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 3, 10, 10); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        writeIORef (wsTimeScaleRef ws) 1
+        tickWorldTime env 1440
+        death ← HM.lookup (fiInstanceId engBush) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrBeganDay death `shouldBe` Just 1000
+
+    it "reconciles a paused page's explicit date assignment" $ \(env, ls) → do
+        ws ← resetPage env
+        writeIORef (wsEnginePausedRef (toWorldSimCapability env)) True
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 3, 10, 11); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        death ← HM.lookup (fiInstanceId engBush) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrBeganDay death `shouldBe` Just 1000
 
     it "naturally expires a cultivated plot, preserves a replacement and other plots" $
       \(env, ls) → do
@@ -968,12 +1270,19 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         setDate 6 11 21
         setDate 7 12 11
         sequential ← growthAt
-        _ ← resetPage env
+        wsJump ← resetPage env
         -- Day 2500 crosses two death/expiry pairs in one command. It must
         -- reach the same current generation and age as the stepped path.
         setDate 7 12 11
         growthAt `shouldReturn` sequential
         sequential `shouldBe` "false|380.0|2"
+        edits ← readIORef (wsEditsRef wsJump)
+        let anchors =
+                [ ()
+                | pageEdits ← HM.elems edits
+                , WeSetFloraState _ _ iid _ _ _ _ _ _ ← pageEdits
+                , iid ≡ fiInstanceId engBush ]
+        length anchors `shouldSatisfy` (≤ 1)
 
     it "keeps a reseed anchor when a temporary explicit condition is cleared" $
       \(env, ls) → do
@@ -1022,6 +1331,42 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         drainWorldQueue env `shouldReturn` 1
         readIORef (wsDateRef visible) `shouldReturn` WorldDate 1 6 1
         readIORef (wsDateRef hidden) `shouldReturn` WorldDate 3 10 11
+
+    it "keeps equal planted identities independent on separate pages" $
+      \(env, ls) → do
+        visible ← resetPage env
+        hidden ← emptyWorldState
+        let iid = plantedFloraInstanceId 1
+            planted = engBush { fiInstanceId = iid
+                              , fiContext = ContextCultivated }
+            hiddenPage = WorldPageId "flora_equal_planted_id"
+            chunk = (chunkOf [planted]) { lcCoord = homeChunk }
+        visibleTiles0 ← readIORef (wsTilesRef visible)
+        writeIORef (wsTilesRef visible) visibleTiles0
+            { wtdChunks = HM.singleton homeChunk chunk }
+        writeIORef (wsGenParamsRef hidden)
+            (Just defaultWorldGenParams { wgpWorldSize = worldSize })
+        writeIORef (wsTilesRef hidden) WorldTileData
+            { wtdChunks = HM.singleton homeChunk chunk
+            , wtdMaxChunks = 200, wtdBounds = Nothing }
+        writeIORef (worldManagerRef env) emptyWorldManager
+            { wmWorlds = [(fixturePage, visible), (hiddenPage, hidden)]
+            , wmVisible = [fixturePage] }
+        visibleTiles ← readIORef (wsTilesRef visible)
+        hiddenTiles ← readIORef (wsTilesRef hidden)
+        let visibleChunk = fromMaybe chunk (lookupChunk homeChunk visibleTiles)
+            hiddenChunk = fromMaybe chunk (lookupChunk homeChunk hiddenTiles)
+            visibleIid = map fiInstanceId (fcdInstances (lcFlora visibleChunk))
+            hiddenIid = map fiInstanceId (fcdInstances (lcFlora hiddenChunk))
+        visibleIid `shouldBe` [iid]
+        hiddenIid `shouldBe` visibleIid
+        evalDebug ls (setLua homeTile (Just iid) "'fire'")
+            `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        HM.member iid <$> readIORef (wsFloraConditionsRef visible)
+            `shouldReturn` True
+        HM.member iid <$> readIORef (wsFloraConditionsRef hidden)
+            `shouldReturn` False
 
     it "snapshots natural death and expires a wild reseed on calendar days" $
       \(env, ls) → do
@@ -1120,6 +1465,18 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
                 , fcpProvenance = CorpsePolicyAuthored } }
         writeIORef (floraCatalogRef env) catalog
             { fcSpecies = HM.insert 2 changed (fcSpecies catalog) }
+        restored ← case S.decode (S.encode frozen) of
+            Left err → expectationFailure err >> pure frozen
+            Right record → pure record
+        writeIORef (wsFloraConditionsRef ws) (HM.singleton iid restored)
+        tiles ← readIORef (wsTilesRef ws)
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.singleton homeChunk
+                ((chunkOf [engBush]) { lcCoord = homeChunk }) }
+        reconcileAdmittedFlora (toWorldSimCapability env)
+            fixturePage ws [homeChunk] `shouldReturn` False
+        HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+            `shouldReturn` Just restored
         setDate 3 12 11
         after ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
         after `shouldBe` Just (frozen { fcrCondition = ConditionReseeded })
@@ -1136,11 +1493,25 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
                     `shouldReturn` "queued"
                 drained ← drainWorldQueue env
                 drained `shouldSatisfy` (≥ 1)
-        -- day 155 is the tree's authored drought expiry (5 days after 150).
+        -- The tree's authored drought override expires at day 155.
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 6, 5); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        beforeExpiry ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition beforeExpiry `shouldBe` Just ConditionDead
         setDate
         records ← readIORef (wsFloraConditionsRef ws)
         fmap fcrCondition (HM.lookup (fiInstanceId engTree) records)
             `shouldBe` Just ConditionAbsent
+        evalDebug ls
+            "world.setDate('flora_condition_seam', 1, 6, 7); return 'queued'"
+            `shouldReturn` "queued"
+        drainWorldQueue env `shouldReturn` 1
+        afterExpiry ← HM.lookup (fiInstanceId engTree) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition afterExpiry `shouldBe` Just ConditionAbsent
         evalDebug ls (T.concat
             [ "local a = world.getFloraGrowthAt(", tshow (fst homeTile)
             , ", ", tshow (snd homeTile), ") for _, e in ipairs(a) do "

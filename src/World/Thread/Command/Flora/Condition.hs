@@ -309,7 +309,7 @@ removeRowOccurrence ws worldSize iid rawTile = do
         coord = wrapChunkCoordU worldSize rawCoord
         edit = WeRemoveFlora gx gy iid
     atomicModifyIORef' (wsEditsRef ws) $ \edits →
-        let exists = any (elem edit) (HM.elems edits)
+        let exists = edit `elem` HM.lookupDefault [] coord edits
         in (if exists then edits else appendEdit coord edit edits, ())
     tiles ← readIORef (wsTilesRef ws)
     case lookupChunk coord tiles of
@@ -346,11 +346,14 @@ persistFloraInstanceState ws worldSize coord old current
                 (fiOffU current) (fiOffV current) (fiVariant current)
                 (fiHealth current) (fiAge current)
         atomicModifyIORef' (wsEditsRef ws) $ \edits →
-            let compacted = HM.map (filter (not . sameState)) edits
-                trimmed = HM.filter (not . null) compacted
+            let existing = HM.lookupDefault [] coord edits
+                compacted = filter (not . sameState) existing
                 sameState (WeSetFloraState _ _ iid _ _ _ _ _ _) =
                     iid ≡ fiInstanceId old
                 sameState _ = False
+                trimmed = if null compacted
+                    then HM.delete coord edits
+                    else HM.insert coord compacted edits
             in (appendEdit coord edit trimmed, ())
         atomicModifyIORef' (wsTilesRef ws) $ \tiles →
             case lookupChunk coord tiles of
@@ -383,17 +386,24 @@ reconcileLoadedOccurrences
     → IO Bool
 reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
     catalog ← readIORef (wsFloraCatalogRef wsc)
+    edits ← readIORef (wsEditsRef ws)
     worldSize ← pageWrapWorldSize ws
     chunks ← case mChunks of
         Just selected → pure selected
         Nothing → HM.elems . wtdChunks <$> readIORef (wsTilesRef ws)
+    let anchoredIds = HM.fromList
+            [ (iid, ())
+            | lc ← chunks
+            , pageEdit ← HM.lookupDefault [] (lcCoord lc) edits
+            , WeSetFloraState _ _ iid _ _ _ _ _ _ ← [pageEdit] ]
     or <$> forM
         [ (lcCoord lc, fi)
         | lc ← chunks
         , fi ← fcdInstances (lcFlora lc) ]
-        (\(coord, fi) → reconcileOccurrence catalog worldSize coord fi)
+        (\(coord, fi) → reconcileOccurrence
+            (HM.member (fiInstanceId fi) anchoredIds) catalog worldSize coord fi)
   where
-    reconcileOccurrence catalog worldSize coord fi = do
+    reconcileOccurrence hasAnchor catalog worldSize coord fi = do
         let iid = fiInstanceId fi
         conditions ← readIORef (wsFloraConditionsRef ws)
         let mRecord = HM.lookup iid conditions
@@ -409,7 +419,7 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
                         coord fi record
             _ → case lookupSpecies (fiSpecies fi) catalog of
                 Nothing → pure False
-                Just species → case initialDeathDay species fi of
+                Just species → case initialDeathDay hasAnchor species fi of
                     Nothing → pure False
                     Just deathDay | deathDay > day → pure False
                     Just deathDay → do
@@ -424,14 +434,16 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
             (cx * chunkSize + fromIntegral (fiTileX fi))
             (cy * chunkSize + fromIntegral (fiTileY fi))
 
-    initialDeathDay species fi = case instanceLifespan species fi of
+    initialDeathDay hasAnchor species fi = case instanceLifespan species fi of
         Nothing → Nothing
         Just lifespan →
-            let atEpoch = floraGrowth Nothing species 0 fi
-                threshold = fromIntegral (fgGeneration atEpoch)
+            let current = if hasAnchor
+                    then floraGrowth Nothing species day fi
+                    else floraGrowth Nothing species 0 fi
+                threshold = fromIntegral (fgGeneration current)
                     * (lifespan + deadWindowDays) + lifespan
-            in if fgDead atEpoch
-                then growthDeathDay species fi atEpoch
+            in if fgDead current
+                then growthDeathDay species fi current
                 else Just (firstCalendarDay (\d → floraTotalAgeAt
                     (fiAge fi) (fiHealth fi) d ≥ threshold))
 
