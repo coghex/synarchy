@@ -6449,8 +6449,9 @@ be added or renamed without migrating a save.
 `World.Flora.Condition` holds at most one record per occurrence, keyed
 by the #1854 `FloraInstanceId`, in `wsFloraConditionsRef` beside
 `wsFloraHarvestsRef`; `wpsFloraConditions` carries it and
-`world-activity` v8 persists it (v1–v7 decode to an empty map; v8 also adds
-a plot's embedded condition). Wild flora regenerates and row crops replay,
+`world-activity` v9 persists it (v1–v8 migrate legacy records without a
+suspended marker; v9 also carries the per-instance growth-anchor days).
+Wild flora regenerates and row crops replay,
 then each finds its record by
 id, so a death survives eviction, regeneration and a save/load with its
 same-tile siblings untouched. `markFloraDead` refuses a second record
@@ -6462,7 +6463,13 @@ content edit. Page-day rollover and `world.setDate` reconcile every crossed
 day while paused as well as during normal time advancement, using the
 addressed page's own calendar. A multi-day jump is equivalent to stepping each
 day. A wild reseed starts at age zero on its stored expiry day and retains its
-anchor through eviction, regeneration and save/load. Wild `absent` keeps a
+anchor through eviction, regeneration and save/load. The anchor map records
+the absolute start day for each authored `WeSetFloraState` growth baseline and
+each later rebase; admission uses it to recover natural-death boundaries
+crossed while the occurrence's chunk was absent. A temporary explicit
+condition over a reseeded plant stores the reseed marker and its start day in
+the condition record; clearing the explicit condition restores that marker,
+which continues to govern growth. Wild `absent` keeps a
 tombstone that suppresses drawing, hit testing, harvest, existing-flora
 queries and AI. A cultivated row is removed through an identity-specific
 `world-edits` entry; a plot is deleted only if the same plot still occupies
@@ -6545,7 +6552,9 @@ never restore a removed or replaced plot from a stale snapshot. A CLEAR
 removes only an ordinary explicit condition (idempotent, recorded as a no-op
 when there is none). Natural-death records and completed successor markers
 cannot be cleared; clearing never resets planting time, generation or a
-harvest timer.
+harvest timer. Clearing an explicit condition rebases the occurrence's
+current growth state and anchor day; if the condition suspended a reseed
+marker, the marker is restored.
 
 `World.Flora.Growth.floraGrowth` takes the occurrence's condition
 (`Maybe GrowthCondition`, the record rebased onto the occurrence's own clock:
@@ -6655,7 +6664,9 @@ Lua verbs, a co-tenant killed alone, the additive query fields, alias
 addressing, named refusals and malformed requests) and
 `python3 tools/flora_condition_probe.py` (CI-eligible: the same seam and
 retention boundaries on an arena scenario through save/load),
-`--match "flora corpse retention"`, `--match "save migrations"` and
+`--match "flora corpse retention"` (the half-health set/clear jump past its
+retention window and sub-full-health scenario anchors across a long jump and
+evicted readmission), `--match "save migrations"` and
 `python3 tools/save_compat_audit.py` (the current fixture and retained
 layouts), and `python3 tools/persistence_inventory_audit.py` (the condition,
 edit and plot rows). EFM-10's retention and successor behavior is implemented;
