@@ -485,6 +485,15 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:8:R '
         'world-edits:7:R world-pages:16:R',
+    # #2557: a codec-reencoded copy pins the current world-activity v9
+    # descriptor while the original z21 fixture remains byte-identical.
+    "z21-flora-corpse-retention-v9.bin":
+        'buildings:4:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:11:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:9:R '
+        'world-edits:7:R world-pages:16:R',
 }
 
 

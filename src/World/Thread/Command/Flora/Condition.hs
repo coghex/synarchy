@@ -141,7 +141,7 @@ handleWorldSetFloraConditionCommand env logger pageId gx gy mIid causeTok =
                                                     (fst tile) (snd tile)
                                                 coord = wrapChunkCoordU worldSize rawCoord
                                             in persistFloraInstanceState ws worldSize
-                                                coord inst current >> pure current
+                                                absDay coord inst current >> pure current
                                 _ → pure inst
                             atomicModifyIORef' (wsFloraConditionsRef ws) $ \store →
                                 case setOccurrenceCondition cat daysPerYear
@@ -181,7 +181,7 @@ handleWorldClearFloraConditionCommand env logger pageId gx gy mIid =
                 -- An occurrence is known if its chunk is resident OR the
                 -- store holds a record whose provenance tile is this one
                 -- (an evicted corpse must stay clearable).
-                atomicModifyIORef' (wsFloraConditionsRef ws) $ \store →
+                updated ← atomicModifyIORef' (wsFloraConditionsRef ws) $ \store →
                     let recorded = lookupFloraCondition iid store
                         known = isJust mInst
                               ∨ maybe False ((≡ tile) . fcrTile) recorded
@@ -199,7 +199,25 @@ handleWorldClearFloraConditionCommand env logger pageId gx gy mIid =
                        else if protected
                        then (store, Left RefusedAlreadyConditioned)
                        else ( clearOccurrenceCondition iid store
-                            , Right (isJust recorded) )
+                            , Right recorded )
+                case updated of
+                    Right (Just _record) →
+                        case mInst of
+                            Just inst → case lookupSpecies (fiSpecies inst) cat of
+                                Just species → do
+                                    let growth = floraGrowth Nothing species absDay inst
+                                        current = anchorReseededState
+                                            species absDay growth inst
+                                        (rawCoord, _) = globalToChunk
+                                            (fst tile) (snd tile)
+                                    worldSize ← pageWrapWorldSize ws
+                                    let wrappedCoord = wrapChunkCoordU worldSize rawCoord
+                                    persistFloraInstanceState ws worldSize absDay
+                                        wrappedCoord inst current
+                                Nothing → pure ()
+                            Nothing → pure ()
+                    _ → pure ()
+                pure (fmap isJust updated)
             Nothing → do
                 worldSize ← pageWrapWorldSize ws
                 let (_, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
@@ -248,13 +266,14 @@ durableNaturalOrSuccessor record =
 reconcileFloraDays ∷ WorldSimCapability → WorldPageId → WorldState
                    → Int → Int → IO Bool
 reconcileFloraDays _ _ _ fromDay toDay | toDay ≤ fromDay = pure False
-reconcileFloraDays wsc _ ws _ toDay = do
+reconcileFloraDays wsc _ ws fromDay toDay = do
     paramsM ← readIORef (wsGenParamsRef ws)
     let daysPerYear = maybe (calendarDaysPerYear defaultCalendarConfig)
             (calendarDaysPerYear ∘ wgpCalender) paramsM
     storedChanged ← reconcileStoredOutcomes ws toDay
     plotChanged ← reconcilePlots wsc ws daysPerYear toDay
-    occurrenceChanged ← reconcileLoadedOccurrences wsc ws daysPerYear toDay Nothing
+    occurrenceChanged ← reconcileLoadedOccurrences wsc ws daysPerYear toDay
+        (Just fromDay) Nothing
     let changed = storedChanged ∨ plotChanged ∨ occurrenceChanged
     when changed (bumpQuadCacheGen ws)
     pure changed
@@ -268,7 +287,8 @@ reconcileAdmittedFlora wsc _ ws coords = do
     td ← readIORef (wsTilesRef ws)
     let chunks = foldr (\coord acc → maybe acc (: acc) (lookupChunk coord td))
             [] coords
-    changed ← reconcileLoadedOccurrences wsc ws daysPerYear day (Just chunks)
+    changed ← reconcileLoadedOccurrences wsc ws daysPerYear day Nothing
+        (Just chunks)
     when changed (bumpQuadCacheGen ws)
     pure changed
 
@@ -333,11 +353,12 @@ anchorReseededState species day growth fi = case instanceLifespan species fi of
 
 -- | Persist a changed placement-age baseline both in the page's edit log
 --   and the resident chunk, keeping eviction/replay on the same anchor.
-persistFloraInstanceState ∷ WorldState → Int → ChunkCoord → FloraInstance
+persistFloraInstanceState ∷ WorldState → Int → Int → ChunkCoord → FloraInstance
                           → FloraInstance → IO ()
-persistFloraInstanceState ws worldSize coord old current
-    | fiAge old ≡ fiAge current = pure ()
-    | otherwise = do
+persistFloraInstanceState ws worldSize anchorDay coord old current = do
+    atomicModifyIORef' (wsFloraGrowthAnchorsRef ws) $ \anchors →
+        (HM.insert (fiInstanceId old) anchorDay anchors, ())
+    when (fiAge old ≢ fiAge current) $ do
         let ChunkCoord cx cy = coord
             (gx, gy) = canonicalTile worldSize
                 (cx * chunkSize + fromIntegral (fiTileX old))
@@ -382,15 +403,16 @@ firstCalendarDay reached
       where middle = low + (high - low) `div` 2
 
 reconcileLoadedOccurrences
-    ∷ WorldSimCapability → WorldState → Int → Int → Maybe [LoadedChunk]
-    → IO Bool
-reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
+    ∷ WorldSimCapability → WorldState → Int → Int → Maybe Int
+    → Maybe [LoadedChunk] → IO Bool
+reconcileLoadedOccurrences wsc ws daysPerYear day mReferenceDay mChunks = do
     catalog ← readIORef (wsFloraCatalogRef wsc)
     edits ← readIORef (wsEditsRef ws)
     worldSize ← pageWrapWorldSize ws
     chunks ← case mChunks of
         Just selected → pure selected
         Nothing → HM.elems . wtdChunks <$> readIORef (wsTilesRef ws)
+    anchors ← readIORef (wsFloraGrowthAnchorsRef ws)
     let anchoredIds = HM.fromList
             [ (iid, ())
             | lc ← chunks
@@ -401,9 +423,13 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
         | lc ← chunks
         , fi ← fcdInstances (lcFlora lc) ]
         (\(coord, fi) → reconcileOccurrence
-            (HM.member (fiInstanceId fi) anchoredIds) catalog worldSize coord fi)
+            (HM.member (fiInstanceId fi) anchoredIds)
+            (case HM.lookup (fiInstanceId fi) anchors of
+                Just anchorDay → Just anchorDay
+                Nothing → mReferenceDay)
+            catalog worldSize coord fi)
   where
-    reconcileOccurrence hasAnchor catalog worldSize coord fi = do
+    reconcileOccurrence hasEditAnchor referenceDay catalog worldSize coord fi = do
         let iid = fiInstanceId fi
         conditions ← readIORef (wsFloraConditionsRef ws)
         let mRecord = HM.lookup iid conditions
@@ -419,7 +445,9 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
                         coord fi record
             _ → case lookupSpecies (fiSpecies fi) catalog of
                 Nothing → pure False
-                Just species → case initialDeathDay hasAnchor species fi of
+                Just species → case initialDeathDay
+                        (hasEditAnchor ∨ isJust referenceDay) referenceDay
+                        species fi of
                     Nothing → pure False
                     Just deathDay | deathDay > day → pure False
                     Just deathDay → do
@@ -434,11 +462,12 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
             (cx * chunkSize + fromIntegral (fiTileX fi))
             (cy * chunkSize + fromIntegral (fiTileY fi))
 
-    initialDeathDay hasAnchor species fi = case instanceLifespan species fi of
+    initialDeathDay hasAnchor referenceDay species fi = case instanceLifespan species fi of
         Nothing → Nothing
         Just lifespan →
-            let current = if hasAnchor
-                    then floraGrowth Nothing species day fi
+            let baselineDay = fromMaybe day referenceDay
+                current = if hasAnchor
+                    then floraGrowth Nothing species baselineDay fi
                     else floraGrowth Nothing species 0 fi
                 threshold = fromIntegral (fgGeneration current)
                     * (lifespan + deadWindowDays) + lifespan
@@ -530,7 +559,7 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mChunks = do
                 in fi { fiAge = baseline }
 
     persistAnchor worldSize coord old current
-        = persistFloraInstanceState ws worldSize coord old current
+        = persistFloraInstanceState ws worldSize day coord old current
 
 reconcilePlots ∷ WorldSimCapability → WorldState → Int → Int → IO Bool
 reconcilePlots wsc ws daysPerYear day = do

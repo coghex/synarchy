@@ -151,6 +151,7 @@ buildDeathRecord species daysPerYear tile worldDay clockDay inst cause =
         , fcrStage     = growthVisualStage species daysPerYear clockDay inst g
         , fcrRetention = retentionFor (fiContext inst) worldDay
               (selectCorpseOutcome (fsCorpsePolicy species) phase cause)
+        , fcrReseedMarker = Nothing
         }
   where
     g     = floraGrowth Nothing species clockDay inst
@@ -165,12 +166,20 @@ setOccurrenceCondition
 setOccurrenceCondition catalog daysPerYear tile worldDay inst cause store = do
     species ← maybe (Left RefusedUnknownSpecies) Right
                   (lookupSpecies (fiSpecies inst) catalog)
-    let record = buildDeathRecord species daysPerYear tile worldDay worldDay
-                     inst cause
-    let replaceable = case lookupFloraCondition (fiInstanceId inst) store of
+    let prior = lookupFloraCondition (fiInstanceId inst) store
+        mReseedMarker = case prior of
             Just old | fcrCondition old ≡ ConditionReseeded →
-                clearFloraCondition (fiInstanceId inst) store
-            _ → store
+                Just FloraReseedMarker
+                    { frmBeganDay = fcrBeganDay old
+                    , frmPhase = fcrPhase old
+                    , frmStage = fcrStage old
+                    , frmRetention = fcrRetention old }
+            _ → Nothing
+        record = (buildDeathRecord species daysPerYear tile worldDay worldDay
+                     inst cause) { fcrReseedMarker = mReseedMarker }
+        replaceable = case mReseedMarker of
+            Just _ → clearFloraCondition (fiInstanceId inst) store
+            Nothing → store
     either (Left . fromStoreRefusal) Right
         (markFloraDead (fiInstanceId inst) record replaceable)
   where
@@ -181,7 +190,18 @@ setOccurrenceCondition catalog daysPerYear tile worldDay inst cause store = do
 -- | Clear exactly one occurrence's condition: idempotent when it has none.
 clearOccurrenceCondition
     ∷ FloraInstanceId → FloraConditions → FloraConditions
-clearOccurrenceCondition = clearFloraCondition
+clearOccurrenceCondition iid store = case HM.lookup iid store of
+    Just record | Just marker ← fcrReseedMarker record →
+        HM.insert iid (record
+            { fcrCondition = ConditionReseeded
+            , fcrCause = CauseNatural
+            , fcrBeganDay = frmBeganDay marker
+            , fcrPhase = frmPhase marker
+            , fcrStage = frmStage marker
+            , fcrRetention = frmRetention marker
+            , fcrReseedMarker = Nothing
+            }) store
+    _ → clearFloraCondition iid store
 
 -- | Set a groundcover plot's condition. The record is built from the plot
 --   AS THE GIVEN MAP HOLDS IT, so the transition is correct inside an

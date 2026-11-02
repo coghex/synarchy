@@ -399,6 +399,24 @@ spec = describe "flora condition seam" $ do
             s3 = clearOccurrenceCondition (fiInstanceId tree) s2
         HM.keys s3 `shouldBe` [fiInstanceId bush]
         clearOccurrenceCondition (fiInstanceId tree) s3 `shouldBe` s3
+    it "temporarily overlays and then restores a wild reseed marker" $ do
+        let iid = fiInstanceId tree
+            prior = (recordFor tree CauseNatural 800)
+                { fcrCondition = ConditionReseeded
+                , fcrBeganDay = 780
+                , fcrRetention = RetentionTransient 840 RetainReseed }
+            initial = HM.singleton iid prior
+            explicit = right $ setOccurrenceCondition catalog daysPerYear
+                (5, 7) 810 tree CauseFire initial
+            under = explicit HM.! iid
+        fcrCondition under `shouldBe` ConditionDead
+        fcrReseedMarker under `shouldBe` Just FloraReseedMarker
+            { frmBeganDay = 780
+            , frmPhase = fcrPhase prior
+            , frmStage = fcrStage prior
+            , frmRetention = RetentionTransient 840 RetainReseed }
+        conditionRecordProblems iid under `shouldBe` []
+        (clearOccurrenceCondition iid explicit HM.! iid) `shouldBe` prior
     it "round-trips a set/clear on any cause and day to the empty store" $
         property $ forAll (elements [minBound .. maxBound]) $ \cause →
             forAll (choose (0, 4000)) $ \day →
@@ -1173,18 +1191,104 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         evalDebug ls (clearLua homeTile (Just (fiInstanceId row)) "")
             `shouldReturn` "true"
         drainWorldQueue env `shouldReturn` 1
-        HM.lookup (fiInstanceId row) <$> readIORef (wsFloraConditionsRef ws)
-            `shouldReturn` Nothing
+        cleared ← HM.lookup (fiInstanceId row) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition cleared `shouldBe` Just ConditionReseeded
         setDate 2 12 12
         growthAt `shouldReturn` "false|40.6|1"
-        -- The next death is day 1212 (636 + 576), not the spurious day
-        -- 540 inferred by replaying the anchored baseline from epoch.
-        setDate 4 5 13
-        later ← HM.lookup (fiInstanceId row) <$> readIORef
+        -- A jump past the old health-scaled dead window must still catch
+        -- day 1212, retain through 1272, and anchor generation 2 there.
+        setDate 4 8 21
+        afterJump ← HM.lookup (fiInstanceId row) <$> readIORef
             (wsFloraConditionsRef ws)
-        fmap fcrBeganDay later `shouldBe` Just 1212
-        fmap fcrRetention later `shouldBe`
+        fmap fcrCondition afterJump `shouldBe` Just ConditionReseeded
+        fmap fcrBeganDay afterJump `shouldBe` Just 1212
+        fmap fcrRetention afterJump `shouldBe`
             Just (RetentionTransient 1272 RetainReseed)
+        growthAt `shouldReturn` "false|23.8|2"
+        -- The next death is based on the expiry-day anchor: 1272 + 576.
+        setDate 6 2 19
+        laterDeath ← HM.lookup (fiInstanceId row) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrBeganDay laterDeath `shouldBe` Just 1848
+        fmap fcrRetention laterDeath `shouldBe`
+            Just (RetentionTransient 1908 RetainReseed)
+
+    it "catches up a sub-full-health scenario anchor across a long jump" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let annual = speciesBush { fsLifecycle = Annual }
+            iid = fiInstanceId engBush
+            anchorDay = 100
+            row = engBush { fiHealth = 0.5
+                          , fiAge = negate (fromIntegral anchorDay
+                                               * growthRate 0.5) }
+            (gx, gy) = homeTile
+            stateEdit = WeSetFloraState gx gy iid (fiZ row) (fiOffU row)
+                (fiOffV row) (fiVariant row) (fiHealth row) (fiAge row)
+            setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', ", tshow y, ", "
+                    , tshow m, ", ", tshow d, "); return 'queued'" ])
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+        writeIORef (floraCatalogRef env) catalog
+            { fcSpecies = HM.insert 2 annual (fcSpecies catalog) }
+        tiles ← readIORef (wsTilesRef ws)
+        let chunk = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.insert homeChunk chunk (wtdChunks tiles) }
+        writeIORef (wsEditsRef ws) (HM.singleton homeChunk [stateEdit])
+        writeIORef (wsFloraGrowthAnchorsRef ws) (HM.singleton iid anchorDay)
+        -- The authored baseline means age zero on day 100 at half health.
+        -- Jump from there beyond its day-676 death and day-736 expiry.
+        setDate 1 4 11
+        setDate 3 7 1
+        record ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        fmap fcrCondition record `shouldBe` Just ConditionReseeded
+        fmap fcrBeganDay record `shouldBe` Just 676
+        fmap fcrRetention record `shouldBe`
+            Just (RetentionTransient 736 RetainReseed)
+
+    it "uses a sub-full-health scenario anchor when an evicted plant returns" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let annual = speciesBush { fsLifecycle = Annual }
+            iid = fiInstanceId engBush
+            anchorDay = 100
+            row = engBush { fiHealth = 0.5
+                          , fiAge = negate (fromIntegral anchorDay
+                                               * growthRate 0.5) }
+            (gx, gy) = homeTile
+            stateEdit = WeSetFloraState gx gy iid (fiZ row) (fiOffU row)
+                (fiOffV row) (fiVariant row) (fiHealth row) (fiAge row)
+            setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', ", tshow y, ", "
+                    , tshow m, ", ", tshow d, "); return 'queued'" ])
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+        writeIORef (floraCatalogRef env) catalog
+            { fcSpecies = HM.insert 2 annual (fcSpecies catalog) }
+        tiles ← readIORef (wsTilesRef ws)
+        writeIORef (wsTilesRef ws) tiles { wtdChunks = HM.empty }
+        writeIORef (wsEditsRef ws) (HM.singleton homeChunk [stateEdit])
+        writeIORef (wsFloraGrowthAnchorsRef ws) (HM.singleton iid anchorDay)
+        setDate 1 4 11
+        setDate 3 7 1
+        -- Readmission has no fromDay interval; it must use the saved day
+        -- from the flora-condition component to find the earlier cycle.
+        let chunk = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        latest ← readIORef (wsTilesRef ws)
+        writeIORef (wsTilesRef ws) latest
+            { wtdChunks = HM.insert homeChunk chunk (wtdChunks latest) }
+        reconcileAdmittedFlora (toWorldSimCapability env) fixturePage ws
+            [homeChunk] `shouldReturn` True
+        record ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        fmap fcrCondition record `shouldBe` Just ConditionReseeded
+        fmap fcrBeganDay record `shouldBe` Just 676
+        fmap fcrRetention record `shouldBe`
+            Just (RetentionTransient 736 RetainReseed)
 
     it "reconciles natural death on ordinary time rollover" $ \(env, ls) → do
         ws ← resetPage env
@@ -1312,8 +1416,9 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         drainWorldQueue env `shouldReturn` 1
         after ← before
         after `shouldBe` "1.0|1"
-        HM.lookup (fiInstanceId engBush) <$> readIORef (wsFloraConditionsRef ws)
-            `shouldReturn` Nothing
+        cleared ← HM.lookup (fiInstanceId engBush) <$> readIORef
+            (wsFloraConditionsRef ws)
+        fmap fcrCondition cleared `shouldBe` Just ConditionReseeded
 
     it "does not advance a hidden page when another page's date changes" $
       \(env, ls) → do

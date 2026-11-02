@@ -187,6 +187,8 @@ installWorldContent wsc _logger page ws request = do
     -- would otherwise leave them behind.
     forgetFloraInstances ws
         [ iid | es ← HM.elems oldEdits, WePlaceFloraWithId _ _ _ _ _ iid ← es ]
+    atomicModifyIORef' (wsFloraGrowthAnchorsRef ws) $ \anchors →
+        (HM.union (wcFloraGrowthAnchors content) anchors, ())
     -- regrowth timers: the new plants' timers beside whatever survived
     atomicModifyIORef' (wsFloraHarvestsRef ws) $ \hs →
         (foldl' (\m (iid, secs) → HM.insert iid secs m) hs (wcHarvests content), ())

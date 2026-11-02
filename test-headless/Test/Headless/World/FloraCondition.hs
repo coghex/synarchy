@@ -28,6 +28,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Log
     (LoggerState, LogConfig(..), LogBackend(..), initLogger, defaultLogConfig)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Item.Knowledge (emptyPortableKnowledge)
 import Structure.Palette (emptyTexPalette)
@@ -53,6 +54,8 @@ import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
+import World.Save.Component.PageActivity
+    ( FloraConditionDTOv8(..), PageActivityDTOv8(..), WorldActivityDTOv8(..) )
 import World.Save.Component.Types
     ( ComponentCodec(..), renderComponentError, worldActivityComponentId )
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -67,6 +70,7 @@ import World.State.Types
 import World.Tile.Types (WorldTileData(..))
 import Structure.Types (emptyChunkStructures)
 import World.Thread.Command.Save.WriteWorld (capturePageSnapshot)
+import World.Thread.Command.Flora.Condition (reconcileAdmittedFlora)
 
 -- * Fixture geography
 
@@ -188,10 +192,28 @@ deadRecord fid tile ctx = FloraConditionRecord
     , fcrRetention = RetentionTransient 180 $ case ctx of
         ContextWild       → RetainReseed
         ContextCultivated → RetainAwaitReplanting
+    , fcrReseedMarker = Nothing
     }
 
 savedOf ∷ FloraConditionRecord → SavedFloraConditionRecord
 savedOf r = r { fcrSpecies = FloraByName (speciesName (fcrSpecies r)) }
+
+-- | Project the current leaf onto the frozen v8 wire shape for migration
+--   and append-only compatibility examples.
+toFloraConditionDTOv8 ∷ SavedFloraConditionRecord → FloraConditionDTOv8
+toFloraConditionDTOv8 r =
+    let d = toFloraConditionDTO r
+    in FloraConditionDTOv8
+        { fcd8Species = fcdSpecies d
+        , fcd8Tile = fcdTile d
+        , fcd8Condition = fcdCondition d
+        , fcd8Cause = fcdCause d
+        , fcd8BeganDay = fcdBeganDay d
+        , fcd8Context = fcdContext d
+        , fcd8Phase = fcdPhase d
+        , fcd8Stage = fcdStage d
+        , fcd8Retention = fcdRetention d
+        }
 
 -- | The independent oracle for which (context, retention) pairs are
 --   legal — spelled out from the design record (D-13, D-19) rather than
@@ -323,8 +345,8 @@ spec = describe "flora condition persistence" $ do
 
   describe "world-activity versions" $ do
 
-    it "accepts v1 through v8" $
-        ccInputVers worldActivityCodec `shouldBe` [1 .. 8]
+    it "accepts v1 through v9" $
+        ccInputVers worldActivityCodec `shouldBe` [1 .. 9]
 
     it "migrates a v6 payload to an EMPTY condition map, preserving \
        \every other field" $ do
@@ -349,20 +371,27 @@ spec = describe "flora condition persistence" $ do
                     `shouldBe` (HM.empty, pageA)
             Right _ → expectationFailure "expected one page slice"
 
-    it "round-trips a populated v7 payload through the real codec" $ do
-        let dto = WorldActivityDTO
-                [ (emptyActivityV7 pageA)
-                    { padFloraConditions = HM.fromList
-                        [ (oakIid, toFloraConditionDTO
+    it "migrates a populated v8 payload through the real codec" $ do
+        let dto = WorldActivityDTOv8
+                [ (emptyActivityV8Wire pageA)
+                    { pad8FloraConditions = HM.fromList
+                        [ (oakIid, toFloraConditionDTOv8
                             (savedOf (deadRecord oakId homeTile ContextWild)))
-                        , (plantedFloraInstanceId 3, toFloraConditionDTO
+                        , (plantedFloraInstanceId 3, toFloraConditionDTOv8
                             (savedOf (deadRecord berryId otherTile
                                          ContextCultivated))) ] } ]
         case ccDecode worldActivityCodec 8 (S.encode dto) of
             Left e → expectationFailure (show e)
-            Right back → do
-                S.encode back `shouldBe` S.encode dto
-                ccValidate worldActivityCodec back `shouldBe` []
+            Right (WorldActivityDTO [back]) → do
+                padFloraConditions back `shouldBe` HM.fromList
+                    [ (oakIid, toFloraConditionDTO
+                        (savedOf (deadRecord oakId homeTile ContextWild)))
+                    , (plantedFloraInstanceId 3, toFloraConditionDTO
+                        (savedOf (deadRecord berryId otherTile
+                                     ContextCultivated))) ]
+                ccValidate worldActivityCodec (WorldActivityDTO [back])
+                    `shouldBe` []
+            Right _ → expectationFailure "expected one migrated page slice"
 
   describe "component validation" $ do
 
@@ -590,8 +619,53 @@ quietLog = initLogger defaultLogConfig { lcBackend = LogToCallback (\_ → pure 
 --   and staged by the production 'stageSession'.
 engineSpec ∷ SpecWith EngineEnv
 engineSpec = describe "flora condition persistence" $ do
-
   describe "capture, envelope and staging" $ do
+
+    it "keeps reseeded and absent wild tombstones through encode, staging \
+       \and regenerated chunk admission" $ \env → do
+        ws ← emptyWorldState
+        writeIORef (wsGenParamsRef ws) (Just arenaParams)
+        let reseeded = (deadRecord oakId homeTile ContextWild)
+                { fcrCondition = ConditionReseeded
+                , fcrBeganDay = 20
+                , fcrRetention = RetentionTransient 60 RetainReseed }
+            absent = (deadRecord fernId homeTile ContextWild)
+                { fcrCondition = ConditionAbsent
+                , fcrBeganDay = 30
+                , fcrRetention = RetentionTransient 30 RetainAbsent }
+            expected = HM.fromList [(oakIid, reseeded), (fernIid, absent)]
+            anchors = HM.singleton oakIid 20
+        writeIORef (wsFloraConditionsRef ws) expected
+        writeIORef (wsFloraGrowthAnchorsRef ws) anchors
+
+        (snap, back) ← throughEnvelope probeCatalog ws arenaPage
+        pgsFloraConditions (snapPages back HM.! arenaPage)
+            `shouldBe` HM.fromList
+                [ (oakIid, savedOf reseeded), (fernIid, savedOf absent) ]
+        pgsFloraGrowthAnchors (snapPages back HM.! arenaPage)
+            `shouldBe` anchors
+        -- The same two records and their clock anchor survive the production
+        -- load staging path before regenerated chunks are admitted.
+        staged ← stageOnly env probeCatalog back
+        let stagedWs = spWorldState staged
+        stagedConditions ← readIORef (wsFloraConditionsRef stagedWs)
+        stagedConditions `shouldBe` expected
+        readIORef (wsFloraGrowthAnchorsRef stagedWs) `shouldReturn` anchors
+
+        -- Regeneration brings both deterministic occurrences back. Admission
+        -- reapplies the absent tombstone while retaining the reseeded one.
+        writeIORef (wsTilesRef stagedWs) (chunkStore coTenantInstances)
+        _ ← reconcileAdmittedFlora (toWorldSimCapability env) arenaPage
+                stagedWs [chunkOf homeTile]
+        residentIds stagedWs `shouldReturn` [oakIid, berryIid, fernIid]
+        finalConditions ← readIORef (wsFloraConditionsRef stagedWs)
+        HM.lookup oakIid finalConditions `shouldBe` Just reseeded
+        HM.lookup fernIid finalConditions `shouldBe` Just absent
+        readIORef (wsFloraGrowthAnchorsRef stagedWs) `shouldReturn` anchors
+        -- The captured snapshot carried the same payload before staging.
+        pgsFloraConditions (snapPages snap HM.! arenaPage)
+            `shouldBe` pgsFloraConditions
+                (snapPages back HM.! arenaPage)
 
     it "keeps one of three co-tenants dead across eviction, regeneration, \
        \capture, encode, decode and staging — siblings untouched" $ \env → do
@@ -741,7 +815,18 @@ emptyActivityV7 ∷ WorldPageId → PageActivityDTO
 emptyActivityV7 pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty HM.empty HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
-    firstConstructAttemptId HM.empty
+    firstConstructAttemptId HM.empty HM.empty
+
+emptyActivityV8Wire ∷ WorldPageId → PageActivityDTOv8
+emptyActivityV8Wire pid = PageActivityDTOv8
+    { pad8PageId = pid, pad8Mine = HM.empty, pad8Construct = HM.empty
+    , pad8Chop = HM.empty, pad8Till = HM.empty, pad8Plant = HM.empty
+    , pad8FloraHarvests = HM.empty, pad8CropPlots = HM.empty
+    , pad8GroundItems = toGroundItemsDTO emptyGroundItems
+    , pad8SpoilPiles = HM.empty, pad8PendingChop = HM.empty
+    , pad8PendingHarvests = HM.empty
+    , pad8ConstructNextAttempt = firstConstructAttemptId
+    , pad8FloraConditions = HM.empty }
 
 -- | The frozen v6 slice, every field distinct from its default only
 --   where an example sets it.

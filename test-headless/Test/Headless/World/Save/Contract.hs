@@ -103,7 +103,8 @@ import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import qualified Data.List as L
 import World.Flora.Reference (FloraRef(..), renderFloraRef)
 import World.Flora.Condition
-    ( ConditionRetention(..), FloraConditionRecordOf(..), RetentionSuccessor(..) )
+    ( ConditionRetention(..), FloraConditionRecordOf(..), FloraReseedMarker(..)
+    , RetentionSuccessor(..) )
 import World.Flora.Types
     ( AnnualStageTag(..), FloraCondition(..), FloraContext(..)
     , FloraDeathCause(..), LifePhaseTag(..) )
@@ -443,21 +444,29 @@ richPage = PageSnapshot
               , fcrCondition = ConditionDead, fcrCause = CauseDrought
               , fcrBeganDay = 40, fcrContext = ContextWild
               , fcrPhase = Just PhaseFlowering, fcrStage = Just CycleBudding
-              , fcrRetention = RetentionTransient 100 RetainReseed } )
+              , fcrRetention = RetentionTransient 100 RetainReseed
+              , fcrReseedMarker = Just FloraReseedMarker
+                    { frmBeganDay = 20, frmPhase = Just PhaseSprout
+                    , frmStage = Just CycleBudding
+                    , frmRetention = RetentionTransient 80 RetainReseed } } )
         , ( plantedFloraInstanceId 99
           , FloraConditionRecord
               { fcrSpecies = FloraByName "wheat", fcrTile = (11, 12)
               , fcrCondition = ConditionDead, fcrCause = CauseFrost
               , fcrBeganDay = 41, fcrContext = ContextCultivated
               , fcrPhase = Nothing, fcrStage = Nothing
-              , fcrRetention = RetentionTransient 41 RetainAwaitReplanting } )
+              , fcrRetention = RetentionTransient 41 RetainAwaitReplanting
+              , fcrReseedMarker = Nothing } )
         , ( generatedFloraInstanceId "page1" 17 18 "probe_oak" 1
           , FloraConditionRecord
               { fcrSpecies = FloraByName "probe_oak", fcrTile = (17, 18)
               , fcrCondition = ConditionDead, fcrCause = CauseFire
               , fcrBeganDay = 42, fcrContext = ContextWild
               , fcrPhase = Just PhaseMatured, fcrStage = Nothing
-              , fcrRetention = RetentionPersistent } ) ]
+              , fcrRetention = RetentionPersistent
+              , fcrReseedMarker = Nothing } ) ]
+    , pgsFloraGrowthAnchors = HM.singleton
+        (generatedFloraInstanceId "page1" 15 16 "probe_berry" 0) 20
     , pgsPlantedFloraCursor = 3
     , pgsCraftBills   = richBills
     , pgsTransferOrders = richTransferOrders
@@ -623,6 +632,7 @@ minimalPage2 = PageSnapshot
     , pgsPendingChopMigration = HM.empty
     , pgsPendingFloraHarvests = HM.empty
     , pgsFloraConditions = HM.empty
+    , pgsFloraGrowthAnchors = HM.empty
     , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders

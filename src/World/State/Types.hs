@@ -73,7 +73,9 @@ import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
                             emptyFloraHarvests, emptyPendingFloraHarvests)
 import Gameplay.Tags.Page (PageTags, emptyPageTags, CropPlotStore, emptyCropPlotStore)
 import World.Flora.Identity (firstPlantedFloraCursor)
-import World.Flora.Condition (FloraConditions, emptyFloraConditions)
+import World.Flora.Condition
+    ( FloraConditions, emptyFloraConditions
+    , FloraGrowthAnchors, emptyFloraGrowthAnchors )
 import Item.Knowledge (PortableKnowledge, emptyPortableKnowledge)
 import Item.Ground (GroundItems, emptyGroundItems)
 
@@ -405,6 +407,9 @@ data WorldState = WorldState
       --   read by growth ('World.Flora.Growth.floraGrowth'), every render
       --   form and the forage queries. EFM-10 reconciles natural death and
       --   snapshotted expiry on this page's calendar.
+    , wsFloraGrowthAnchorsRef ∷ IORef FloraGrowthAnchors
+      -- ^ Start day for authored growth baselines, kept page-wide across
+      --   eviction and saved beside flora conditions in @world-activity@.
     , wsChopDesignationsRef ∷ IORef ChopDesignations
       -- ^ Chop-designation set (#97): flora INSTANCE id → designation
       --   (surface z + the plant's canonical tile; see
@@ -652,6 +657,7 @@ emptyWorldState = do
     wsConstructAttemptRef ← newIORef firstConstructAttemptId
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsFloraConditionsRef ← newIORef emptyFloraConditions
+    wsFloraGrowthAnchorsRef ← newIORef emptyFloraGrowthAnchors
     wsChopDesignationsRef ← newIORef HM.empty
     wsPendingChopMigrationRef ← newIORef HM.empty
     wsPendingFloraHarvestsRef ← newIORef emptyPendingFloraHarvests
@@ -694,6 +700,7 @@ emptyWorldState = do
                         wsConstructDesignationsRef wsConstructAttemptRef
                         wsFloraHarvestsRef
                         wsFloraConditionsRef
+                        wsFloraGrowthAnchorsRef
                         wsChopDesignationsRef
                         wsPendingChopMigrationRef
                         wsPendingFloraHarvestsRef

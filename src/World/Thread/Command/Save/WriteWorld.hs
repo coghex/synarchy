@@ -605,6 +605,8 @@ capturePageSnapshot floraCat bm um uts (pid, ws) = do
             floraHarvests ← readIORef (wsFloraHarvestsRef ws)
             floraConditions ← readIORef
                 (wsFloraConditionsRef ws)
+            floraGrowthAnchors ← readIORef
+                (wsFloraGrowthAnchorsRef ws)
             chopDesigs ← readIORef (wsChopDesignationsRef ws)
             pendingChop ← readIORef
                 (wsPendingChopMigrationRef ws)
@@ -696,4 +698,5 @@ capturePageSnapshot floraCat bm um uts (pid, ws) = do
                     -- #2021: always 'Just' — the
                     -- live ref is not optional.
                     , pgsGeneratedId = Just generatedId
+                    , pgsFloraGrowthAnchors = floraGrowthAnchors
                     }

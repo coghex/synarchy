@@ -70,7 +70,7 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (SavedPlantDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
-import World.Flora.Condition (SavedFloraConditions)
+import World.Flora.Condition (SavedFloraConditions, FloraGrowthAnchors)
 import World.Flora.CropPlot (SavedCropPlots)
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
@@ -250,6 +250,9 @@ data PageSnapshot = PageSnapshot
       --   the correct, expected value for every legacy save. The
       --   save-side rule — a CAPTURED page always has one — is enforced
       --   where captures happen, by the non-optional live ref.
+    , pgsFloraGrowthAnchors ∷ !FloraGrowthAnchors
+      -- ^ #2557: start days for authored growth baselines, keyed by
+      --   occurrence identity.
     } deriving (Show, Eq)
 
 -- | The whole-session capture: every persistable page plus the

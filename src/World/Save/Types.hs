@@ -114,7 +114,8 @@ import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
 import World.Flora.Condition
-    ( FloraConditions, SavedFloraConditions, FloraConditionRecordOf(..)
+    ( FloraConditions, SavedFloraConditions, FloraGrowthAnchors
+    , FloraConditionRecordOf(..)
     , traverseConditionSpecies )
 import World.Flora.CropPlot
     ( CropPlots, SavedCropPlots, CropPlotOf(..), traverseCropPlotSpecies )
@@ -168,7 +169,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 110
+currentSaveVersion = 111
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -549,6 +550,9 @@ data WorldPageSave = WorldPageSave
         --   fresh id the staged 'World.State.Types.WorldState' minted
         --   for itself, and — because loading never rewrites its source
         --   — the file it came from still says nothing afterwards.
+    , wpsFloraGrowthAnchors ∷ !FloraGrowthAnchors
+      -- ^ #2557: start days for authored growth baselines, keyed by
+      --   occurrence identity.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

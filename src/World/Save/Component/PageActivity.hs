@@ -112,9 +112,13 @@ module World.Save.Component.PageActivity
     , WorldActivityDTOv6(..)
     , PageActivityDTOv7(..)
     , WorldActivityDTOv7(..)
+    , PageActivityDTOv8(..)
+    , WorldActivityDTOv8(..)
       -- * Flora condition records (#2549)
     , FloraConditionDTO(..)
+    , FloraConditionDTOv8(..)
     , FloraRetentionDTO(..)
+    , FloraReseedMarkerDTO(..)
     , toFloraConditionDTO
     , fromFloraConditionDTO
       -- * The component
@@ -148,7 +152,7 @@ import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, isFloraInstanceIdNone)
 import World.Flora.Condition
     ( ConditionProblem(..), ConditionRetention(..)
-    , FloraConditionRecordOf(..), RetentionSuccessor
+    , FloraConditionRecordOf(..), FloraReseedMarker(..), RetentionSuccessor
     , SavedFloraConditionRecord, VocabTag
     , conditionRecordProblems, fromVocabTag, renderConditionProblem
     , toVocabTag )
@@ -782,7 +786,44 @@ data FloraConditionDTO = FloraConditionDTO
       -- ^ Optional: a species with no phases has none to freeze.
     , fcdStage     ∷ !(Maybe VocabTag)
     , fcdRetention ∷ !FloraRetentionDTO
+    , fcdReseedMarker ∷ !(Maybe FloraReseedMarkerDTO)
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | Reseed marker suspended beneath a temporary explicit condition.
+data FloraReseedMarkerDTO = FloraReseedMarkerDTO
+    { frmdBeganDay ∷ !Int
+    , frmdPhase ∷ !(Maybe VocabTag)
+    , frmdStage ∷ !(Maybe VocabTag)
+    , frmdRetention ∷ !FloraRetentionDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Frozen @world-activity@ v8 flora condition leaf, before it carried a
+--   suspended reseed marker.
+data FloraConditionDTOv8 = FloraConditionDTOv8
+    { fcd8Species   ∷ !FloraRef
+    , fcd8Tile      ∷ !(Int, Int)
+    , fcd8Condition ∷ !VocabTag
+    , fcd8Cause     ∷ !VocabTag
+    , fcd8BeganDay  ∷ !Int
+    , fcd8Context   ∷ !VocabTag
+    , fcd8Phase     ∷ !(Maybe VocabTag)
+    , fcd8Stage     ∷ !(Maybe VocabTag)
+    , fcd8Retention ∷ !FloraRetentionDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+migrateFloraConditionDTOv8 ∷ FloraConditionDTOv8 → FloraConditionDTO
+migrateFloraConditionDTOv8 d = FloraConditionDTO
+    { fcdSpecies = fcd8Species d
+    , fcdTile = fcd8Tile d
+    , fcdCondition = fcd8Condition d
+    , fcdCause = fcd8Cause d
+    , fcdBeganDay = fcd8BeganDay d
+    , fcdContext = fcd8Context d
+    , fcdPhase = fcd8Phase d
+    , fcdStage = fcd8Stage d
+    , fcdRetention = fcd8Retention d
+    , fcdReseedMarker = Nothing
+    }
 
 -- | The retention outcome on the wire. A persistent outcome has nowhere
 --   to put an expiry or a successor, by construction.
@@ -805,6 +846,17 @@ toFloraConditionDTO r = FloraConditionDTO
     , fcdRetention = case fcrRetention r of
         RetentionPersistent → RetentionPersistentD
         RetentionTransient expiry s → RetentionTransientD expiry (toVocabTag s)
+    , fcdReseedMarker = toFloraReseedMarkerDTO <$> fcrReseedMarker r
+    }
+
+toFloraReseedMarkerDTO ∷ FloraReseedMarker → FloraReseedMarkerDTO
+toFloraReseedMarkerDTO m = FloraReseedMarkerDTO
+    { frmdBeganDay = frmBeganDay m
+    , frmdPhase = toVocabTag <$> frmPhase m
+    , frmdStage = toVocabTag <$> frmStage m
+    , frmdRetention = case frmRetention m of
+        RetentionPersistent → RetentionPersistentD
+        RetentionTransient expiry s → RetentionTransientD expiry (toVocabTag s)
     }
 
 -- | The typed record a wire record names, or EVERY vocabulary field that
@@ -812,8 +864,8 @@ toFloraConditionDTO r = FloraConditionDTO
 fromFloraConditionDTO
     ∷ FloraConditionDTO → Either [ConditionProblem] SavedFloraConditionRecord
 fromFloraConditionDTO d =
-    case (condition, cause, context, phase, stage, retention) of
-        (Right c, Right ca, Right cx, Right ph, Right st, Right re) →
+    case (condition, cause, context, phase, stage, retention, reseedMarker) of
+        (Right c, Right ca, Right cx, Right ph, Right st, Right re, Right marker) →
             Right FloraConditionRecord
                 { fcrSpecies   = fcdSpecies d
                 , fcrTile      = fcdTile d
@@ -824,9 +876,10 @@ fromFloraConditionDTO d =
                 , fcrPhase     = ph
                 , fcrStage     = st
                 , fcrRetention = re
+                , fcrReseedMarker = marker
                 }
         _ → Left (concat [ bad condition, bad cause, bad context, bad phase
-                         , bad stage, bad retention ])
+                         , bad stage, bad retention, bad reseedMarker ])
   where
     condition ∷ Either ConditionProblem FloraCondition
     condition = tagged "condition" (fcdCondition d)
@@ -843,6 +896,16 @@ fromFloraConditionDTO d =
         RetentionPersistentD → Right RetentionPersistent
         RetentionTransientD expiry t →
             RetentionTransient expiry <$> successor t
+    reseedMarker = traverse decodeMarker (fcdReseedMarker d)
+    decodeMarker m = FloraReseedMarker
+        <$> pure (frmdBeganDay m)
+        <*> traverse (tagged "reseed marker life phase") (frmdPhase m)
+        <*> traverse (tagged "reseed marker annual stage") (frmdStage m)
+        <*> decodeRetention "reseed marker retention" (frmdRetention m)
+    decodeRetention field dto = case dto of
+        RetentionPersistentD → Right RetentionPersistent
+        RetentionTransientD expiry t →
+            RetentionTransient expiry <$> tagged (field <> " successor") t
     successor ∷ VocabTag → Either ConditionProblem RetentionSuccessor
     successor = tagged "retention successor"
     tagged ∷ (Enum a, Bounded a) ⇒ Text → VocabTag → Either ConditionProblem a
@@ -895,18 +958,18 @@ data PageActivityDTO = PageActivityDTO
       --   occurrence's #1854 identity like 'padChop' and
       --   'padFloraHarvests'. Wild occurrences regenerate and row crops
       --   replay, then join against this overlay by id.
+    , padFloraGrowthAnchors ∷ !(HM.HashMap FloraInstanceId Int)
+      -- ^ #2557: authored growth-baseline start days, retained across
+      --   eviction and used by admission reconciliation.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
--- | The FROZEN pre-#2552 activity slice (@world-activity@ v7): the v7
---   shape verbatim — everything the current slice carries, with the crop
---   plots still in their three-field 'CropPlotDTOv2' form. Its nested
---   records are the CURRENT leaf and non-leaf DTOs other than the crop
---   plot, which #2552 does change; the next change to any of them must
---   freeze the one it changes, as #2243 and #2552 did.
+-- | The FROZEN @world-activity@ v7 activity slice: crop plots remain in
+--   their three-field 'CropPlotDTOv2' form, flora conditions have no
+--   suspended reseed marker, and the slice has no growth-anchor map.
 data PageActivityDTOv7 = PageActivityDTOv7
     { pad7PageId        ∷ !WorldPageId
     , pad7Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
@@ -921,11 +984,35 @@ data PageActivityDTOv7 = PageActivityDTOv7
     , pad7PendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
     , pad7PendingHarvests ∷ !FloraHarvestsDTOv1
     , pad7ConstructNextAttempt ∷ !ConstructAttemptId
-    , pad7FloraConditions ∷ !(HM.HashMap FloraInstanceId FloraConditionDTO)
+    , pad7FloraConditions ∷ !(HM.HashMap FloraInstanceId FloraConditionDTOv8)
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTOv7 =
     WorldActivityDTOv7 { wad7Pages ∷ [PageActivityDTOv7] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | Frozen v8 activity wrapper: its condition leaf has the pre-marker
+--   shape and its crop plot carries the v8 embedded condition.
+data PageActivityDTOv8 = PageActivityDTOv8
+    { pad8PageId ∷ !WorldPageId
+    , pad8Mine ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad8Construct ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad8Chop ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
+    , pad8Till ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad8Plant ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad8FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
+    , pad8CropPlots ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad8GroundItems ∷ !GroundItemsDTO
+    , pad8SpoilPiles ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , pad8PendingChop ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+    , pad8PendingHarvests ∷ !FloraHarvestsDTOv1
+    , pad8ConstructNextAttempt ∷ !ConstructAttemptId
+    , pad8FloraConditions ∷ !(HM.HashMap FloraInstanceId FloraConditionDTOv8)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv8 = WorldActivityDTOv8
+    { wad8Pages ∷ [PageActivityDTOv8] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -1182,8 +1269,35 @@ migratePageActivityV7 s = PageActivityDTO
     , padPendingChop          = pad7PendingChop s
     , padPendingHarvests      = pad7PendingHarvests s
     , padConstructNextAttempt = pad7ConstructNextAttempt s
-    , padFloraConditions      = pad7FloraConditions s
+    , padFloraConditions      = HM.map migrateFloraConditionDTOv8
+                                     (pad7FloraConditions s)
+    , padFloraGrowthAnchors   = HM.empty
     }
+
+-- | v8 → v9 (#2557). Existing records have no suspended reseed marker.
+migratePageActivityV8 ∷ PageActivityDTOv8 → PageActivityDTO
+migratePageActivityV8 s = PageActivityDTO
+    { padPageId = pad8PageId s
+    , padMine = pad8Mine s
+    , padConstruct = pad8Construct s
+    , padChop = pad8Chop s
+    , padTill = pad8Till s
+    , padPlant = pad8Plant s
+    , padFloraHarvests = pad8FloraHarvests s
+    , padCropPlots = pad8CropPlots s
+    , padGroundItems = pad8GroundItems s
+    , padSpoilPiles = pad8SpoilPiles s
+    , padPendingChop = pad8PendingChop s
+    , padPendingHarvests = pad8PendingHarvests s
+    , padConstructNextAttempt = pad8ConstructNextAttempt s
+    , padFloraConditions = HM.map migrateFloraConditionDTOv8
+                              (pad8FloraConditions s)
+    , padFloraGrowthAnchors = HM.empty
+    }
+
+migrateWorldActivityV8 ∷ WorldActivityDTOv8 → WorldActivityDTO
+migrateWorldActivityV8 (WorldActivityDTOv8 pages) =
+    WorldActivityDTO (map migratePageActivityV8 pages)
 
 -- | v1/v2 → v8: every designation map crosses unchanged and each ground
 --   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
@@ -1274,10 +1388,27 @@ validateWorldActivity (WorldActivityDTO slices) = concat
       , gid ≥ gisiNextId (padGroundItems s)
       ]
     , floraConditionErrors slices
+    , floraGrowthAnchorErrors slices
     , cropConditionErrors slices
     ]
   where
     firstGroundItemId = gisNextId emptyGroundItems
+
+floraGrowthAnchorErrors ∷ [PageActivityDTO] → [ComponentError]
+floraGrowthAnchorErrors slices =
+    [ ComponentError worldActivityComponentId 9 ValidatePhase
+        ("page '" <> unWorldPageId (padPageId s)
+         <> "': flora growth anchor (instance "
+         <> tshow (floraInstanceIdToLua key) <> "): " <> problem)
+    | s ← slices
+    , (key, day) ← L.sortOn fst (HM.toList (padFloraGrowthAnchors s))
+    , problem ← [ if isFloraInstanceIdNone key
+                    then "reserved non-identity key"
+                    else if day < 0
+                        then "anchor day is negative (" <> tshow day <> ")"
+                        else "" ]
+    , problem ≢ ""
+    ]
 
 -- | #2549: the component-local validity of every flora condition record,
 --   each refusal naming the page and the record's key. Covers what a
@@ -1376,16 +1507,21 @@ cropConditionErrors slices =
 --   nests, so neither retained wrapper reads its crops as the new
 --   four-field shape — and every older version reaches v8 through it,
 --   each plot migrating with no condition.
+--   v9 (#2557) appends the occurrence growth-anchor map and the suspended
+--   reseed marker to each flora condition leaf. Both v7 and v8 wrappers
+--   retain the pre-marker leaf, and older versions migrate without
+--   authored anchors.
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 8
+    , csVersion       = 9
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 7 migrateWorldActivityV7
+    , csOlderVersions = [ atVersion 8 migrateWorldActivityV8
+                        , atVersion 7 migrateWorldActivityV7
                         , atVersion 6 migrateWorldActivityV6
                         , atVersion 5 migrateWorldActivityV5
                         , atVersion 4 migrateWorldActivityV4
@@ -1412,6 +1548,7 @@ worldActivityCodec = componentCodec ComponentSpec
         , padConstructNextAttempt = pgsConstructNextAttempt p
         , padFloraConditions =
             HM.map toFloraConditionDTO (pgsFloraConditions p)
+        , padFloraGrowthAnchors = pgsFloraGrowthAnchors p
         }
 
 -- | #1175: a v1 slice's designation keys carry no canonical-frame
@@ -1483,4 +1620,5 @@ applyWorldActivity ver (WorldActivityDTO slices) =
                 HM.mapMaybe (either (const Nothing) Just
                                 . fromFloraConditionDTO)
                             (padFloraConditions s)
+            , pgsFloraGrowthAnchors = padFloraGrowthAnchors s
             }

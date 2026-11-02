@@ -106,16 +106,20 @@ spec = do
                     , fcrCause = CauseFire, fcrBeganDay = 42
                     , fcrContext = ContextWild
                     , fcrPhase = Just PhaseMatured, fcrStage = Nothing
-                    , fcrRetention = RetentionTransient 42 RetainAbsent }
+                    , fcrRetention = RetentionTransient 42 RetainAbsent
+                    , fcrReseedMarker = Nothing }
                 reseededRecord = absentRecord
                     { fcrTile = (19, 20), fcrCondition = ConditionReseeded
                     , fcrCause = CauseDisease
                     , fcrRetention = RetentionTransient 60 RetainReseed }
                 absentSnapshot = fullSnapshot
                     { snapPages = HM.adjust
-                        (\page → page { pgsFloraConditions = HM.insert
-                            reseededId reseededRecord $ HM.insert absentId
-                            absentRecord (pgsFloraConditions page) })
+                        (\page → page
+                            { pgsFloraConditions = HM.insert
+                                reseededId reseededRecord $ HM.insert absentId
+                                absentRecord (pgsFloraConditions page)
+                            , pgsFloraGrowthAnchors = HM.insert reseededId 20
+                                (pgsFloraGrowthAnchors page) })
                         page1 (snapPages fullSnapshot) }
                 meta = snapshotSaveMetadata
                     (SaveRequestMeta "absent" "ts" False) absentSnapshot
@@ -134,6 +138,8 @@ spec = do
                                         (newFloraSpecies "wheat"
                                             (TextureHandle 98))
                                         emptyFloraCatalog
+                            pgsFloraGrowthAnchors page
+                                `shouldBe` HM.singleton reseededId 20
                             map fcrCondition (HM.elems conditions)
                                 `shouldContain` [ConditionReseeded]
                             map fcrCondition (HM.elems conditions)
@@ -834,7 +840,7 @@ emptyPageActivity ∷ WorldPageId → PageActivityDTO
 emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty emptyFloraHarvests HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
-    firstConstructAttemptId HM.empty
+    firstConstructAttemptId HM.empty HM.empty
 
 -- | #1667: one well-formed bill, so a floor test can pair an invalid
 --   allocator with a live id and see BOTH findings reported.

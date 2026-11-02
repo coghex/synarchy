@@ -291,6 +291,7 @@ pageWithSim ss = PageSnapshot
     , pgsPendingChopMigration = HM.empty
     , pgsPendingFloraHarvests = HM.empty
     , pgsFloraConditions = HM.empty
+    , pgsFloraGrowthAnchors = HM.empty
     , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders

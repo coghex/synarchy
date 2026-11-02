@@ -70,6 +70,7 @@ import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
+import World.Save.Component.PageActivity (FloraConditionDTOv8(..))
 import World.Save.Component.Types
     ( ComponentCodec(..), renderComponentError )
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -137,6 +138,7 @@ deadRecord fid tile = FloraConditionRecord
     , fcrPhase     = Just PhaseMatured
     , fcrStage     = Just CycleFlowering
     , fcrRetention = RetentionTransient 180 RetainAwaitReplanting
+    , fcrReseedMarker = Nothing
     }
 
 deadPlot ∷ CropPlot
@@ -364,7 +366,7 @@ spec = describe "crop plot condition persistence" $ do
   describe "world-activity v8 wire shape" $ do
 
     it "accepts v1 through v8" $
-        ccInputVers worldActivityCodec `shouldBe` [1 .. 8]
+        ccInputVers worldActivityCodec `shouldBe` [1 .. 9]
 
     it "round-trips a populated v8 payload byte-for-byte, and it validates" $ do
         let dto = WorldActivityDTO
@@ -434,9 +436,16 @@ spec = describe "crop plot condition persistence" $ do
             [ (plotTile,  CropPlotDTOv2 (FloraByName "probe_wheat") 90 0.75)
             , (otherTile, CropPlotDTOv2 (FloraByLegacyId (FloraId 2)) 12 0.25) ]
         harvests = HM.singleton (plantedFloraInstanceId 3) 42.5
-        occurrenceCondition = toFloraConditionDTO
-            (savedOf (deadRecord cloverId otherTile))
-            -- an unrelated v7 occurrence record, to catch misalignment
+        occurrenceCondition = toFloraConditionDTO (savedOf
+            (deadRecord cloverId otherTile))
+        occurrenceConditionV8 = let d = occurrenceCondition
+            in FloraConditionDTOv8
+                { fcd8Species = fcdSpecies d, fcd8Tile = fcdTile d
+                , fcd8Condition = fcdCondition d, fcd8Cause = fcdCause d
+                , fcd8BeganDay = fcdBeganDay d, fcd8Context = fcdContext d
+                , fcd8Phase = fcdPhase d, fcd8Stage = fcdStage d
+                , fcd8Retention = fcdRetention d }
+        -- an unrelated v7 occurrence record, to catch misalignment
         decodedAt ver bytes = case ccDecode worldActivityCodec ver bytes of
             Right (WorldActivityDTO [s]) → pure s
             Right _ → expectationFailure "expected one page slice" ≫ error "unreachable"
@@ -461,7 +470,7 @@ spec = describe "crop plot condition persistence" $ do
                 { pad7CropPlots = refCrops
                 , pad7FloraHarvests = harvests
                 , pad7FloraConditions =
-                    HM.singleton (plantedFloraInstanceId 4) occurrenceCondition
+                    HM.singleton (plantedFloraInstanceId 4) occurrenceConditionV8
                 , pad7ConstructNextAttempt = firstConstructAttemptId }
         s ← decodedAt 7 (S.encode (WorldActivityDTOv7 [slice]))
         expectUnconditioned expectedRefs s
@@ -942,7 +951,7 @@ emptyActivityV8 ∷ WorldPageId → PageActivityDTO
 emptyActivityV8 pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty HM.empty HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
-    firstConstructAttemptId HM.empty
+    firstConstructAttemptId HM.empty HM.empty
 
 emptyActivityV7 ∷ WorldPageId → PageActivityDTOv7
 emptyActivityV7 pid = PageActivityDTOv7

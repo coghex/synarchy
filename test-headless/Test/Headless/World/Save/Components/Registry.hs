@@ -44,6 +44,8 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Item.Ground (GroundItem(..))
 import World.Flora.Harvest (emptyFloraHarvests)
+import World.Flora.Identity
+    (floraInstanceIdNone, plantedFloraInstanceId)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Construct.Attempt (firstConstructAttemptId)
 import Craft.Bills (BillId(..), BillMode(..))
@@ -144,6 +146,7 @@ spec = do
             -- #2712: v16 appends each page's location scenario references,
             -- and @buildings@ v4 its buildings'.
             ccVersion worldPagesCodec `shouldBe` 16
+            ccVersion worldActivityCodec `shouldBe` 9
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -274,7 +277,7 @@ spec = do
                     [ PageActivityDTO page1 HM.empty HM.empty HM.empty
                         HM.empty HM.empty emptyFloraHarvests HM.empty
                         badGround HM.empty HM.empty HM.empty
-                        firstConstructAttemptId HM.empty ]
+                        firstConstructAttemptId HM.empty HM.empty ]
             ccValidate worldActivityCodec bad `shouldSatisfy` (not . null)
 
         it "world-activity accepts ground items whose ids all sit below \
@@ -287,8 +290,23 @@ spec = do
                             (HM.singleton 1 (toGroundItemDTO
                                 (GroundItem richItem 0 0))))
                         HM.empty HM.empty HM.empty
-                        firstConstructAttemptId HM.empty ])
+                        firstConstructAttemptId HM.empty HM.empty ])
                 `shouldBe` []
+
+        it "world-activity refuses reserved and negative flora growth anchors" $ do
+            let emptySlice = PageActivityDTO page1 HM.empty HM.empty HM.empty
+                    HM.empty HM.empty emptyFloraHarvests HM.empty
+                    (GroundItemsDTO 0 HM.empty) HM.empty HM.empty HM.empty
+                    firstConstructAttemptId HM.empty HM.empty
+                reserved = emptySlice
+                    { padFloraGrowthAnchors = HM.singleton floraInstanceIdNone 0 }
+                negative = emptySlice
+                    { padFloraGrowthAnchors =
+                        HM.singleton (plantedFloraInstanceId 1) (-1) }
+            ccValidate worldActivityCodec (WorldActivityDTO [reserved])
+                `shouldSatisfy` (not . null)
+            ccValidate worldActivityCodec (WorldActivityDTO [negative])
+                `shouldSatisfy` (not . null)
 
     -- #1668: the stored footprint of a persisted location instance is
     -- durable spatial authority (#911/#777), and the save decode path
@@ -933,7 +951,9 @@ goldenRichPayloads =
       -- #1844 re-pinned again: world-activity v5 appends each
       -- designation's attempt identity and payment record, and the
       -- page's own attempt allocator.
-    , ("world-activity",      (258,  "4bcc1f0c10d1c916"))
+      -- #2557 re-pinned: v9 appends the per-page flora growth-anchor map
+      -- (8 bytes per empty map, two pages in this fixture).
+    , ("world-activity",      (274,  "c032cced7d400f76"))
       -- #2549 re-pinned: world-activity v7 appends the page's flora
       -- condition store (8 bytes empty, ×2 pages).
       -- #2701 re-pinned: @buildings@ v3 and @units@ v5 each append the
@@ -984,7 +1004,8 @@ goldenFullPayloads =
       -- is unchanged, because no other fixture slice holds an item.
       -- #1844 re-pinned again for world-activity v5, exactly as
       -- goldenRichPayloads is.
-    , ("world-activity",      (386, "9a833d3940460eae"))
+      -- #2557 re-pinned: v9 appends the one page's empty growth-anchor map.
+    , ("world-activity",      (394, "b15ef50e09b8306e"))
       -- #2549 re-pinned: world-activity v7's empty flora condition store
       -- (8 bytes, one page).
       -- #2701 re-pinned: @buildings@ v3 / @units@ v5's empty page tag

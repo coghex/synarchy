@@ -49,6 +49,7 @@ module World.Flora.Condition
     , successorForWild
       -- * The record
     , FloraConditionRecordOf(..)
+    , FloraReseedMarker(..)
     , FloraConditionRecord
     , SavedFloraConditionRecord
     , traverseConditionSpecies
@@ -59,6 +60,8 @@ module World.Flora.Condition
     , FloraConditions
     , SavedFloraConditions
     , emptyFloraConditions
+    , FloraGrowthAnchors
+    , emptyFloraGrowthAnchors
     , ConditionRefusal(..)
     , markFloraDead
     , clearFloraCondition
@@ -85,7 +88,7 @@ import World.Flora.Identity
 import World.Flora.Reference (FloraRef)
 import World.Flora.Types
     ( AnnualStageTag, CorpseSuccessor(..), FloraCondition(..)
-    , FloraContext(..), FloraDeathCause, FloraId, LifePhaseTag(..) )
+    , FloraContext(..), FloraDeathCause(..), FloraId, LifePhaseTag(..) )
 
 -- | What follows a transient corpse. The two WILD outcomes are the
 --   species-level @successor@ (@reseed@ | @absent@); 'RetainAwaitReplanting'
@@ -116,6 +119,17 @@ data ConditionRetention
       --   to the begin day is permitted: a zero-length window), then the
       --   successor.
     deriving (Show, Eq, Generic, Serialize, NFData)
+
+-- | The durable wild reseed marker temporarily carried underneath an
+--   explicit condition. It preserves the prior natural-death boundary and
+--   expiry so clearing the explicit condition can restore the same marker.
+--   Species, tile, and context are shared with the enclosing record.
+data FloraReseedMarker = FloraReseedMarker
+    { frmBeganDay ∷ !Int
+    , frmPhase ∷ !(Maybe LifePhaseTag)
+    , frmStage ∷ !(Maybe AnnualStageTag)
+    , frmRetention ∷ !ConditionRetention
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 -- | The wild-context successor a species policy names, as a record
 --   stores it.
@@ -151,6 +165,10 @@ data FloraConditionRecordOf s = FloraConditionRecord
       -- ^ Frozen at the transition (D-10); 'Nothing' for an occurrence
       --   with no annual cycle, which is valid.
     , fcrRetention ∷ !ConditionRetention
+    , fcrReseedMarker ∷ !(Maybe FloraReseedMarker)
+      -- ^ A completed wild reseed marker suspended below one temporary
+      --   explicit condition. Clear restores it rather than dropping the
+      --   anchor that governs generation and age.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 -- | A record as the growth derivation consumes it (#2555, EFM-7): the
@@ -197,6 +215,13 @@ type FloraConditions = HM.HashMap FloraInstanceId FloraConditionRecord
 
 type SavedFloraConditions =
     HM.HashMap FloraInstanceId SavedFloraConditionRecord
+
+-- | Start day for an authored flora growth baseline. Unlike a condition
+--   marker, this exists while the occurrence is alive and survives eviction.
+type FloraGrowthAnchors = HM.HashMap FloraInstanceId Int
+
+emptyFloraGrowthAnchors ∷ FloraGrowthAnchors
+emptyFloraGrowthAnchors = HM.empty
 
 emptyFloraConditions ∷ HM.HashMap FloraInstanceId (FloraConditionRecordOf s)
 emptyFloraConditions = HM.empty
@@ -256,6 +281,7 @@ data ConditionProblem
       -- ^ A cultivated occurrence's transient outcome is awaiting
       --   replanting (D-13).
     | InvalidSuccessorMarker !FloraCondition !FloraContext !RetentionSuccessor
+    | InvalidUnderlyingReseedMarker
     | OutOfVocabulary !Text !Word8
       -- ^ A wire tag outside the named field's vocabulary — produced by
       --   the DTO decode in "World.Save.Component.PageActivity", never by
@@ -300,6 +326,21 @@ recordShapeProblems r = concat
         (ConditionAbsent, cx, RetentionPersistent) →
             [InvalidSuccessorMarker ConditionAbsent cx RetainAbsent]
         _ → []
+    , case fcrReseedMarker r of
+        Nothing → []
+        Just marker →
+            [ InvalidUnderlyingReseedMarker
+            | fcrCondition r ≢ ConditionDead
+              ∨ fcrContext r ≢ ContextWild
+              ∨ fcrCause r ≡ CauseNatural
+              ∨ frmBeganDay marker > fcrBeganDay r
+              ∨ frmPhase marker ≡ Just PhaseDead
+              ∨ case frmRetention marker of
+                    RetentionPersistent → True
+                    RetentionTransient expiry successor →
+                        expiry < frmBeganDay marker
+                          ∨ successor ≢ RetainReseed
+            ]
     ]
 
 renderConditionProblem ∷ ConditionProblem → Text
@@ -321,6 +362,8 @@ renderConditionProblem p = case p of
     InvalidSuccessorMarker condition context successor →
         tshow condition <> " marker conflicts with " <> tshow context
           <> " context or " <> tshow successor <> " successor"
+    InvalidUnderlyingReseedMarker →
+        "the underlying reseed marker is incompatible with this temporary condition"
     OutOfVocabulary field tag →
         field <> " tag " <> tshow tag <> " is outside its vocabulary"
 

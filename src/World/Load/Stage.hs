@@ -825,6 +825,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- occurrence a later admission regenerates or replays finds its
     -- record by id. Species were resolved with the other references.
     writeIORef (wsFloraConditionsRef worldState) liveConditions
+    writeIORef (wsFloraGrowthAnchorsRef worldState)
+        (wpsFloraGrowthAnchors wps)
     writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
     -- #1854: deferred legacy migration state restores beside the real
     -- maps, so a session that saves before every chunk has been visited

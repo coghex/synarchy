@@ -107,7 +107,7 @@ spec = do
                             (GroundItems 2 (HM.singleton 1
                                 (GroundItem richItem 3.5 4.5))) } ]
                 bytes = S.encode legacy
-            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8]
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9]
             forM_ [1, 2] $ \ver → do
                 mv ← expectDecode ("v" ⧺ show ver)
                           (ccDecode worldActivityCodec ver bytes)
@@ -598,6 +598,7 @@ toActivity pid = PageActivityDTO
     , padSpoilPiles    = HM.empty
     , padPendingChop   = HM.empty
     , padPendingHarvests = HM.empty
+    , padFloraGrowthAnchors = HM.empty
     }
 
 -- | The same at the FROZEN pre-#1233 layout (@world-activity@ v1/v2).
