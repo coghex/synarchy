@@ -315,6 +315,9 @@ data ExpectedPage = ExpectedPage
       --   ('scenarioFloraLines'). Absent before world-edits v6, which
       --   pins NOTHING (an older fixture may legitimately carry planted
       --   crops it never declared), rather than asserting none.
+    , epFloraConditions ∷ !(Maybe [Text])
+      -- ^ #2557: occurrence and plot corpse records, including durable
+      --   reseed/absence markers. Absent from older fixture summaries.
     }
 
 -- | #2711: the page's physical plant state as canonical text lines —
@@ -337,6 +340,10 @@ scenarioFloraLines page =
       | ((x, y), cp) ← L.sortOn fst (HM.toList (pgsCropPlots page)) ]
     ⧺ [ T.unwords [ "harvest", tshowI (fromIntegral (floraInstanceIdToLua i)), T.pack (show secs) ]
       | (i, secs) ← L.sortOn (floraInstanceIdToLua ∘ fst) (HM.toList (pgsFloraHarvests page)) ]
+    ⧺ [ T.unwords [ "remove", tshowI x, tshowI y
+                  , tshowI (fromIntegral (floraInstanceIdToLua i)) ]
+      | (x, y, i) ← L.sortOn (floraInstanceIdToLua ∘ third)
+          [ (x, y, i) | es ← HM.elems (pgsEdits page), WeRemoveFlora x y i ← es ] ]
     ⧺ [ T.unwords ["cursor", tshowI (fromIntegral (pgsPlantedFloraCursor page))] ]
   where
     tshowI ∷ Int → Text
@@ -344,6 +351,21 @@ scenarioFloraLines page =
     refName ref = case ref of
         FloraByName n     → n
         FloraByLegacyId k → "legacy:" <> T.pack (show k)
+    third (_, _, value) = value
+
+floraConditionLines ∷ PageSnapshot → [Text]
+floraConditionLines page =
+    [ "occurrence " <> tshowI (fromIntegral (floraInstanceIdToLua iid))
+        <> " " <> T.pack (show record)
+    | (iid, record) ← L.sortOn (floraInstanceIdToLua ∘ fst)
+        (HM.toList (pgsFloraConditions page)) ]
+    ⧺ [ "plot " <> tshowI x <> " " <> tshowI y <> " "
+        <> T.pack (show record)
+      | ((x, y), plot) ← L.sortOn fst (HM.toList (pgsCropPlots page))
+      , Just record ← [cpCondition plot] ]
+  where
+    tshowI ∷ Int → Text
+    tshowI = T.pack ∘ show
 
 -- | The same aggregates, read off a DECODED page. Kept beside the type
 --   it is compared against so the two cannot drift; the emitting half
@@ -522,6 +544,7 @@ instance Aeson.FromJSON ExpectedPage where
         <*> (o .:? "arenaBounds" ≫= traverse (Aeson.withObject "arenaBounds" $ \e →
                 (,) <$> e .: "width" <*> e .: "height"))
         <*> o .:? "scenarioFlora"
+        <*> o .:? "floraConditions"
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -828,6 +851,8 @@ manifestFixturesSpec =
                                     -- and regrowth timer survives decode.
                                     forM_ (epScenarioFlora ep) $ \want →
                                         scenarioFloraLines page `shouldBe` want
+                                    forM_ (epFloraConditions ep) $ \want →
+                                        floraConditionLines page `shouldBe` want
 
                                     -- #2520: pinned exactly when the
                                     -- fixture declares it, so a v4
