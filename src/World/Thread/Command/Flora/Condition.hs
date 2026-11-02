@@ -316,7 +316,9 @@ reconcileStoredOutcomes ws day = do
             let current = HM.lookup iid store
             in case current of
                 Just r | r ≡ record →
-                    (HM.insert iid (record { fcrCondition = marker }) store, True)
+                    (HM.insert iid (record
+                        { fcrCondition = marker, fcrReseedMarker = Nothing })
+                        store, True)
                 _ → (store, False)
         when (changed ∧ marker ≡ ConditionAbsent) $
             forgetFloraInstances ws [iid]
@@ -532,7 +534,9 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mReferenceDay mChunks = do
         atomicModifyIORef' (wsFloraConditionsRef ws) $ \store →
             case HM.lookup iid store of
                 Just current | current ≡ record →
-                    (HM.insert iid (current { fcrCondition = marker }) store, True)
+                    (HM.insert iid (current
+                        { fcrCondition = marker, fcrReseedMarker = Nothing })
+                        store, True)
                 _ → (store, False)
 
     advanceReseeded catalog species worldSize coord fi previous =

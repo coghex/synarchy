@@ -6,7 +6,7 @@
 --   gave wild and row flora, EMBEDDED in that value rather than put in the
 --   identity-keyed store. These examples pin the plot's pure operations,
 --   the one page-qualified query over both owners, the species conversion
---   the record rides through, the @world-activity@ v8 wire shape (and that
+--   the record rides through, the @world-activity@ v9 wire shape (and that
 --   every retained v1..v7 crop-bearing layout still decodes to an
 --   UNCONDITIONED current plot with nothing else lost), the validation each
 --   refusal goes through, and — through the REAL production capture,
@@ -70,7 +70,9 @@ import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
-import World.Save.Component.PageActivity (FloraConditionDTOv8(..))
+import World.Save.Component.PageActivity
+    ( CropPlotDTOv3(..), FloraConditionDTOv8(..), PageActivityDTOv8(..)
+    , WorldActivityDTOv8(..) )
 import World.Save.Component.Types
     ( ComponentCodec(..), renderComponentError )
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -368,22 +370,36 @@ spec = describe "crop plot condition persistence" $ do
     it "accepts v1 through v8" $
         ccInputVers worldActivityCodec `shouldBe` [1 .. 9]
 
-    it "round-trips a populated v8 payload byte-for-byte, and it validates" $ do
-        let dto = WorldActivityDTO
-                [ (emptyActivityV8 pageA)
-                    { padCropPlots = HM.fromList
-                        [ (plotTile, toCropPlotDTO' (savedPlot deadPlot))
-                        , (otherTile, toCropPlotDTO' (savedPlot livePlot)) ]
-                    , padFloraHarvests = HM.singleton (plantedFloraInstanceId 3) 42.5
-                    } ]
-        case ccDecode worldActivityCodec 8 (S.encode dto) of
+    it "decodes a frozen v8 crop condition without reading the v9 marker field" $ do
+        let condition = toFloraConditionDTO (savedOf (deadRecord wheatId plotTile))
+            conditionV8 = FloraConditionDTOv8
+                { fcd8Species = fcdSpecies condition
+                , fcd8Tile = fcdTile condition
+                , fcd8Condition = fcdCondition condition
+                , fcd8Cause = fcdCause condition
+                , fcd8BeganDay = fcdBeganDay condition
+                , fcd8Context = fcdContext condition
+                , fcd8Phase = fcdPhase condition
+                , fcd8Stage = fcdStage condition
+                , fcd8Retention = fcdRetention condition
+                }
+            plot = savedPlot deadPlot
+            plotV8 = CropPlotDTOv3 (cpSpecies plot) (cpPlantedDay plot)
+                (cpHealth plot)
+                (Just conditionV8)
+            sliceV8 = PageActivityDTOv8 pageA HM.empty HM.empty HM.empty
+                HM.empty HM.empty HM.empty (HM.singleton plotTile plotV8)
+                (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
+                firstConstructAttemptId HM.empty
+        case ccDecode worldActivityCodec 8
+                (S.encode (WorldActivityDTOv8 [sliceV8])) of
             Left e → expectationFailure (show e)
             Right back → do
-                S.encode back `shouldBe` S.encode dto
                 ccValidate worldActivityCodec back `shouldBe` []
                 case back of
-                    WorldActivityDTO [s] →
-                        fmap (fmap fromCropPlotDTO' . Just) (HM.lookup plotTile (padCropPlots s))
+                    WorldActivityDTO [s] → do
+                        fmap (fmap fromCropPlotDTO' . Just)
+                            (HM.lookup plotTile (padCropPlots s))
                             `shouldBe` Just (Just (savedPlot deadPlot))
                     _ → expectationFailure "expected one page slice"
 
@@ -392,7 +408,7 @@ spec = describe "crop plot condition persistence" $ do
                 (blankPageSnapshot pageA arenaParams)
                     { pgsCropPlots = HM.singleton plotTile (savedPlot deadPlot) }
             bytes = ccEncode worldActivityCodec snap
-        case ccDecode worldActivityCodec 8 bytes of
+        case ccDecode worldActivityCodec 9 bytes of
             Right (WorldActivityDTO [s]) →
                 fmap (cpCondition . fromCropPlotDTO')
                      (HM.lookup plotTile (padCropPlots s))
@@ -541,7 +557,7 @@ spec = describe "crop plot condition persistence" $ do
             let payload = WorldActivityDTO
                     [ (emptyActivityV8 pid)
                         { padCropPlots = HM.singleton tile dto } ]
-            case ccDecode worldActivityCodec 8 (S.encode payload) of
+            case ccDecode worldActivityCodec 9 (S.encode payload) of
                 Left e → expectationFailure (show e) ≫ pure []
                 Right decoded →
                     pure (map renderComponentError
@@ -619,7 +635,7 @@ spec = describe "crop plot condition persistence" $ do
                           (otherTile, wireWith base { fcrSpecies = cloverId })
                         , -- one defect: a tile that is not its key
                           (plotTile, wireWith base { fcrTile = otherTile }) ] } ]
-        case ccDecode worldActivityCodec 8 (S.encode payload) of
+        case ccDecode worldActivityCodec 9 (S.encode payload) of
             Left e → expectationFailure (show e)
             Right decoded → do
                 let msgs = map renderComponentError

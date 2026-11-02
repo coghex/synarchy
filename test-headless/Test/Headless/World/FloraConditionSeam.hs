@@ -36,6 +36,8 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
+import Item.Ground (emptyGroundItems)
+import World.Construct.Attempt (firstConstructAttemptId)
 import Engine.ActionOutcome (ActionOutcome(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.UnitCombat
@@ -65,6 +67,7 @@ import World.Flora.CropPlot
 import World.Flora.Growth
 import World.Flora.Identity
 import World.Flora.Render
+import World.Flora.Reference (FloraRef(..))
 import World.Flora.Types
 import World.Flora.Visual
 import World.Edit.Apply (applyEdit)
@@ -76,6 +79,10 @@ import World.Generate.Types
     ( WorldGenParams(..), defaultWorldGenParams )
 import World.Page.Types (WorldPageId(..))
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
+import World.Save.Component.PageActivity
+    ( PageActivityDTO(..), WorldActivityDTO(..), toFloraConditionDTO
+    , fromFloraConditionDTO, toGroundItemsDTO, worldActivityCodec )
+import World.Save.Component.Types (ComponentCodec(..))
 import World.State.Types
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.Flora.Condition (reconcileAdmittedFlora)
@@ -1213,6 +1220,61 @@ corpseRetentionSpec = beforeAll setup $ describe "flora corpse retention" $ do
         fmap fcrBeganDay laterDeath `shouldBe` Just 1848
         fmap fcrRetention laterDeath `shouldBe`
             Just (RetentionTransient 1908 RetainReseed)
+
+    it "expires an explicit overlay on a reseeded wild plant into a save-valid successor" $
+      \(env, ls) → do
+        ws ← resetPage env
+        let annual = speciesBush { fsLifecycle = Annual }
+            row = engBush { fiHealth = 0.5 }
+            iid = fiInstanceId row
+            setDate y m d = do
+                evalDebug ls (T.concat
+                    [ "world.setDate('flora_condition_seam', ", tshow y, ", "
+                    , tshow m, ", ", tshow d, "); return 'queued'" ])
+                    `shouldReturn` "queued"
+                drainWorldQueue env `shouldReturn` 1
+        writeIORef (floraCatalogRef env) catalog
+            { fcSpecies = HM.insert 2 annual (fcSpecies catalog) }
+        tiles ← readIORef (wsTilesRef ws)
+        let chunk = (chunkOf [engTree, row, engPlain]) { lcCoord = homeChunk }
+        writeIORef (wsTilesRef ws) tiles
+            { wtdChunks = HM.insert homeChunk chunk (wtdChunks tiles) }
+        let prior = (recordFor row CauseNatural 800)
+                { fcrCondition = ConditionReseeded
+                , fcrBeganDay = 780
+                , fcrRetention = RetentionTransient 840 RetainReseed }
+        writeIORef (wsFloraConditionsRef ws) (HM.singleton iid prior)
+        -- Install a temporary explicit death at day 810. It suspends the
+        -- valid reseed marker and expires at day 870.
+        setDate 3 4 1
+        evalDebug ls (setLua homeTile (Just iid) "'fire'") `shouldReturn` "true"
+        drainWorldQueue env `shouldReturn` 1
+        suspended ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        fmap fcrReseedMarker suspended `shouldSatisfy` isJust
+        setDate 3 6 1
+        after ← HM.lookup iid <$> readIORef (wsFloraConditionsRef ws)
+        fmap fcrCondition after `shouldBe` Just ConditionReseeded
+        fmap fcrReseedMarker after `shouldBe` Just Nothing
+        record ← maybe (expectationFailure "successor record missing"
+                          >> pure prior) pure after
+        conditionRecordProblems iid record `shouldBe` []
+        let savedRecord = record { fcrSpecies = FloraByName "seam_bush" }
+            slice = PageActivityDTO (WorldPageId "flora_condition_seam")
+                HM.empty HM.empty HM.empty HM.empty HM.empty HM.empty HM.empty
+                (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
+                firstConstructAttemptId
+                (HM.singleton iid (toFloraConditionDTO savedRecord))
+                HM.empty
+            payload = WorldActivityDTO [slice]
+        case ccDecode worldActivityCodec 9 (S.encode payload) of
+            Left e → expectationFailure (show e)
+            Right decoded → do
+                ccValidate worldActivityCodec decoded `shouldBe` []
+                case decoded of
+                    WorldActivityDTO [back] →
+                        fmap (fromFloraConditionDTO) (HM.lookup iid (padFloraConditions back))
+                            `shouldBe` Just (Right savedRecord)
+                    _ → expectationFailure "expected one saved page slice"
 
     it "catches up a sub-full-health scenario anchor across a long jump" $
       \(env, ls) → do

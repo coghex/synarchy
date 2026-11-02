@@ -80,6 +80,7 @@ module World.Save.Component.PageActivity
     , CropPlotDTO(..)
     , CropPlotDTOv1(..)
     , CropPlotDTOv2(..)
+    , CropPlotDTOv3(..)
       -- * Frozen item / ground-item / spoil DTOs
     , ItemStorageDTO(..)
     , ItemInstanceDTO(..)
@@ -409,7 +410,7 @@ migratePlantDesignationDTOv1 d =
     PlantDesignationDTO (pti1Z d) (FloraByLegacyId (pti1Crop d))
 
 -- | Frozen mirror of 'World.Flora.CropPlot.SavedCropPlot' — the CURRENT
---   (@world-activity@ v8) shape. See 'PlantDesignationDTO' above.
+--   (@world-activity@ v9) shape. See 'PlantDesignationDTO' above.
 --
 --   #2552 appended the optional embedded condition. It reuses the v7
 --   'FloraConditionDTO' wire record verbatim — a groundcover plot's
@@ -423,6 +424,17 @@ data CropPlotDTO = CropPlotDTO
     , cpiPlantedDay ∷ !Int
     , cpiHealth     ∷ !Float
     , cpiCondition  ∷ !(Maybe FloraConditionDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN @world-activity@ v8 crop plot: the four-field plot shape
+--   with its embedded condition in the pre-reseed-marker form. The live
+--   crop DTO now embeds 'FloraConditionDTO', so retaining it below the v8
+--   wrapper would silently change that wrapper's nested wire layout.
+data CropPlotDTOv3 = CropPlotDTOv3
+    { cpi3Species    ∷ !FloraRef
+    , cpi3PlantedDay ∷ !Int
+    , cpi3Health     ∷ !Float
+    , cpi3Condition  ∷ !(Maybe FloraConditionDTOv8)
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The FROZEN pre-#2552 crop plot (@world-activity@ v6 and v7): the
@@ -480,6 +492,16 @@ migrateCropPlotDTOv2 d = CropPlotDTO
     , cpiPlantedDay = cpi2PlantedDay d
     , cpiHealth     = cpi2Health d
     , cpiCondition  = Nothing
+    }
+
+-- | v3 → current (#2557): v8 plots have an embedded condition but not
+--   the suspended reseed marker appended in v9.
+migrateCropPlotDTOv3 ∷ CropPlotDTOv3 → CropPlotDTO
+migrateCropPlotDTOv3 d = CropPlotDTO
+    { cpiSpecies = cpi3Species d
+    , cpiPlantedDay = cpi3PlantedDay d
+    , cpiHealth = cpi3Health d
+    , cpiCondition = migrateFloraConditionDTOv8 <$> cpi3Condition d
     }
 
 -- | Frozen mirror of 'Item.Types.ItemStorage' — a portable item's
@@ -1002,7 +1024,7 @@ data PageActivityDTOv8 = PageActivityDTOv8
     , pad8Till ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , pad8Plant ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
     , pad8FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
-    , pad8CropPlots ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad8CropPlots ∷ !(HM.HashMap (Int, Int) CropPlotDTOv3)
     , pad8GroundItems ∷ !GroundItemsDTO
     , pad8SpoilPiles ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , pad8PendingChop ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
@@ -1284,7 +1306,7 @@ migratePageActivityV8 s = PageActivityDTO
     , padTill = pad8Till s
     , padPlant = pad8Plant s
     , padFloraHarvests = pad8FloraHarvests s
-    , padCropPlots = pad8CropPlots s
+    , padCropPlots = HM.map migrateCropPlotDTOv3 (pad8CropPlots s)
     , padGroundItems = pad8GroundItems s
     , padSpoilPiles = pad8SpoilPiles s
     , padPendingChop = pad8PendingChop s
