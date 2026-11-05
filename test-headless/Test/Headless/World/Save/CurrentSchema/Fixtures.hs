@@ -100,6 +100,24 @@ instance S.Serialize FxHandUndeclared__A where
     put (FxHandUndeclared__A a b) = S.put b >> S.put a
     get = do b ← S.get; a ← S.get; pure (FxHandUndeclared__A a b)
 
+-- | A single-field wrapper over Word32 whose serializer is little endian:
+--   it round-trips, and only a non-zero sample for its ONLY field exposes
+--   the difference from cereal's big-endian generic encoding.
+data FxLE__A = FxLE__A !Word32
+    deriving (Show, Generic)
+instance S.Serialize FxLE__A where
+    put (FxLE__A n) = S.putWord32le n
+    get = FxLE__A ⊚ S.getWord32le
+
+-- | Two wrapped Int fields whose serializer swaps them on write and read.
+data FxWrapInt__A = FxWrapInt__A !Int
+    deriving (Show, Generic, S.Serialize)
+data FxWrapPair__A = FxWrapPair__A !FxWrapInt__A !FxWrapInt__A
+    deriving (Show, Generic)
+instance S.Serialize FxWrapPair__A where
+    put (FxWrapPair__A a b) = S.put b >> S.put a
+    get = do b ← S.get; a ← S.get; pure (FxWrapPair__A a b)
+
 -- | Four equal-typed fields whose hand-written serializer swaps the
 --   MIDDLE two on both write and read: it round-trips, and only a sample
 --   that gives those two fields different values exposes it.
@@ -238,6 +256,12 @@ catalogue =
         (Fails "transparent newtype")
     , Case "deeply wrapped type with a round-tripping prefix serializer fails extraction"
         (Right Null) (record' [car "deep" 1 [1] (Proxy ∷ Proxy FxD7__A)] [])
+        (Fails "unclassified encoder")
+    , Case "single-field little-endian wrapper fails extraction"
+        (Right Null) (record' [car "le" 1 [1] (Proxy ∷ Proxy FxLE__A)] [])
+        (Fails "unclassified encoder")
+    , Case "swapped wrapped-Int fields fail extraction"
+        (Right Null) (record' [car "wp" 1 [1] (Proxy ∷ Proxy FxWrapPair__A)] [])
         (Fails "unclassified encoder")
     , Case "middle-field swapping serializer fails extraction"
         (Right Null) (record' [car "swap" 1 [1] (Proxy ∷ Proxy FxSwapMid__A)] [])

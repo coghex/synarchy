@@ -257,7 +257,7 @@ instance (Selector s, WireSchema c) ⇒ GFields (S1 s (K1 i c)) where
 -- Generic samples ----------------------------------------------------
 
 -- | Sample values of a representation. Variant @k@ gives field @o@ its
---   second sample iff bit @k@ of @o@ is set, so for any two fields of one
+--   second sample iff bit @k@ of @o + 1@ is set, so for any two fields of one
 --   constructor some variant gives them different values (up to
 --   'variantCount' bits, 128 fields) and a swapped write order is visible
 --   in the bytes. A field type with only one sample cannot be told from
@@ -293,11 +293,13 @@ instance WireSchema c ⇒ GSample (K1 i c) where
     -- Only the first two samples are ever forced, so the cost stays
     -- linear in depth however many constructors a field type has.
     -- Field @o@ takes its second sample exactly in the variants whose
-    -- bit @k@ is set in @o@, so any two fields differ in some variant.
+    -- bit @k@ is set in its code @o + 1@. Codes are distinct, so any two
+    -- fields differ in some variant, and every code is non-zero, so even
+    -- the only field of a constructor gets a second sample.
     gsample d k o = case take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy c)) of
         []      → []
         [x]     → [K1 x]
-        (x : y : _) → [K1 (if testBit o k then y else x)]
+        (x : y : _) → [K1 (if testBit (o + 1) k then y else x)]
     gcount _ = 1
 
 -- | The first constructible value of a representation, constructors in
