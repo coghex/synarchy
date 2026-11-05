@@ -32,10 +32,10 @@ Nothing is parsed from source text.
 |---|---|
 | Haskell component shapes | `componentCodec` demands a `WireSchema` instance for its DTO type `d` and keeps the compiled `WireRoot` on the codec (`ccWire`) and registry entry (`rcWire`) before the registry erases `d`. The walk is GHC `Generic`/`Typeable`: constructors in order, record selectors, newtypes, instantiated field types, GHC-resolved aliases. |
 | Component versions and acceptance | `rcVersion`/`rcInputVers` from the live `saveComponentRegistry`, and each version PROBED through `rcPrepare` (the entry point `assembleSnapshot` runs). A disagreement fails extraction. |
-| Metadata | `metadataWireRoot` (the type `encodeSessionSnapshot` encodes), `metadataComponentVersion`, and a probe of `decodeSaveEnvelopeMetadata` at every version. |
-| Framing | `currentEnvelopeVersion`, `envelopeMagic`, `headerSize`, an fnv1a64 probe, and the hex of a fixed encoded envelope. The header bytes are hand written, so they are declared and probed, not derived. The cereal manifest is walked. |
+| Metadata | `metadataWireRoot` (the type `encodeSessionSnapshot` encodes), `metadataComponentVersion`, and a probe at every version through all four public entry points (`decodeSaveEnvelopeMetadata`, `decodeSaveEnvelopeMetadataClassified`, `decodeSessionEnvelope`, `decodeSessionEnvelopeClassified`). They must agree, and the result must equal the advertised list. |
+| Framing | `currentEnvelopeVersion` (also its advertised list), `envelopeMagic`, a header size measured from a real encoded envelope, an fnv1a64 probe, and the hex of a fixed encoded envelope, with acceptance probed through the same four entry points. The header bytes are hand written, so they are declared and probed, not derived. The cereal manifest is walked. |
 | Lua modules | The production `scripts/init_loader.lua` runs under a recording `engine.loadScript`; every recorded script is loaded and its real `init` run; the evaluated `saveModules.registry` supplies id, version, `inputVersions` and `required`; each version is probed through `saveModules.prepareLoad`. A script that cannot load or initialise fails the run. `scripts/lib/data_codec.lua` is the unversioned wire owner every Lua carrier shares, recorded by a probe of its encoding. |
-| Legacy routes | B1 (`session`) and B2 (`lua-state`) are probed through `decodeSaveEnvelopeMetadata`, `decodeSessionEnvelopeClassified` and the direct `decodeLegacy*`/`decodeB2*` entry points with correctly shaped envelopes. A route is enabled if any entry point recognises the shape. Ownership is conservative: B1 is owned by metadata and every Haskell carrier; B2 by metadata, `lua-state` and every required Haskell carrier. |
+| Legacy routes | B1 (`session`) and B2 (`lua-state`) are probed through `decodeSaveEnvelopeMetadata`, `decodeSessionEnvelopeClassified` and the direct `decodeLegacy*`/`decodeB2*` entry points with correctly shaped envelopes. A route entry point is live when it decodes the exact shape, or gets as far as per-component work before failing; a shape it refuses at the envelope (a version it no longer accepts) is not live. A route is enabled if any entry point is live. Ownership is conservative: B1 is owned by metadata and every Haskell carrier; B2 by metadata, `lua-state` and every required Haskell carrier. |
 
 ## Serialization boundaries
 
@@ -49,11 +49,15 @@ generic encoding. Every reachable type is one of:
 - **primitive / library**: cereal's base-type and container encoders, declared
   by explicit instances in `World.Save.Wire`.
 - **newtype**: a newtype-derived instance, checked against its field's
-  encoding.
+  encoding; a prefix-writing encoder that still round-trips fails.
 - **custom**: a hand-written encoder declared in `World.Save.Wire.Custom` with
   an owner, a description of the bytes and the wire types it writes. Declared
-  and tested (round trip on samples where samples exist), **not derived**. A
-  type that is reachable but not declared, or declared but unreachable, fails.
+  and tested, **not derived**: every declaration needs at least two
+  distinguishing sample values (round trip), and an owned example in the
+  `current save schema` group pins its layout against bytes specified by hand
+  in the test from the declared layout (not produced by the encoder under
+  test). A type that is reachable but not declared, or declared but
+  unreachable, fails.
 
 A type with no `Generic` instance and no explicit instance is a compile error
 at the `componentCodec` call site, so a new boundary cannot be added silently.
@@ -89,7 +93,7 @@ the framing.
 
 Routine comparison reads the validated record committed at the merge-base of
 `--base-ref` and `HEAD`, compiles only the candidate (always building first and
-refusing a binary older than the newest source), and requires the committed
+then asking cabal's own dry run to confirm nothing is left to build), and requires the committed
 record to equal the compiled evidence exactly. A base that contains any guard
 artifact must carry a valid record: a missing or malformed one fails and never
 enables the bootstrap. Only a base containing none of the guard's artifacts
