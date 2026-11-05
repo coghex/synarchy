@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "framingVersion": 1,
+  "provenance": "Current fixture record for PSP-3. The session payload was decoded and re-encoded through the compiled synarchy-save-codec from the tracked z20-crop-plot-condition session, using seed-tags with an empty tag set. The real current decoder upgraded the old component payloads, then the production session encoder wrote current component versions and current framing. The resulting descriptors were checked against live Haskell and Lua registrations at master 1feb2764f; the expected descriptor table below is committed independently of the audit implementation. The compiled codec produced the committed summary once; audit runs compare against it and never regenerate this record.",
+  "fixtures": [
+    {
+      "id": "current-session-v1",
+      "path": "tools/save_compat_current/fixtures/current-session.bin",
+      "sizeBytes": 905541,
+      "sha256": "8d6cf460d36c81a889a93d3b9251d80979cf9124fd5e65c8c8920ebb3484d3bf",
+      "summary": "tools/save_compat_current/fixtures/current-session.expected.json",
+      "summarySha256": "c3715ba6c3d167493daada7c2284a002ffbfee151b764a7d7dad8a94e23a5fb7",
+      "provenance": "Codec-derived from test-headless/data/save-compat/z20-crop-plot-condition.bin with exe:synarchy-save-codec seed-tags and an empty tag spec; production decodeSessionEnvelope and encodeSessionSnapshot decoded/migrated and wrote the session in the current schema. No engine boot or gameplay probe was used.",
+      "expectedDescriptors": [
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        },
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "portable-knowledge",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "relation-causes",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "transfer-orders",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 9,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        }
+      ]
+    }
+  ]
+}

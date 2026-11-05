@@ -195,6 +195,7 @@ import argparse
 import sys
 
 import save_compat_audit_generate as generate
+import save_compat_audit_current as current_audit
 import save_compat_audit_manifest as manifest_audit
 import save_compat_audit_register as register
 from save_compat_audit_codec import (  # noqa: F401
@@ -220,6 +221,8 @@ def main() -> int:
                           "session fixture through a real headless engine, "
                           "then register it exactly like --add-baseline "
                           "(requirement 21's real generation mode)")
+    ap.add_argument("--mode", choices=["current"],
+                    help="audit current saves only; no historical mode is provided")
     ap.add_argument("--seed", type=int, default=42,
                      help="--generate-session only, default 42")
     ap.add_argument("--world-size", type=int, default=8,
@@ -336,6 +339,10 @@ def main() -> int:
                           "cabal toolchain; the checked-in CI gate still "
                           "catches a bad fixture on the next push")
     args = ap.parse_args()
+    if args.mode == "current":
+        if args.add_baseline or args.generate_session or args.skip_validation:
+            ap.error("--mode current cannot be combined with historical baseline or generation options")
+        return current_audit.cmd_audit()
     if args.generate_session:
         if not args.baseline_id or not args.fixture_id or not args.path \
                 or not args.summary:
