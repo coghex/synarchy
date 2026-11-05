@@ -45,9 +45,17 @@ generic encoding. Every reachable type is one of:
 - **generic** (the default instance): its real `S.encode` is compared with
   cereal's own `GSerializePut` encoding on distinguishing sample values, and
   must round-trip. A hand-written encoder that disagrees fails extraction
-  with `unclassified encoder`. This is evidence on samples, not a proof.
-- **primitive / library**: cereal's base-type and container encoders, declared
-  by explicit instances in `World.Save.Wire`.
+  with `unclassified encoder`. This is evidence on samples, not a proof. A
+  checked classification (generic, newtype, custom) with no constructible sample
+  fails with `unchecked boundary`; once the nesting budget is spent, sampling
+  falls back to the simplest constructible value, so a deeply wrapped type is
+  still compared.
+- **primitive / library**: base-type and container encoders, declared by
+  explicit instances in `World.Save.Wire`. Several are this repository's own
+  orphans (`Text`, `HashMap`, `Vector`, `HashSet`); the rest are cereal's. Every
+  reachable one has a layout example in the `current save schema` group whose
+  bytes are specified by hand, and the reachable set must equal the table
+  exactly, so a swap of the serializer behind any of them is visible.
 - **newtype**: a newtype-derived instance, checked against its field's
   encoding; a prefix-writing encoder that still round-trips fails.
 - **custom**: a hand-written encoder declared in `World.Save.Wire.Custom` with
@@ -102,5 +110,6 @@ hooks onto an export of it; the adapter is refused if it would remove any base
 line outside the declared hook rewrite. The run output states the resolved
 commits, the base record's blob and validation provenance, the candidate's
 tracked-edit identity and the extractor and toolchain identity. The record
-itself carries none of that, so off-wire and comment-only edits leave it
-byte-identical.
+itself carries none of that (nor the number of scripts the Lua loader
+requested, which is run provenance), so off-wire and comment-only edits leave
+it byte-identical.
