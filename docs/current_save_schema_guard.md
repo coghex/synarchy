@@ -1,133 +1,102 @@
-# Current-schema save guard
+# Current-schema save guard (PSP-2, #2916)
 
-`tools/current_save_schema_audit.py` (#2916, PSP-2 of #2914) enforces the
-pre-release save rule from
-[prerelease_save_policy_design.md](designs/prerelease_save_policy_design.md)
-(D-1, D-5, P-2): **a persisted shape change advances the affected carrier's
-on-disk version, and that carrier then accepts only its current version.**
-It never asks whether an old decoder could still be safe.
+Before release, a persisted shape change advances every affected component,
+metadata, Lua or framing version, and each affected carrier then accepts only
+its current version with its affected exact-shape legacy routes disabled. No
+historical-decoder compatibility analysis, new migration or historical fixture
+is required. Design: `docs/designs/prerelease_save_policy_design.md` (P-2,
+PSP-2, D-5, D-9). The guard is not wired into CI, `make ci` or any default
+until PSP-5 (#2919).
 
-The guard is not wired into CI or `make ci` yet; PSP-5 (#2919) switches the
-mandatory gates over to it and retires the strict enum audit with the other
-historical machinery.
-
-## Running it
+## Commands
 
 ```bash
-python3 tools/current_save_schema_audit.py --self-test        # synthetic suite
-python3 tools/current_save_schema_audit.py                    # record is fresh
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "current save schema"'
+python3 tools/current_save_schema_audit.py --self-test
 python3 tools/current_save_schema_audit.py --base-ref origin/master
-python3 tools/current_save_schema_audit.py --base-ref origin/master --json
-python3 tools/current_save_schema_audit.py --update-record    # regenerate
+python3 tools/current_save_schema_audit.py --update-record
 ```
 
-* `--update-record` rewrites `docs/save_compat/current_schema.json` from
-  source and nothing else. The record is a projection of the candidate; it
-  is never the comparison input, so regenerating or deleting it cannot hide a
-  same-version change. Commit it with the code (a tool reads it).
-* `--base-ref REF` compares the candidate with the **merge-base** of `REF` and
-  `HEAD`, both computed from source, so a target branch that moved on is not
-  read as this change reverting it. The resolved base and candidate SHAs are
-  printed (and in `--json`). A comparison of a commit with itself, with no
-  uncommitted changes, fails, as does a base that cannot be resolved or read.
-  The first run that introduces the record is still a real comparison.
-* Exit 0 passes; 1 is a failed rule or missing evidence. Each failure names
-  the carrier (and, for a shape change, the declarations that moved).
+`--update-record` rewrites `docs/save_compat/current_schema.json` from the
+compiled evidence. It does not replace the independent `--base-ref` check:
+regenerating, editing or deleting the record cannot bless same-version drift,
+because the comparison reads the record committed at the base revision.
 
-## What counts as a carrier
+## Where each fact comes from
 
-| Carrier | Version source | Shape |
-|---|---|---|
-| Haskell component | `csVersion`, `csOlderVersions` | records, enums, newtypes, aliases reachable from its `*DTO*` roots, plus hand-written `Serialize` instances on reached types |
-| `metadata` | `metadataComponentVersion`, `metadataComponentInputVersions` | `SaveMetadata` and its closure |
-| `lua.<id>` | `version`, `inputVersions` in `saveMods.register` | the shared `scripts/lib/data_codec.lua` (a Lua payload has no declared schema) |
-| `framing` | `currentEnvelopeVersion` | `envelope_framing_fingerprint` |
-| `session`, `lua-state` | retired | read only through the `b1-session` and `b2-lua-state` legacy routes |
+Nothing is parsed from source text.
 
-A carrier's *legacy shape* is what only its still-accepted older versions
-reach (the frozen DTOs its `csOlderVersions` migrations name, the
-`MetadataV<n>` mirrors). Editing one while it is reachable fails until the
-older version is removed; the current version need not move if the current
-shape did not.
-
-## Canonical forms
-
-The guard reads each construct in exactly one form (owner ruling, 2026-11-05,
-"Strict canonical forms"). Any other spelling is not interpreted: the run
-fails with `<file>:<line>: unsupported syntax: rewrite in canonical form`, so
-a mutation can only make the guard fail, never pass.
-
-| Construct | Canonical form |
+| Fact | Evidence |
 |---|---|
-| Haskell version bindings (`currentEnvelopeVersion`, `metadataComponentVersion`, `legacyMetadataComponentVersion`, `luaStateComponentVersion`, `sessionComponentVersion`, `csVersion`) | `name = <integer literal>` alone on its line, defined once |
-| Metadata accepted versions | one `metadataComponentInputVersions = [ <binding or integer>, ... ]` |
-| Older component decoders | `atVersion <int> <name>`, where `<name>` has an explicit signature `<name> ∷ <FooDTOvN> → …` whose first argument is the `*DTO*` wire root (compose in a named, signed function, not inline) |
-| Lua registration | `local <name> = require("scripts.lib.save_modules")` on its own line, then `saveMods.register("<id>", {`; exactly one `version = <int>,`, `required = <bool>,` and `inputVersions = { <ints> },` per table |
-| Framing decoder | every use is `decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion`; `Codec.hs` rejects exactly `version ≢ expectedVersion` |
-| Legacy-route dispatch | `tryLegacyEnvelopeFallbacks` and `tryLegacyMetadataFallbacks` in one of four exact forms (both routes on, either off, both off); a route is disabled only by its explicit form |
+| Haskell component shapes | `componentCodec` demands a `WireSchema` instance for its DTO type `d` and keeps the compiled `WireRoot` on the codec (`ccWire`) and registry entry (`rcWire`) before the registry erases `d`. The walk is GHC `Generic`/`Typeable`: constructors in order, record selectors, newtypes, instantiated field types, GHC-resolved aliases. |
+| Component versions and acceptance | `rcVersion`/`rcInputVers` from the live `saveComponentRegistry`, and each version PROBED through `rcPrepare` (the entry point `assembleSnapshot` runs). A disagreement fails extraction. |
+| Metadata | `metadataWireRoot` (the type `encodeSessionSnapshot` encodes), `metadataComponentVersion`, and a probe of `decodeSaveEnvelopeMetadata` at every version. |
+| Framing | `currentEnvelopeVersion`, `envelopeMagic`, `headerSize`, an fnv1a64 probe, and the hex of a fixed encoded envelope. The header bytes are hand written, so they are declared and probed, not derived. The cereal manifest is walked. |
+| Lua modules | The production `scripts/init_loader.lua` runs under a recording `engine.loadScript`; every recorded script is loaded and its real `init` run; the evaluated `saveModules.registry` supplies id, version, `inputVersions` and `required`; each version is probed through `saveModules.prepareLoad`. A script that cannot load or initialise fails the run. `scripts/lib/data_codec.lua` is the unversioned wire owner every Lua carrier shares, recorded by a probe of its encoding. |
+| Legacy routes | B1 (`session`) and B2 (`lua-state`) are probed through `decodeSaveEnvelopeMetadata`, `decodeSessionEnvelopeClassified` and the direct `decodeLegacy*`/`decodeB2*` entry points with correctly shaped envelopes. A route is enabled if any entry point recognises the shape. Ownership is conservative: B1 is owned by metadata and every Haskell carrier; B2 by metadata, `lua-state` and every required Haskell carrier. |
 
-Whitespace (including around punctuation and before call parentheses),
-comments outside these constructs and strictness bangs never change a shape.
-String-literal contents always do.
+## Serialization boundaries
 
-## The rules
+A `Generic` instance cannot tell whether a `Serialize` instance uses cereal's
+generic encoding. Every reachable type is one of:
 
-1. A shape change, **including an enum append**, needs a strictly higher
-   version for every carrier whose shape it touches. A shared declaration
-   affects every carrier that reaches it.
-2. Any carrier whose version rose is affected, whether or not the guard saw a
-   shape change.
-3. An affected carrier accepts exactly its current version.
-4. Every enabled legacy route that decodes through an affected carrier must be
-   disabled. A route is enabled while `tryLegacyEnvelopeFallbacks` or
-   `tryLegacyMetadataFallbacks` still names its decoder; a metadata change
-   affects both routes, a change to a type the frozen `SessionV90` DTOs reach
-   affects `b1-session`, and `b2-lua-state` also decodes every *required*
-   Haskell component of its era, so a version change in any of them affects
-   it. A dispatcher may only call the decoders `LEGACY_ROUTES` names; any
-   other call leaves the route's state unknown and fails.
-5. A new carrier is covered and accepts only its current version, with no
-   bump. A removed carrier must leave the record.
-6. Unchanged carriers owe nothing. Removing registrations does not require
-   deleting the old source or writing a migration or fixture.
+- **generic** (the default instance): its real `S.encode` is compared with
+  cereal's own `GSerializePut` encoding on distinguishing sample values, and
+  must round-trip. A hand-written encoder that disagrees fails extraction
+  with `unclassified encoder`. This is evidence on samples, not a proof.
+- **primitive / library**: cereal's base-type and container encoders, declared
+  by explicit instances in `World.Save.Wire`.
+- **newtype**: a newtype-derived instance, checked against its field's
+  encoding.
+- **custom**: a hand-written encoder declared in `World.Save.Wire.Custom` with
+  an owner, a description of the bytes and the wire types it writes. Declared
+  and tested (round trip on samples where samples exist), **not derived**. A
+  type that is reachable but not declared, or declared but unreachable, fails.
 
-Anything the guard cannot classify fails and names the boundary: a registered
-codec with no definition, a codec with no resolvable DTO, a duplicate Lua
-module id, a `saveMods.register` site that is not a quoted literal id plus
-a table, a non-literal `inputVersions` entry, a framing decoder that does not
-reject exactly `version ≢ expectedVersion` (or a caller that passes another
-version), a type name declared in two modules (list it in
-`AMBIGUOUS_TYPE_NAMES` with why a union is acceptable), a type that both
-derives and hand-writes `Serialize`, a missing legacy dispatcher.
+A type with no `Generic` instance and no explicit instance is a compile error
+at the `componentCodec` call site, so a new boundary cannot be added silently.
 
-## What it cannot see
+## Stated limits
 
-Source inspection has limits, and a green run is not proof the wire is
-unchanged:
+- Custom encoders, Lua payloads (dynamic tables with no declared schema) and
+  the framing header are covered by declaration and probes, not by a derived
+  shape. An encoding or meaning change outside detection still requires every
+  affected version to advance, current-only acceptance, review evidence and a
+  distinguishing test. A refreshed record or self-generated expected output is
+  not that evidence.
+- A declaration reachable only through a still-accepted older decoder or an
+  enabled legacy route is **not recorded** (for example `ToolMode`, which is on
+  the wire only through B1). D-5/D-7 accept this residual; the unchanged strict
+  `tools/enum_append_only_audit.py` still guards such enums until PSP-5
+  retires it.
+- Routine comparison never builds the base. The base record's freshness rests
+  on the merge-time check PSP-5 enforces on every merged commit; this tool
+  validates its structure and reports its blob identity.
 
-* **Custom serializers.** An instance is hashed as the text of its block.
-  Helpers it calls elsewhere, and a change in meaning with identical text, are
-  invisible.
-* **Lua payloads.** Only the shared data codec is mechanical. A new `aiState`
-  field in any `scripts/unit_ai_*.lua`, or any other Lua table shape, is not
-  detected.
-* **Positional values.** Two same-typed positional fields swapped, or a unit
-  or encoding change on an unchanged type, leave no source diff.
-* **Name resolution.** Types resolve by bare name; types from outside `src/`
-  and `app/` are not followed.
-* Comment, layout, strictness-bang and import-only edits are ignored on
-  purpose.
+## Rules
 
-An encoding or meaning change outside mechanical detection still needs a
-version bump, current-only acceptance, explicit review evidence and a test
-that distinguishes the old meaning from the new one.
+Per carrier: a shape change needs a strictly higher real version; an affected
+carrier (shape changed or version higher) accepts exactly its current version
+and every enabled legacy route it owns must be off; a version decrease fails; a
+new carrier is covered and accepts only its current version. Unchanged carriers
+need no purge, so removing one older registration alone is fine. A change to
+the shared Lua codec probe or the framing probe affects every Lua carrier or
+the framing.
 
-## Maintaining it
+## Base, candidate and bootstrap
 
-The synthetic suite lives in `tools/current_save_schema_selftest.py` over the
-tree in `tools/current_save_schema_fixture.py`; extend them with any new rule.
-The model reuses `save_compat_audit_components` (component specs, Lua call
-sites), `save_compat_audit_fingerprint` (framing fingerprint, metadata input
-versions) and the enum audit's scanner; run `tools/test_save_compat_audit.py
---without-reproducibility` and `tools/enum_append_only_audit.py --self-test`
-after touching any of them.
+Routine comparison reads the validated record committed at the merge-base of
+`--base-ref` and `HEAD`, compiles only the candidate (always building first and
+refusing a binary older than the newest source), and requires the committed
+record to equal the compiled evidence exactly. A base that contains any guard
+artifact must carry a valid record: a missing or malformed one fails and never
+enables the bootstrap. Only a base containing none of the guard's artifacts
+(first introduction) is extracted as well, by laying the candidate's additive
+hooks onto an export of it; the adapter is refused if it would remove any base
+line outside the declared hook rewrite. The run output states the resolved
+commits, the base record's blob and validation provenance, the candidate's
+tracked-edit identity and the extractor and toolchain identity. The record
+itself carries none of that, so off-wire and comment-only edits leave it
+byte-identical.
