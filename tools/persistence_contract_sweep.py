@@ -19,11 +19,14 @@ comparison execs the compiled ``exe:synarchy-save-codec`` rather than a
 
 This sweep nonetheless RETAINS its exclusive ``cabal-build``
 declaration, and requirement 3 of #2274 asks the reason to be recorded:
-its default cross-probe selection includes ``save_compat_migration``,
-which still declares that resource exclusively on its own direct path,
-and an ancestor's SHARED hold cannot cover that child's EXCLUSIVE request.
-A sweep holding it merely shared would leave its nested runner waiting
-forever on its own ancestor. See that module's comment for the full
+``save_compat_migration`` is selectable (opt-in since #2912, no longer part
+of the default selection), it still declares that resource exclusively on
+its own direct path, and an ancestor's SHARED hold cannot cover that
+child's EXCLUSIVE request. A sweep holding it merely shared would leave
+its nested runner waiting forever on its own ancestor whenever
+``--cross-probe-keys save_compat_migration`` is passed. Retaining the
+conservative exclusive declaration is deliberate; relaxing it would need
+safe nested lock inheritance. See that module's comment for the full
 argument.
 
 This sweep does NOT re-implement the domain-specific scenarios (chop/
@@ -47,7 +50,8 @@ baseline) genuinely stay gated, not merely documented:
   tools/save_barrier_probe.py (write-failure surfacing),
   tools/persistence_integrity_probe.py (dangling Haskell/Lua reference
   tolerance), tools/save_compat_migration_probe.py (every maintained
-  migration baseline, requirement 13).
+  migration baseline, requirement 13; OPT-IN since #2912 -- about an hour
+  per run, so only ``--cross-probe-keys save_compat_migration`` runs it).
 
 This is genuinely slow (each cross-referenced probe pays its own real
 engine-boot/worldgen cost on top of this sweep's own scenario) -- that
@@ -78,7 +82,12 @@ exception kept OUT of the DEFAULT set (not out of selectability): it's
 independently flaky per `tools/ci_probes.py --status` ("craft_job AI
 claim/work timing flakes run-to-run on CI"), unrelated to persistence,
 and would make this sweep spuriously fail on unrelated AI timing if
-defaulted on.
+defaulted on. save_compat_migration is the other one, for a different
+reason (#2912): it is optional, takes about an hour, and the owner decided
+pre-release saves need no routine migration protection, so it runs only
+when listed explicitly. The DEFAULT therefore covers 10 of the 12 keys;
+omitting an optional key never fails the sweep, and a default pass does
+not claim migration-baseline (requirement 13) coverage.
 
 Usage:
   python3 tools/persistence_contract_sweep.py [--port 9278] \\
@@ -205,15 +214,23 @@ AI_SCRIPTS = (
 # `tools/ci_probes.py --status` ("craft_job AI claim/work timing flakes
 # run-to-run on CI"), unrelated to persistence, and would make this
 # sweep spuriously fail on unrelated AI timing if defaulted on.
+# save_compat_migration is also excluded from the DEFAULT (#2912), in its
+# own OPT_IN list because the reason differs: not flakiness but cost and
+# policy -- it replays every tracked legacy fixture (about an hour) and the
+# owner decided on 2026-11-05 that pre-release saves need no routine
+# migration protection. It stays selectable and runs when listed in
+# --cross-probe-keys.
 SELECTABLE_CROSS_REFERENCED_PROBE_KEYS = [
     "chop", "till", "crop", "plant", "construction", "power",
     "transactional_load", "save_barrier", "craft_bill",
     "save_storage", "persistence_integrity", "save_compat_migration",
 ]
 FLAKY_CROSS_REFERENCED_PROBE_KEYS = ["craft_bill"]
+OPT_IN_CROSS_REFERENCED_PROBE_KEYS = ["save_compat_migration"]
 DEFAULT_CROSS_REFERENCED_PROBE_KEYS = [
     k for k in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
     if k not in FLAKY_CROSS_REFERENCED_PROBE_KEYS
+    and k not in OPT_IN_CROSS_REFERENCED_PROBE_KEYS
 ]
 
 
@@ -706,9 +723,11 @@ def main() -> int:
                           "actually run for requirement 11/13 coverage -- ONLY keys "
                           "from " + ",".join(SELECTABLE_CROSS_REFERENCED_PROBE_KEYS) +
                           " are accepted (every one isolated, requirement 15); "
-                          "default: all of them except craft_bill, which is isolated "
-                          "but independently flaky per `ci_probes.py --status` and "
-                          "must be listed explicitly to opt in")
+                          "default: all of them except craft_bill (isolated but "
+                          "independently flaky per `ci_probes.py --status`) and "
+                          "save_compat_migration (optional, about an hour; the "
+                          "default therefore does not exercise the migration "
+                          "baselines); each must be listed explicitly to opt in")
     ap.add_argument("--cross-probe-jobs", type=int, default=2,
                      help="run_probes.py --jobs for the cross-referenced probes")
     ap.add_argument("--cross-probe-retries", type=nonnegative_int, default=1,
@@ -937,6 +956,11 @@ def main() -> int:
             print(f"  (not run: {', '.join(skipped_flaky)} -- isolated but "
                   f"independently flaky per `tools/ci_probes.py --status`; "
                   f"list it explicitly in --cross-probe-keys to also run it)")
+        skipped_optional = [k for k in OPT_IN_CROSS_REFERENCED_PROBE_KEYS if k not in keys]
+        if skipped_optional:
+            print(f"  (not run: {', '.join(skipped_optional)} -- optional (about an "
+                  f"hour per run); list it explicitly in --cross-probe-keys to also "
+                  f"run it. The migration baselines are NOT covered by this run)")
     run_cross_referenced_probes(chk, keys, args.cross_probe_jobs, progress,
                                 retries=args.cross_probe_retries)
 
