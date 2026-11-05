@@ -201,23 +201,33 @@ retired.
 
 ### D-4. Preserve working code, safe refusal, and current round trips
 
-The task explicitly directs adoption of the manager's recommendations unless
-the code supplies a contrary reason. Keep existing migrations and DTOs;
-stop requiring new ones. Retire or regenerate historical fixtures when they
-break, retaining only the current fixtures tests need. Keep a real-engine
-current-version round trip. No contrary evidence requires reopening these
-recommendations. Disabling an unsafe decoder registration after its shared
-wire types change is required for safe refusal; it is not a request to delete
-the migration implementation.
+Keep existing migration/DTO source where practical, stop requiring new ones,
+and retain current fresh-process round trips. Broken historical fixtures may
+be retired or regenerated with their provenance. The owner's later D-5
+simplification supersedes the earlier permission to keep safe older decoders
+registered on a changed carrier: after a shape change that carrier accepts
+only its new current version. Remove its older accepted dispatches and affected
+exact-shape legacy routes; deleting their source implementations is unnecessary.
 
 ### D-5. Enforce schema/version changes with an automated guard
 
-Owner answer to Q-1 on 2026-11-05: "Automated guard." Add the lightweight
-current-schema/version guard: a changed positional shape must advance every
-affected component version, and unsafe older versions must be refused.
-No migration or historical fixture is required. Review-only enforcement was
-not selected; review and targeted tests still cover the static guard's stated
-semantic limits. PSP-2 implements this choice and PSP-5 makes it mandatory.
+Owner answer to Q-1: "Automated guard." On 2026-11-05 the owner refined
+that decision with "Simplify first": a persisted shape change advances every
+affected component, metadata, Lua or framing version, and each affected
+carrier then accepts only its current version. Drop its older accepted decoders
+and affected exact-shape legacy routes so PSP-1 refuses older saves. Do not
+analyze whether a retained historical decoder could still be compatible.
+
+Keep the small generated current-schema record, base-ref comparison that
+candidate regeneration cannot bypass, coverage/ambiguity failures, documented
+semantic limits and synthetic self-tests. No new migration or historical
+fixture is required. PSP-2 supplies the guard; PSP-5 activates it.
+
+This amendment is authorized by verified syn-manager reply
+`k8nvcbvvekhi9gqddjdbn86vcs` to PSP-2 question
+`3v3vgxseunbsnh4pe9skwxqu6n` in #syn-save-policy, 2026-11-05 16:32:14 UTC.
+The reply requests a simplified redraft, explicitly forbids filing it yet,
+and directs this design update. It does not approve the revised issue body.
 
 ### D-6. Begin the compatibility promise with the first public-release save
 
@@ -242,8 +252,9 @@ belongs to the manager's separate processing workflow.
 For a persisted-layout change, a contributor advances every affected on-disk
 component version, updates its current tests, and exercises current save/load.
 There is no automatic requirement to preserve the outgoing layout or append
-another historical baseline. The contributor may leave existing, genuinely
-safe migrations registered. Unsupported saves fail before publication with
+another historical baseline. Each affected carrier accepts only its new
+current version; remove its older accepted dispatches and affected exact-shape
+legacy routes. Unchanged carriers need no blanket purge. Unsupported saves fail before publication with
 a clear **unsupported save version** diagnostic naming the component or
 envelope, the found version, and supported versions; the prior session remains
 intact and paused. The file is not rewritten and an incompatible authoritative
@@ -268,13 +279,12 @@ existing bookkeeping rule, but never present its bump as on-disk protection.
 Require a version advance for every shape change, including enum appends; a
 pure implementation refactor with unchanged encoding is not a shape change.
 
-Old registrations may remain only when their complete transitive decoder shape
-is still valid. If a shared record or enum changes, remove affected versions
-from accepted dispatch and disable affected exact-shape legacy fallback routes
-before they can decode changed layouts. Preserve their source implementations
-where practical. Do not silently repair old payloads through a current DTO,
-catch a decode failure and retry it as the newest version, or equate optional
-absence with an optional component carrying an unsupported payload.
+After a shape change, each affected carrier accepts only its new current
+version, regardless of whether an older decoder might still work. Remove
+older accepted dispatches and disable affected exact-shape legacy routes.
+Keep their source implementations where practical. Do not reinterpret old
+payloads through the current DTO, retry a failed old decode as the newest
+version, or equate optional absence with an unsupported optional payload.
 
 Tests must use deliberately distinguishable values: an equal-width two-field
 swap can decode successfully while changing meaning. A codec round trip
@@ -284,34 +294,36 @@ as well as normal malformed-byte and current-round-trip cases.
 
 ### P-2. Replace historical immutability with current-schema/version enforcement
 
-**Selected by D-5.** Enforcement uses a small source-based guard
-recording the current wire shape and version of each component and framing
-boundary. Reuse the existing discovery, enum-carrier, and fingerprint helpers
-where sound; do not repurpose the B1 fingerprint as if it already covered all
-current wire types. Include single-constructor records, nested enums and DTOs,
-newtypes/type aliases, and explicitly identified custom serialization owners.
-Missing or ambiguous coverage fails rather than silently omitting a component.
+**Selected by amended D-5.** Use a small source-based current-schema record
+for every current component, metadata, Lua and framing boundary. Include
+transitive records/enums, newtypes/aliases and explicit custom-serializer
+ownership. Reuse discovery/fingerprint helpers where sound; missing or
+ambiguous coverage fails instead of silently omitting a carrier.
 
-Compare the candidate with the base revision's schema/version record; a
-changed digest at an unchanged version must fail even if the candidate
-regenerates its baseline. Each affected carrier must advance, and any retained
-historical dispatch depending on the changed shape must be demonstrably safe
-or refused. The guard's baseline is a small schema record, not a binary save
-corpus or a growing history of releases. Pure comment/layout edits should not
-demand a bump. The implementation must state its limits: text inspection cannot
-prove arbitrary serializer semantics or see swapping two indistinguishable
-positional values. Such encoding/meaning changes still require a bump, explicit
-review evidence, and a targeted distinguishing test.
+Compare candidate source/schema with an explicit base revision. Any persisted
+shape change, including an enum append, requires every affected real on-disk
+version to advance. Regenerating the candidate record cannot bless a
+same-version change. Each affected carrier's accepted-version set must then
+be exactly its new current version, and its affected exact-shape legacy routes
+must be disabled. Fail on any older accepted version; do not compare old
+decoder shapes or decide whether they remain compatible. Unchanged carriers
+need no blanket purge. Keep existing source implementations where practical;
+no new migration or historical fixture is required.
 
-The enum audit gains a pre-release, version-aware update
-path instead of a blanket non-append veto. Its historical append-only mode
-remains available. A changed off-wire enum does not create a fictional save
-component version, but newly reachable types cannot escape coverage. Keep
-existing strict checks in force until the replacement has negative tests and
-is wired into the mandatory gate set. Do not remove the old checks first.
+The record is a current schema record, not a growing release history. Ignore
+comment/layout-only edits; document the limits of source inspection for custom
+serializers and indistinguishable positional values. Undetected encoding or
+meaning changes still require version advancement, current-only acceptance,
+explicit review evidence and a distinguishing test.
 
-Review-only enforcement was considered and rejected by D-5. Do not substitute
-a review checklist for the selected automated guard.
+**Implementation placement proposed for revised PSP-2 signoff:** enum changes
+use the same new guard; do not add a separate enum-audit pre-release mode or
+updater. Keep the existing strict enum command/default gates unchanged during
+preparation. PSP-5 switches mandatory selection to the new guard and retains
+the old audit for explicit historical use. Off-wire enum changes need no
+fictional component bump, while newly persisted types must enter coverage.
+This replaces the previous draft's separate enum mode. The owner asked for
+this assessment; the revised issue presents it for signoff.
 
 ### P-3. Split current correctness from optional historical evidence
 
@@ -440,28 +452,31 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 
 ### PSP-2. Enforce current-schema version changes without requiring migrations
 
-- **Outcome:** Under D-5, mechanical shape changes cannot
-  pass by refreshing a golden file at the same version; compatible refusal
-  replaces the demand to author migrations.
-- **Scope / touched paths:** `tools/enum_append_only_audit*.py`, its generated
-  baseline and self-tests; reusable `save_compat_audit_{components,fingerprint}.py`
-  discovery; a focused new current-schema guard and small schema baseline if
-  required. Owner-visible declarations and custom-codec coverage are explicit.
-  Policy comments in `Component/Types.hs` describe retained-decoder safety.
-- **Phase / ordering:** 2, critical path. **Depends on:** PSP-1.
-- **Relevant decisions:** D-1, D-4, D-5. **Open questions:** None.
-- **Acceptance signals:** Negative tests cover unchanged-version record field
-  add/remove/reorder/retype, enum change, nested shared shape, partial carrier
-  bump, baseline-only rewrite, unknown coverage, and a retained unsafe older
-  decoder. Correct version advance plus safe refusal passes without a new
-  migration/legacy fixture; comment-only edits do not cause false bumps.
-  Custom serializer/semantic limitations and required review evidence are stated.
-- **Gates:** Guard self-tests including synthetic base/candidate trees;
-  `enum_append_only_audit.py --self-test`; discovery/fingerprint self-tests;
-  `save components` for dispatch invariants. Existing mandatory gates remain
-  active until PSP-5 switches policy.
-- **Out of scope:** Historical corpus expansion, whole-serializer formal proof,
-  deleting migrations, or disabling legacy checks before activation.
+- **Outcome:** Mechanical shape changes cannot pass by refreshing a golden
+  file at the same version. Every affected carrier advances and accepts only
+  its new current version, with older accepted dispatch and affected legacy
+  routes removed. Historical decoder compatibility analysis is unnecessary.
+- **Scope / touched paths:** A focused current-schema guard, small generated
+  record, necessary reusable enum parsing/component discovery/fingerprint
+  helpers and tests, explicit ownership declarations and brief policy comments.
+  No separate enum pre-release mode/updater is proposed; PSP-5 owns selection.
+- **Phase / ordering:** 2, critical path. **Depends on:** PSP-1 (#2915).
+- **Relevant decisions:** D-1, amended D-4/D-5. **Open questions:** None.
+  The revised issue and enum placement proposal still need artifact signoff.
+- **Acceptance signals:** Synthetic base/candidate cases cover record field
+  add/remove/reorder/retype, enums including append, aliases/newtypes, shared
+  shapes with partial bumps, baseline rewrite/deletion, unknown/ambiguous
+  coverage, custom owners, and any older accepted version/legacy route left on
+  an affected carrier. Complete bumps plus current-only dispatch pass without
+  migrations/fixtures; comments/layout and off-wire cases do not cause false
+  bumps. Cover initial record bootstrap and subsequent comparisons; state
+  semantic limits and required review evidence.
+- **Gates:** New guard self-tests and base-ref check; enum audit/self-tests;
+  discovery/fingerprint self-tests; `save components` dispatch invariants.
+  Existing mandatory checks remain active until PSP-5 switches policy.
+- **Out of scope:** Historical decoder compatibility analysis, a separate enum
+  pre-release mode, corpus expansion, serializer formal proof, deleting
+  migration source, or disabling legacy gates before activation.
 
 ### PSP-3. Separate current-save auditing from historical compatibility auditing
 
@@ -591,10 +606,10 @@ not a new child issue to file during this design task.
 
 ## Handoff
 
-This design now has six settled decision records, no unresolved policy
-questions, and five approved delivery slices. There is no divergence from the
-manager's requested retention, refusal, fixture or fresh-process
-recommendations. D-5 selects automated enforcement; D-6 starts the future
+This design has six settled decision records and five delivery slices. The
+owner amended D-5 during PSP-2 processing to require current-only acceptance
+after a shape change; the revised PSP-2 artifact still needs signoff.
+D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
 reporting its commit in `#syn-save-policy`, not issue creation.
@@ -607,6 +622,10 @@ approval for every tracker artifact. Recheck the tracker and #2912 during
 processing; this publication does not itself create or approve issue bodies.
 
 ## EPIC processing record
+
+The body below records the original approved issue. Amended D-5 supersedes
+its retained-decoder wording; the revised PSP-2 signoff includes exact epic
+wording edits, which have not yet been applied to GitHub.
 
 Created [#2914](https://github.com/coghex/synarchy/issues/2914) on 2026-11-05.
 Verified syn-manager reply `ge89pkamx45zn8svwv3dxxk4g6` to question
@@ -772,12 +791,12 @@ rendering, Lua prepareLoad ordering, storage progress/no-fallback tests and
 the transaction probe; the latter has no unsupported-version case.
 No later slice was evaluated. No engine, test or probe was run while drafting.
 
-## Pending PSP-2 tracker proposal
+## Pending PSP-2 tracker proposal (revision 2)
 
-Drafted 2026-11-05 under verified syn-manager reply
-`sbadzax42c9hcdh92f8ayv87c6`; awaiting separate owner approval.
-PSP-1 is linked as #2915 and remains open, so this issue may be filed now
-but implementation depends on that prerequisite landing.
+The owner requested "Simplify first" in verified reply
+`k8nvcbvvekhi9gqddjdbn86vcs`; the previous proposal at `564e65e228` is
+superseded and was never approved or filed. The current-only rule is recorded
+above. The complete revised artifact below awaits separate signoff.
 
 Title: [save-policy PSP-2] Enforce current-schema version changes without requiring migrations
 
@@ -786,26 +805,23 @@ Labels: `enhancement`, `save-load`, `tooling` (existing).
 ````markdown
 ## Background
 
-PSP-2 of #2914, Phase 2, critical path, depends on #2915 (PSP-1). Implement after that refusal boundary lands. The owner selected an automated guard: a changed persisted shape advances every affected real on-disk version, while unsupported old versions may be refused without new migrations or historical fixtures. Refreshing a golden file must not hide a same-version break.
+PSP-2 of #2914, Phase 2, critical path, depends on #2915 (PSP-1). Implement after that refusal boundary lands.
 
-Verified against master code ad35e6f7c on 2026-11-05:
-- `tools/enum_append_only_audit_scan.py` guards Generic/Serialize sums with at least two constructors. Its contract explicitly excludes single-constructor field drift, hand-written serializers and changes hidden behind referenced instances/synonyms. `run_update_baseline` refuses non-appends even after a component bump.
-- `enum_append_only_audit_carrier.py` combines current and historical DTO seeds and deliberately over-approximates bare type names for diagnostic attribution. It is useful evidence, not a complete per-version schema map.
-- `save_compat_audit_components.py:real_component_registry` discovers real Haskell, metadata and Lua registrations. `save_compat_audit_fingerprint.py:frozen_dto_fingerprint` starts at B1's SessionV90 and resolves DTO-named leaves; it is not a current-component guard. The separate framing fingerprint already accounts for effective Cabal extensions.
-- Historical `UnitSimStateDTOv1` still embeds live Pose, UnitActivity and Direction. Bumping only the newest unit-sim version cannot make those older accepted decoders safe after a shared shape changes.
+Owner decision, 2026-11-05: before release, a persisted shape change advances every affected component, metadata, Lua or framing version, and each affected carrier then accepts only its current version. Drop its older accepted decoders and affected exact-shape legacy routes. Do not analyze whether an old decoder could still be safe.
+
+The current enum audit excludes single-constructor records and custom serializers, and its baseline updater rejects non-appends. The B1 frozen-DTO fingerprint is not a current-schema guard. Existing version dispatch already provides the refusal mechanism; #2915 supplies its diagnostic and regression coverage.
 
 ## Requirements
 
-1. Add a focused current-save schema/version guard with a small generated current schema record, not a binary corpus or growing history. Cover every current Haskell component, metadata, registered Lua module and envelope framing boundary. Record the real version authority and transitive wire-shape/serialization owners, including single-constructor records, constructor order and payload slots, nested DTOs/enums, newtypes, aliases and explicitly identified custom serializers. Missing, newly reachable, unresolved or ambiguous coverage fails with the affected boundary/path named. Explicit declarations may cover owners the source parser cannot infer; they must be inspectable and checked against real registrations, not silent exclusions.
-2. Compare candidate source and its generated record against a caller-selected base revision's source/schema record. A changed shape requires a strictly increased version for every affected carrier, including enum appends; currentSaveVersion's bridge marker is not protection. Regenerating, deleting or editing the candidate baseline cannot bless unchanged-version drift. Missing/unusable comparison evidence must fail clearly; the first baseline introduction must have a checked, non-vacuous bootstrap path. Give the guard an explicit base-ref interface so PSP-5 can wire the correct CI/local comparison base without guessing it here.
-3. Check retained accepted historical dispatches and exact-shape B1/B2 routes that depend on changed transitive types. A retained decoder must still represent its original shape; otherwise the candidate must refuse that version/route before it decodes. A latest-version bump alone cannot pass. Keep working migration/DTO source; neither authoring a migration nor adding a historical fixture is a condition for the new guard to accept a correctly versioned change with safe refusal.
-4. Add an explicit pre-release, version-aware enum audit/update path using this enforcement. Keep the current strict historical append-only mode and existing default invocations active until PSP-5. Off-wire enum changes require no invented save-component bump; a newly persisted type cannot escape coverage. Reuse parsing, discovery and fingerprint owners where sound, preserving their module boundaries and fail-closed behavior.
-5. Ignore pure comment/layout changes and unchanged wire-shape refactors without hiding actual encoding changes. Retain framing sensitivity to effective extensions and serialization code. Document the guard's limits: source inspection cannot prove arbitrary custom serializer semantics or distinguish every equal-width positional-value swap. Encoding/meaning changes beyond mechanical detection still require version advancement, explicit review evidence and a targeted distinguishing test; a current-code self-round-trip is insufficient.
-6. Prove the behavior with synthetic base/candidate trees or repositories: record field add/remove/reorder/retype; enum insert/reorder/remove/append; nested shared shapes and partial carrier bumps; aliases/newtypes; custom-codec ownership; candidate-baseline rewrite/deletion; unknown/ambiguous coverage; retained unsafe old dispatch and legacy fallback. Negative cases must fail. Corresponding complete version bumps plus safe refusal pass without new migration/fixture inputs; unchanged/comment/layout-only cases and correctly handled off-wire changes pass. Verify both initial baseline introduction and subsequent comparisons.
+1. Add a small generated current-schema record and source-based guard covering all current Haskell components, metadata, registered Lua modules and framing. Include transitive records, enums, newtypes/aliases and explicit custom-serializer ownership. Cross-check real registrations; missing, newly reachable or ambiguous coverage fails with a named boundary/path. Reuse existing discovery/fingerprint helpers where sound.
+2. Compare candidate source/schema against an explicit base revision. Every detected shape change, including an enum append, requires a strictly increased real on-disk version for every affected carrier. Regenerating, editing or deleting the candidate record cannot bless same-version drift. Missing comparison evidence fails; initial record introduction must have a non-vacuous bootstrap check. The bridge-only currentSaveVersion is not protection.
+3. For every affected carrier, require its accepted-version set to be exactly its new current version and require affected exact-shape legacy fallback routes to be disabled. Fail if any older version remains accepted, even if its decoder appears compatible. Detect affected routes through explicit/discovered ownership, failing on unknown coverage; do not compare historical decoder shapes. Unchanged carriers need no blanket purge. Removing old registrations/routes does not require deleting their source implementations or creating migrations/fixtures.
+4. Keep enum shape/version enforcement in this guard; no separate enum-audit pre-release mode or updater is needed. Leave the existing strict enum audit/default gates unchanged here. PSP-5 switches mandatory selection to the new guard and retains the old audit for explicit historical use. Off-wire enum changes require no fictional component bump; newly persisted types must enter coverage.
+5. Ignore comment/layout-only edits. State the limits of source inspection, especially arbitrary custom serializers and indistinguishable positional-value swaps. Encoding/meaning changes outside mechanical detection still require a version bump, current-only acceptance, explicit review evidence and a distinguishing test.
 
 ## Acceptance
 
-Provide these new public commands (supporting owner modules may be split as needed):
+Expose and document the guard's base-ref check, generated-record update and self-test interfaces. Proposed public entry point:
 
 ```bash
 python3 tools/current_save_schema_audit.py --self-test
@@ -818,48 +834,71 @@ cabal test synarchy-test-headless --test-options='--match "save components"'
 python3 tools/test_save_compat_audit.py --without-reproducibility
 ```
 
-Run the base-ref check before the implementation merges, against a freshly fetched master prerequisite; record that resolved base SHA and candidate SHA. Self-tests must exercise differing base/candidate sources, not merely compare the candidate to itself. The unchanged real schemas pass, synthetic violations exit nonzero with useful component/version/path diagnostics, all selected existing tests pass, and the old default enum audit remains strict. Exercise and document the exact new enum pre-release check/update commands and the guarded schema-record regeneration command; prove that neither update path bypasses the base comparison.
+Use synthetic base/candidate trees to prove failures for field add/remove/reorder/retype, enum changes, shared shapes with partial bumps, record refresh/deletion bypass attempts, unknown/ambiguous coverage, and an affected carrier retaining any older version or legacy route. Include aliases/newtypes, custom-owner coverage and an enum append. Correct bumps plus current-only dispatch pass without migration/fixture inputs; unchanged, comment/layout-only and off-wire cases pass. Cover initial bootstrap and subsequent checks. Record the resolved comparison-base and candidate SHAs; no candidate-to-itself proof.
 
-The compatibility self-test facade includes the discovery and frozen/framing fingerprint owner tests; preserve those regressions when reusing their helpers. No engine/probe run, full headless suite or `make ci` is required for this tooling slice. Apply any relevant static/budget gates to changed files.
-
-Scope: `tools/enum_append_only_audit*.py`, its generated baseline/self-tests, reusable `save_compat_audit_{components,fingerprint}.py` helpers and tests, the new focused guard/current record, explicit ownership declarations, and retained-decoder policy comments in `Component/Types.hs`. Generated records consumed by tools/tests belong in the code PR. Human-facing contract/evidence documentation lands with `docs-push` and is linked from the PR.
+The real unchanged schemas and listed existing checks pass. Preserve discovery/fingerprint regressions when reusing helpers. No runtime probe, full headless suite or `make ci` is required for this tooling slice.
 
 ## Out of scope
 
-Activating pre-release defaults or CI/local gate selection (PSP-5); historical audit/test partitioning (PSP-3/4); historical corpus expansion; whole-serializer formal proof; gameplay/schema changes just to exercise the guard; migration deletion; weakening existing checks before activation.
+Historical decoder compatibility analysis; a separate enum pre-release mode; migration/fixture creation or bulk source deletion; gameplay or schema changes just to exercise the guard; historical audit/test partitioning (PSP-3/4); default/CI activation (PSP-5).
+
+Scope is the guard/current record, necessary reusable helpers/tests and brief ownership/retained-source comments. Tool-consumed records stay in the code PR. Human-facing documentation lands with docs-push and is linked from the PR.
 
 ## Related
 
-- #2914: umbrella epic. Depends on #2915; PSP-5 depends on this guard.
-- #2912: separate probe opt-in dependency of policy activation, not a prerequisite to this preparatory tool.
-- #1145 and #1416: delivered enum enforcement and framing normalization; retain their strict-mode protections.
-- Supporting design: `docs/designs/prerelease_save_policy_design.md`, PSP-2, P-2, D-1/D-4/D-5.
+- #2914: epic. Depends on #2915; PSP-5 depends on this guard.
+- #2912: separate probe opt-in dependency of policy activation, now delivered; not duplicated here.
+- Design: `docs/designs/prerelease_save_policy_design.md`, P-2/PSP-2 and amended D-5. Owner simplification relayed by syn-manager in reply k8nvcbvvekhi9gqddjdbn86vcs.
 
 <!-- issue-origin:codex -->
 ````
 
-Approval also authorizes the following exact replacement in epic #2914,
-where N is the created issue number, and the matching PSP-2 ledger link:
+Approval also authorizes these exact replacements in epic #2914, where
+N is the created issue number, and the matching PSP-2 ledger link.
+The implementation checkbox stays unchecked; no other tracker edits.
 
-```markdown
+1. Replace:
+
+```text
 - [ ] PSP-2. Enforce current-schema version changes without requiring migrations
 ```
 
-becomes:
+with:
 
-```markdown
+```text
 - [ ] PSP-2. #N — Enforce current-schema version changes without requiring migrations
 ```
 
-The epic implementation checkbox stays unchecked. No other tracker mutation
-is proposed. Evidence/dedup: all 68 open titles, three broad open/closed
-searches (schema guard, enum version, fingerprint save), and focused title
-searches rechecked. Read #1145/#1416 and the current #2914/#2915 bodies;
-no duplicate current-schema guard issue found. #2564 is faction retirement,
-not this guard. Reconciled the epic checklist with the document ledger.
-Verified the enum scanner/update veto, approximate carrier attribution,
-real component discovery, B1 fingerprint root, framing normalization,
-and live enum leaves in UnitSimStateDTOv1. The compatibility self-test
-facade owns discovery and fingerprint tests; its owner files are not
-standalone test runners. No later slice was evaluated; no tests, builds,
-engines or probes were run for drafting.
+2. Replace:
+
+```text
+Unsafe older registrations and legacy fallback routes are refused; incompatible authoritative files never fall back to .prev.
+```
+
+with:
+
+```text
+Each carrier affected by a shape change accepts only its new current version: older accepted decoders and affected exact-shape legacy routes are disabled. Incompatible authoritative files never fall back to .prev.
+```
+
+3. Replace:
+
+```text
+Working migrations and DTO implementations remain; retaining a decoder requires its transitive wire shape to remain safe.
+```
+
+with:
+
+```text
+Existing migration/DTO source may remain, but carriers affected by a shape change accept only their new current versions; no historical-decoder compatibility analysis is required.
+```
+
+Evidence/dedup refreshed on 2026-11-05: all 67 open titles plus three
+open/closed searches (save-policy, schema guard, enum) checked. No PSP-2
+issue exists. #2915 remains the prerequisite; #2912 is closed after PR #2913
+merged as 32e1af213. Current component, Lua and framing dispatch confirms that
+accepted-version checks can enforce current-only acceptance without proving
+historical decoder shape compatibility. The existing enum command has only
+strict audit, baseline update and self-test modes; the new guard can own
+pre-release enum enforcement while PSP-5 owns selection. No later slice was
+evaluated. No builds, tests, engines or probes were run for this redraft.
