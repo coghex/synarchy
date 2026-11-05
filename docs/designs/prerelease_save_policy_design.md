@@ -28,7 +28,7 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Retire mandatory pre-release legacy-save compatibility — [#2914]
-- [ ] PSP-1. Prove safe unsupported-version refusal at the load boundary
+- [x] PSP-1. Prove safe unsupported-version refusal at the load boundary — [#2915]
 - [ ] PSP-2. Enforce current-schema version changes without requiring migrations
 - [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
 - [ ] PSP-4. Separate historical test obligations from current persistence coverage
@@ -680,11 +680,13 @@ at `ad35e6f7c`. Six unique ledger entries match the five delivery headings;
 dependencies exist and are acyclic. No child body was drafted or evaluated.
 No builds, tests, engines or probes were run for this tracker-only step.
 
-## Pending PSP-1 tracker proposal
+## PSP-1 processing record
 
-Drafted 2026-11-05 under the continuation in verified syn-manager reply
-`ge89pkamx45zn8svwv3dxxk4g6`. Awaiting separate owner approval.
-The EPIC is #2914; PSP-1 remains unchecked until approved filing and linking.
+Created [#2915](https://github.com/coghex/synarchy/issues/2915) on 2026-11-05
+and linked it in epic #2914 with its implementation checkbox still unchecked.
+Verified syn-manager reply `sbadzax42c9hcdh92f8ayv87c6` to question
+`vt73fjgxbw8ejnx6s6357mg6xs` relayed the owner: "Approve as drafted".
+The exact approved draft and linking operation below are retained as evidence.
 
 Title: [save-policy PSP-1] Prove safe unsupported-version refusal at the load boundary
 
