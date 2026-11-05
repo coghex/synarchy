@@ -557,6 +557,16 @@ conditionText ConditionDead  = "dead"
 conditionText ConditionReseeded = "reseeded"
 conditionText ConditionAbsent = "absent"
 
+-- | Conditions that can appear on a texture selector. Successor markers
+--   share the persisted FloraCondition enum, but growth consumes them
+--   before rendering; they are not part of the authored visual vocabulary.
+visualConditions ∷ [FloraCondition]
+visualConditions = [ConditionAlive, ConditionDead]
+
+parseVisualCondition ∷ Text → Maybe FloraCondition
+parseVisualCondition t =
+    lookup t [(conditionText c, c) | c ← visualConditions]
+
 successorText ∷ CorpseSuccessor → Text
 successorText SuccessorReseed = "reseed"
 successorText SuccessorAbsent = "absent"
@@ -565,7 +575,7 @@ contextVocabulary ∷ [Text]
 contextVocabulary = map contextText [minBound .. maxBound]
 
 conditionVocabulary ∷ [Text]
-conditionVocabulary = map conditionText [ConditionAlive, ConditionDead]
+conditionVocabulary = map conditionText visualConditions
 
 deathCauseVocabulary ∷ [Text]
 deathCauseVocabulary = map deathCauseText [minBound .. maxBound]
@@ -679,7 +689,7 @@ parseTextureVariant species declaredPhases declaredStages (i, val) =
         forM_ st $ requireDeclaredBy "a texture variant" species path "stage"
             "annualCycle[]" annualStageText declaredStages
         cd ← optionalVocabularyToken species path "condition"
-                 (parseByText conditionText) conditionVocabulary v
+                 parseVisualCondition conditionVocabulary v
         ca ← optionalVocabularyToken species path "cause"
                  (parseByText deathCauseText) deathCauseVocabulary v
         forM_ ca $ \c → when (cd ≢ Just ConditionDead) $

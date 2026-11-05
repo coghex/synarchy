@@ -212,6 +212,14 @@ spec = do
                 (floraFile [withVariants
                     [[("condition", "dying"), ("texture", "\"a.png\"")]]])
 
+        it "rejects internal successor markers outside the visual condition vocabulary" $
+            forM_ ["reseeded", "absent"] $ \token →
+                rejectsNaming
+                    [ "textureVariants[0]", "condition", token
+                    , "must", "be", "one", "of", "alive", "dead" ]
+                    (floraFile [withVariants
+                        [[("condition", token), ("texture", "\"a.png\"")]]])
+
         it "rejects an unknown cause token" $
             rejectsNaming ["textureVariants[0]", "cause", "lightning", "fire"]
                 (floraFile [withVariants
