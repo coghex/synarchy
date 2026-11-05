@@ -1,0 +1,998 @@
+{
+  "carriers": {
+    "buildings": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "currentVersion": 4,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.EntitySnapshots.BuildingInstanceDTOv1",
+        "World.Save.Component.EntitySnapshots.BuildingsDTOv1",
+        "World.Save.Component.EntitySnapshots.BuildingsDTOv2",
+        "World.Save.Component.EntitySnapshots.BuildingsDTOv3",
+        "World.Save.Component.EntitySnapshots.PageBuildingsDTOv1",
+        "World.Save.Component.EntitySnapshots.PageBuildingsDTOv2",
+        "World.Save.Component.EntitySnapshots.PageBuildingsDTOv3",
+        "World.Save.Component.PageActivity.ItemInstanceDTOv1"
+      ],
+      "legacyShape": "1a3ef6807f9adb7d67763a4caadb3e22ebf4da29e6e596755c35d59e58f591a3",
+      "ownerSources": [
+        "src/World/Save/Component/EntitySnapshots.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.EntitySnapshots.BuildingInstanceDTO",
+        "World.Save.Component.EntitySnapshots.BuildingsDTO",
+        "World.Save.Component.EntitySnapshots.PageBuildingsDTO",
+        "World.Save.Component.GameplayTags.TagAssignmentsDTO",
+        "World.Save.Component.PageActivity.ItemInstanceDTO",
+        "World.Save.Component.PageActivity.ItemStorageDTO"
+      ],
+      "shape": "730aabe3effdbb435368bff8e639a830f72b9e4a036dda00b1a2f5b2f4201ca6"
+    },
+    "container-knowledge": {
+      "acceptedVersions": [
+        1,
+        2
+      ],
+      "currentVersion": 2,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.Knowledge.ContainerKnowledgeDTOv1",
+        "World.Save.Component.Knowledge.ContainerRecordDTOv1",
+        "World.Save.Component.Knowledge.PageContainerKnowledgeDTOv1",
+        "World.Save.Component.PageActivity.ItemInstanceDTOv1"
+      ],
+      "legacyShape": "5d43a255ca980eda3963709ca9ac2a916ec3b4376cc35bfc2c3880ad80ec4c21",
+      "ownerSources": [
+        "src/World/Save/Component/Knowledge.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.Knowledge.ContainerKnowledgeDTO",
+        "World.Save.Component.Knowledge.ContainerRecordDTO",
+        "World.Save.Component.Knowledge.PageContainerKnowledgeDTO",
+        "World.Save.Component.PageActivity.ItemInstanceDTO",
+        "World.Save.Component.PageActivity.ItemStorageDTO"
+      ],
+      "shape": "0acb1e86335476e0bbf3fa086b9b0c6cee0e2b300498afeb77a3adc9a95787e1"
+    },
+    "core-session": {
+      "acceptedVersions": [
+        1,
+        2,
+        3
+      ],
+      "currentVersion": 3,
+      "customOwners": [
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.Session.CoreSessionDTOv1",
+        "World.Save.Component.Session.CoreSessionDTOv2"
+      ],
+      "legacyShape": "7fa34945a29025f297a2ca8d41e069e25510b39fd820aaca3d3ef6d0bb30d9d0",
+      "ownerSources": [
+        "src/World/Save/Component/Session.hs"
+      ],
+      "owners": [
+        "Engine.Graphics.Camera.CameraFacing",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.GameplayTags.TagAssignmentsDTO",
+        "World.Save.Component.Session.CoreSessionDTO",
+        "World.Save.Component.Session.LiveCameraDTO"
+      ],
+      "shape": "626962f9950d2057118a9f499cd9f6fcb0a93659d755b83579e4788b5f1891df"
+    },
+    "craft-bills": {
+      "acceptedVersions": [
+        1,
+        2
+      ],
+      "currentVersion": 2,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.EntitySystems.BillQueueDTOv1",
+        "World.Save.Component.EntitySystems.CraftBillDTOv1",
+        "World.Save.Component.EntitySystems.CraftBillsDTOv1",
+        "World.Save.Component.EntitySystems.PageCraftBillsDTOv1"
+      ],
+      "legacyShape": "9b4a6b55651b5132112a2e95f6e0beb9982ce922720c738147b181970c1f61ee",
+      "ownerSources": [
+        "src/World/Save/Component/EntitySystems.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "Craft.Bills.BillId",
+        "Craft.Bills.BillMode",
+        "Unit.Types.Manager.UnitId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.EntitySystems.BillQueueDTO",
+        "World.Save.Component.EntitySystems.CraftBillDTO",
+        "World.Save.Component.EntitySystems.CraftBillsDTO",
+        "World.Save.Component.EntitySystems.PageCraftBillsDTO",
+        "World.Save.Reference.SamePageRef"
+      ],
+      "shape": "3336bbe4ba85d1533be87328b399d39714866fe4664e31f2cc403ffe837e300c"
+    },
+    "framing": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [],
+      "kind": "framing",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Envelope/Types.hs",
+        "src/World/Save/Envelope/Codec.hs"
+      ],
+      "owners": [],
+      "shape": "b1b43fcecce096bb902440b11f92de904b2c9762cdac02dfe2c6d9db1c3fa05f"
+    },
+    "lua-state": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [],
+      "kind": "legacy",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Envelope.hs"
+      ],
+      "owners": [],
+      "shape": "d5e3ab957466b3a872308560e7919f0d01d814a7629da68f7a3f144251481e73"
+    },
+    "lua.building_spawn": {
+      "acceptedVersions": [
+        1,
+        2,
+        3
+      ],
+      "currentVersion": 3,
+      "customOwners": [],
+      "kind": "lua",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "scripts/building_spawn.lua",
+        "scripts/lib/data_codec.lua"
+      ],
+      "owners": [],
+      "shape": "1fb53db325fc43cd1d6fd2012834bb3f0757de86576e9e058b7b42e696abc454"
+    },
+    "lua.tutorial_progress": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [],
+      "kind": "lua",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "scripts/lib/data_codec.lua",
+        "scripts/tutorial_progress.lua"
+      ],
+      "owners": [],
+      "shape": "1fb53db325fc43cd1d6fd2012834bb3f0757de86576e9e058b7b42e696abc454"
+    },
+    "lua.unit_ai": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "currentVersion": 11,
+      "customOwners": [],
+      "kind": "lua",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "scripts/lib/data_codec.lua",
+        "scripts/unit_ai_save.lua"
+      ],
+      "owners": [],
+      "shape": "1fb53db325fc43cd1d6fd2012834bb3f0757de86576e9e058b7b42e696abc454"
+    },
+    "metadata": {
+      "acceptedVersions": [
+        1,
+        2,
+        3
+      ],
+      "currentVersion": 3,
+      "customOwners": [
+        "UPrelude:Text"
+      ],
+      "kind": "metadata",
+      "legacyOwners": [
+        "World.Save.Compat.MetadataV1.SaveMetadataV1",
+        "World.Save.Compat.MetadataV2.SaveMetadataV2"
+      ],
+      "legacyShape": "f3645ef2567ae5017e0eeac34de2169d27c0751fbe65da1f1823c6534719f9b9",
+      "ownerSources": [
+        "src/World/Save/Envelope.hs"
+      ],
+      "owners": [
+        "World.Page.GeneratedId.GeneratedWorldId",
+        "World.Save.Types.SaveMetadata"
+      ],
+      "shape": "400d4d11502a4af523e3b8b3460459d5366378941fea9208bad314e6dbdf0d51"
+    },
+    "portable-knowledge": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Component/PortableKnowledge.hs"
+      ],
+      "owners": [
+        "World.Save.Component.PageActivity.ItemInstanceDTO",
+        "World.Save.Component.PageActivity.ItemStorageDTO",
+        "World.Save.Component.PortableKnowledge.ContentsObservationDTO",
+        "World.Save.Component.PortableKnowledge.PortableKnowledgeDTO",
+        "World.Save.Component.PortableKnowledge.PortableRecordDTO",
+        "World.Save.Component.PortableKnowledge.WeightObservationDTO"
+      ],
+      "shape": "344dfcb21676ddeefe781ea8ecc963c89559d50a0a6d28b3c2159395fd7cd31f"
+    },
+    "power-nodes": {
+      "acceptedVersions": [
+        1,
+        2
+      ],
+      "currentVersion": 2,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.EntitySystems.NodeRegistryDTOv1",
+        "World.Save.Component.EntitySystems.PagePowerNodesDTOv1",
+        "World.Save.Component.EntitySystems.PowerNodeDTOv1",
+        "World.Save.Component.EntitySystems.PowerNodesDTOv1"
+      ],
+      "legacyShape": "52b3fd449c71e8d6dfdd867e31a709a6b560aab30e44fced631e7582274ca6b2",
+      "ownerSources": [
+        "src/World/Save/Component/EntitySystems.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "Power.Types.PowerNodeId",
+        "Power.Types.PowerRole",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.EntitySystems.NodeRegistryDTO",
+        "World.Save.Component.EntitySystems.PagePowerNodesDTO",
+        "World.Save.Component.EntitySystems.PowerNodeDTO",
+        "World.Save.Component.EntitySystems.PowerNodesDTO",
+        "World.Save.Reference.SamePageRef"
+      ],
+      "shape": "b81d127e10b4566cc7c844478f10829cb1627c998cc081801efec30ee19ae241"
+    },
+    "relation-causes": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Component/RelationCauses.hs"
+      ],
+      "owners": [
+        "World.Save.Component.RelationCauses.RelationCauseDTO",
+        "World.Save.Component.RelationCauses.RelationCausesDTO",
+        "World.Save.Component.RelationCauses.RelationValueDTO"
+      ],
+      "shape": "0309e37bb2bbb76de550d35fd8f7efdc804d8ea7cca579b32c0e8b8dc7f71eca"
+    },
+    "session": {
+      "acceptedVersions": [
+        90
+      ],
+      "currentVersion": 90,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text",
+        "World.Fluid.Lake.Types:LakeChunkEntry",
+        "World.Fluid.Lake.Types:WorldLakes",
+        "World.Fluid.OceanMask:WorldOceanMask",
+        "World.Fluid.River.Types:RiverChunkEntry",
+        "World.Fluid.River.Types:WorldRivers",
+        "World.Fluid.Seabed.Types:SeabedTable",
+        "World.Fluid.Types:IceLevelGrid",
+        "World.Generate.Types:HashSet",
+        "World.Geology.Coastal.Types:CoastalTable",
+        "World.Geology.Ore.Types:WorldOreDeposits",
+        "World.Hydrology.Types:Vector"
+      ],
+      "kind": "legacy",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Compat/SessionV90.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "Craft.Bills.BillId",
+        "Craft.Bills.BillMode",
+        "Engine.Graphics.Camera.CameraFacing",
+        "Location.Overlay.Types.LocationOverlay",
+        "Power.Types.PowerNodeId",
+        "Power.Types.PowerRole",
+        "Unit.Direction.Direction",
+        "Unit.Sim.Types.Pose",
+        "Unit.Sim.Types.UnitActivity",
+        "Unit.Types.Manager.UnitId",
+        "World.Base.GeoCoord",
+        "World.Base.GeoFeatureId",
+        "World.Chunk.Types.ChunkCoord",
+        "World.Construct.Types.ConstructStatus",
+        "World.Flora.Types.FloraId",
+        "World.Fluid.Lake.Types.Lake",
+        "World.Fluid.Lake.Types.LakeChunkEntry",
+        "World.Fluid.Lake.Types.LakeId",
+        "World.Fluid.Lake.Types.WorldLakes",
+        "World.Fluid.OceanMask.WorldOceanMask",
+        "World.Fluid.River.Types.River",
+        "World.Fluid.River.Types.RiverChunkEntry",
+        "World.Fluid.River.Types.RiverId",
+        "World.Fluid.River.Types.WorldRivers",
+        "World.Fluid.Seabed.Types.SeabedTable",
+        "World.Fluid.Types.FluidType",
+        "World.Fluid.Types.IceLevelGrid",
+        "World.Geology.Coastal.Types.CoastalTable",
+        "World.Geology.Ore.Types.OreSheetParams",
+        "World.Geology.Ore.Types.WorldOreDeposits",
+        "World.Geology.Timeline.BBox.EventBBox",
+        "World.Geology.Timeline.Event.GeoEvent",
+        "World.Geology.Timeline.Event.RiverDeltaParams",
+        "World.Geology.Timeline.Event.RiverSegmentCarve",
+        "World.Geology.Timeline.Feature.CalderaParams",
+        "World.Geology.Timeline.Feature.CinderConeParams",
+        "World.Geology.Timeline.Feature.CraterParams",
+        "World.Geology.Timeline.Feature.ErosionParams",
+        "World.Geology.Timeline.Feature.FeatureActivity",
+        "World.Geology.Timeline.Feature.FeatureEvolution",
+        "World.Geology.Timeline.Feature.FeatureShape",
+        "World.Geology.Timeline.Feature.FissureParams",
+        "World.Geology.Timeline.Feature.FloodParams",
+        "World.Geology.Timeline.Feature.HydrothermalParams",
+        "World.Geology.Timeline.Feature.LandslideParams",
+        "World.Geology.Timeline.Feature.LavaDomeParams",
+        "World.Geology.Timeline.Feature.LavaTubeParams",
+        "World.Geology.Timeline.Feature.PersistentFeature",
+        "World.Geology.Timeline.Feature.ShieldParams",
+        "World.Geology.Timeline.Feature.SuperVolcanoParams",
+        "World.Geology.Timeline.Feature.VolcanicFeature",
+        "World.Geology.Timeline.Types.GeoPeriod",
+        "World.Geology.Timeline.Types.GeoScale",
+        "World.Geology.Timeline.Types.GeoTimeline",
+        "World.Hydrology.Types.GlacierMoraineParams",
+        "World.Hydrology.Types.GlacierParams",
+        "World.Hydrology.Types.HydroEvolution",
+        "World.Hydrology.Types.HydroFeature",
+        "World.Hydrology.Types.LakeParams",
+        "World.Hydrology.Types.LakeSource",
+        "World.Hydrology.Types.RiverParams",
+        "World.Hydrology.Types.RiverSegment",
+        "World.Material.Id.MaterialId",
+        "World.Ocean.Types.OceanDistMap",
+        "World.Ocean.Types.OceanMap",
+        "World.Page.Types.WorldPageId",
+        "World.Render.Zoom.Types.ZoomMapMode",
+        "World.Save.Compat.SessionV90.BuildingSnapshotV90",
+        "World.Save.Compat.SessionV90.SaveDataV90",
+        "World.Save.Compat.SessionV90.SaveMetadataV90",
+        "World.Save.Compat.SessionV90.UnitSnapshotV90",
+        "World.Save.Compat.SessionV90.WorldPageSaveV90",
+        "World.Save.Component.EntitySimulation.MoveTargetDTOv1",
+        "World.Save.Component.EntitySimulation.UnitSimStateDTOv1",
+        "World.Save.Component.EntitySnapshots.BuildingInstanceDTOv1",
+        "World.Save.Component.EntitySnapshots.ScarDTO",
+        "World.Save.Component.EntitySnapshots.StatModifierDTO",
+        "World.Save.Component.EntitySnapshots.UnitInstanceDTOv1",
+        "World.Save.Component.EntitySnapshots.WoundDTO",
+        "World.Save.Component.EntitySystems.BillQueueDTOv1",
+        "World.Save.Component.EntitySystems.CraftBillDTOv1",
+        "World.Save.Component.EntitySystems.NodeRegistryDTOv1",
+        "World.Save.Component.EntitySystems.PowerNodeDTOv1",
+        "World.Save.Component.PageActivity.ChopDesignationDTOv1",
+        "World.Save.Component.PageActivity.ConstructDesignationDTOv1",
+        "World.Save.Component.PageActivity.ConstructTargetDTO",
+        "World.Save.Component.PageActivity.CropPlotDTOv1",
+        "World.Save.Component.PageActivity.FloraHarvestsDTOv1",
+        "World.Save.Component.PageActivity.GroundItemDTOv1",
+        "World.Save.Component.PageActivity.GroundItemsDTOv1",
+        "World.Save.Component.PageActivity.ItemInstanceDTOv1",
+        "World.Save.Component.PageActivity.MineDesignationDTO",
+        "World.Save.Component.PageActivity.PlantDesignationDTOv1",
+        "World.Save.Component.PageActivity.SpoilPileDTO",
+        "World.Save.Component.PageActivity.StructurePieceDTO",
+        "World.Save.Component.PageActivity.TillDesignationDTO",
+        "World.Save.Component.PageCore.WorldIdentityDTOv1",
+        "World.Save.Component.PageEdits.WorldEditDTOv1",
+        "World.Save.Component.Session.TexPaletteDTO",
+        "World.Save.Component.WorldGenClimate.AtmoGridDTO",
+        "World.Save.Component.WorldGenClimate.CalendarConfigDTO",
+        "World.Save.Component.WorldGenClimate.ClimateGridDTO",
+        "World.Save.Component.WorldGenClimate.ClimateParamsDTO",
+        "World.Save.Component.WorldGenClimate.ClimateStateDTO",
+        "World.Save.Component.WorldGenClimate.MoistureCellDTO",
+        "World.Save.Component.WorldGenClimate.MoonConfigDTO",
+        "World.Save.Component.WorldGenClimate.OceanCellDTO",
+        "World.Save.Component.WorldGenClimate.OceanCurrentDTO",
+        "World.Save.Component.WorldGenClimate.OceanGridDTO",
+        "World.Save.Component.WorldGenClimate.OreLeversDTO",
+        "World.Save.Component.WorldGenClimate.PressureSystemDTO",
+        "World.Save.Component.WorldGenClimate.RegionClimateDTO",
+        "World.Save.Component.WorldGenClimate.SeasonalClimateDTO",
+        "World.Save.Component.WorldGenClimate.SunConfigDTO",
+        "World.Save.Component.WorldGenClimate.SurfaceBudgetDTO",
+        "World.Save.Component.WorldGenClimate.TectonicPlateDTO",
+        "World.Save.Component.WorldGenClimate.ThermohalineCellDTO",
+        "World.Save.Component.WorldGenClimate.TimelineParamsDTO",
+        "World.Save.Component.WorldGenClimate.WaterMassDTO",
+        "World.Save.Component.WorldGenClimate.WindCellDTO",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv1",
+        "World.Tool.Types.ToolMode",
+        "World.Weather.Types.ClimateCoord",
+        "World.Weather.Types.PressureType",
+        "World.Weather.Types.SurfaceType"
+      ],
+      "shape": "766b54e320f67ac9dbf7790f4e986f60d4022339e032e2eb48e8baf1d4f8be1d"
+    },
+    "texture-palette": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Component/Session.hs"
+      ],
+      "owners": [
+        "World.Save.Component.Session.TexPaletteDTO"
+      ],
+      "shape": "4674ffc13779e28bd47dde9b6cfa15339673bb8d210f9165af28044e2b340ddc"
+    },
+    "transfer-orders": {
+      "acceptedVersions": [
+        1
+      ],
+      "currentVersion": 1,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [],
+      "legacyShape": "",
+      "ownerSources": [
+        "src/World/Save/Component/Transfer.hs"
+      ],
+      "owners": [
+        "Building.Types.BuildingId",
+        "Unit.Transfer.Orders.TransferOrderId",
+        "Unit.Types.Manager.UnitId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.Transfer.PageTransferOrdersDTO",
+        "World.Save.Component.Transfer.QueuedTransferDTO",
+        "World.Save.Component.Transfer.TransferEndpointDTO",
+        "World.Save.Component.Transfer.TransferFailureDTO",
+        "World.Save.Component.Transfer.TransferOrderDTO",
+        "World.Save.Component.Transfer.TransferOrderQueueDTO",
+        "World.Save.Component.Transfer.TransferOrdersDTO",
+        "World.Save.Component.Transfer.TransferReasonDTO",
+        "World.Save.Component.Transfer.TransferStateDTO",
+        "World.Save.Reference.SamePageRef"
+      ],
+      "shape": "88bb6a3367412fad76c2e92728fd92ff3deb19493a3de473668e7e7dec219e7b"
+    },
+    "unit-sim": {
+      "acceptedVersions": [
+        1,
+        2,
+        3
+      ],
+      "currentVersion": 3,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.EntitySimulation.MoveTargetDTOv1",
+        "World.Save.Component.EntitySimulation.PageSimDTOv1",
+        "World.Save.Component.EntitySimulation.PageSimDTOv2",
+        "World.Save.Component.EntitySimulation.UnitSimDTOv1",
+        "World.Save.Component.EntitySimulation.UnitSimDTOv2",
+        "World.Save.Component.EntitySimulation.UnitSimStateDTOv1"
+      ],
+      "legacyShape": "d8104ea102676c4f5b34842ec2c353438b82218ebb4d50f31e3862771c78462e",
+      "ownerSources": [
+        "src/World/Save/Component/EntitySimulation.hs"
+      ],
+      "owners": [
+        "Unit.Direction.Direction",
+        "Unit.Pathing.Hazard.MoveHazardPolicy",
+        "Unit.Sim.Types.Pose",
+        "Unit.Sim.Types.UnitActivity",
+        "Unit.Types.Manager.UnitId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.EntitySimulation.MoveTargetDTO",
+        "World.Save.Component.EntitySimulation.PageSimDTO",
+        "World.Save.Component.EntitySimulation.UnitSimDTO",
+        "World.Save.Component.EntitySimulation.UnitSimStateDTO",
+        "World.Save.Reference.SamePageRef"
+      ],
+      "shape": "4b15b57d671f5912cfec5838408e1cf278228f753e785f9f6830d0435effcd65"
+    },
+    "units": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "currentVersion": 6,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.EntitySnapshots.PageUnitsDTOv1",
+        "World.Save.Component.EntitySnapshots.PageUnitsDTOv2",
+        "World.Save.Component.EntitySnapshots.PageUnitsDTOv3",
+        "World.Save.Component.EntitySnapshots.PageUnitsDTOv4",
+        "World.Save.Component.EntitySnapshots.PageUnitsDTOv5",
+        "World.Save.Component.EntitySnapshots.UnitInstanceDTOv1",
+        "World.Save.Component.EntitySnapshots.UnitInstanceDTOv2",
+        "World.Save.Component.EntitySnapshots.UnitInstanceDTOv3",
+        "World.Save.Component.EntitySnapshots.UnitsDTOv1",
+        "World.Save.Component.EntitySnapshots.UnitsDTOv2",
+        "World.Save.Component.EntitySnapshots.UnitsDTOv3",
+        "World.Save.Component.EntitySnapshots.UnitsDTOv4",
+        "World.Save.Component.EntitySnapshots.UnitsDTOv5",
+        "World.Save.Component.PageActivity.ItemInstanceDTOv1"
+      ],
+      "legacyShape": "a1f260b3caefd58d59b8e9e2e0ce399756c70a8f8212ea2e6cfcc34bf767f72e",
+      "ownerSources": [
+        "src/World/Save/Component/EntitySnapshots.hs"
+      ],
+      "owners": [
+        "Unit.Direction.Direction",
+        "Unit.Physiology.Types.PhysioMode",
+        "Unit.Types.Manager.UnitId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.EntitySnapshots.PageUnitsDTO",
+        "World.Save.Component.EntitySnapshots.ScarDTO",
+        "World.Save.Component.EntitySnapshots.StatModifierDTO",
+        "World.Save.Component.EntitySnapshots.UnitInstanceDTO",
+        "World.Save.Component.EntitySnapshots.UnitsDTO",
+        "World.Save.Component.EntitySnapshots.WoundDTO",
+        "World.Save.Component.GameplayTags.TagAssignmentsDTO",
+        "World.Save.Component.PageActivity.ItemInstanceDTO",
+        "World.Save.Component.PageActivity.ItemStorageDTO",
+        "World.Save.UnitFaction.ControllerDTO",
+        "World.Save.UnitFaction.MembershipDTO",
+        "World.Save.UnitFaction.MembershipSourceDTO",
+        "World.Save.UnitFaction.UnitFactionDTO"
+      ],
+      "shape": "ccc9d82b91b88346c7acbd3b5c095c43416bbd9df369b47ca36d19edc830a6b8"
+    },
+    "world-activity": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "currentVersion": 9,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.PageActivity.ConstructDesignationDTOv1",
+        "World.Save.Component.PageActivity.CropPlotDTOv1",
+        "World.Save.Component.PageActivity.CropPlotDTOv2",
+        "World.Save.Component.PageActivity.CropPlotDTOv3",
+        "World.Save.Component.PageActivity.FloraConditionDTOv8",
+        "World.Save.Component.PageActivity.GroundItemDTOv1",
+        "World.Save.Component.PageActivity.GroundItemsDTOv1",
+        "World.Save.Component.PageActivity.ItemInstanceDTOv1",
+        "World.Save.Component.PageActivity.PageActivityDTOv2",
+        "World.Save.Component.PageActivity.PageActivityDTOv3",
+        "World.Save.Component.PageActivity.PageActivityDTOv4",
+        "World.Save.Component.PageActivity.PageActivityDTOv5",
+        "World.Save.Component.PageActivity.PageActivityDTOv6",
+        "World.Save.Component.PageActivity.PageActivityDTOv7",
+        "World.Save.Component.PageActivity.PageActivityDTOv8",
+        "World.Save.Component.PageActivity.PlantDesignationDTOv1",
+        "World.Save.Component.PageActivity.WorldActivityDTOv2",
+        "World.Save.Component.PageActivity.WorldActivityDTOv3",
+        "World.Save.Component.PageActivity.WorldActivityDTOv4",
+        "World.Save.Component.PageActivity.WorldActivityDTOv5",
+        "World.Save.Component.PageActivity.WorldActivityDTOv6",
+        "World.Save.Component.PageActivity.WorldActivityDTOv7",
+        "World.Save.Component.PageActivity.WorldActivityDTOv8"
+      ],
+      "legacyShape": "dc54ee6e0338b428f4b2e7217f72209da29a06e6742b3e1aa23ea28ddc6c1472",
+      "ownerSources": [
+        "src/World/Save/Component/PageActivity.hs"
+      ],
+      "owners": [
+        "World.Construct.Attempt.ConstructAttemptId",
+        "World.Construct.Receipt.ConstructPayment",
+        "World.Construct.Receipt.MaterialReceipt",
+        "World.Construct.Types.ConstructStatus",
+        "World.Flora.Condition.VocabTag",
+        "World.Flora.Identity.FloraInstanceId",
+        "World.Flora.Reference.FloraRef",
+        "World.Flora.Types.FloraId",
+        "World.Material.Id.MaterialId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.PageActivity.ChopDesignationDTO",
+        "World.Save.Component.PageActivity.ChopDesignationDTOv1",
+        "World.Save.Component.PageActivity.ConstructDesignationDTO",
+        "World.Save.Component.PageActivity.ConstructTargetDTO",
+        "World.Save.Component.PageActivity.CropPlotDTO",
+        "World.Save.Component.PageActivity.FloraConditionDTO",
+        "World.Save.Component.PageActivity.FloraHarvestsDTOv1",
+        "World.Save.Component.PageActivity.FloraReseedMarkerDTO",
+        "World.Save.Component.PageActivity.FloraRetentionDTO",
+        "World.Save.Component.PageActivity.GroundItemDTO",
+        "World.Save.Component.PageActivity.GroundItemsDTO",
+        "World.Save.Component.PageActivity.ItemInstanceDTO",
+        "World.Save.Component.PageActivity.ItemStorageDTO",
+        "World.Save.Component.PageActivity.MineDesignationDTO",
+        "World.Save.Component.PageActivity.PageActivityDTO",
+        "World.Save.Component.PageActivity.PlantDesignationDTO",
+        "World.Save.Component.PageActivity.SpoilPileDTO",
+        "World.Save.Component.PageActivity.StructurePieceDTO",
+        "World.Save.Component.PageActivity.TillDesignationDTO",
+        "World.Save.Component.PageActivity.WorldActivityDTO"
+      ],
+      "shape": "517b35d2372dd95d2d46f03f9dcb2ecc81fa4567c42d899c7710463de4b87ec1"
+    },
+    "world-edits": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "currentVersion": 7,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.PageEdits.PageEditsDTOv1",
+        "World.Save.Component.PageEdits.PageEditsDTOv2",
+        "World.Save.Component.PageEdits.PageEditsDTOv3",
+        "World.Save.Component.PageEdits.PageEditsDTOv4",
+        "World.Save.Component.PageEdits.PageEditsDTOv5",
+        "World.Save.Component.PageEdits.PageEditsDTOv6",
+        "World.Save.Component.PageEdits.WorldEditDTOv1",
+        "World.Save.Component.PageEdits.WorldEditDTOv2",
+        "World.Save.Component.PageEdits.WorldEditDTOv3",
+        "World.Save.Component.PageEdits.WorldEditDTOv4",
+        "World.Save.Component.PageEdits.WorldEditDTOv6",
+        "World.Save.Component.PageEdits.WorldEditsDTOv1",
+        "World.Save.Component.PageEdits.WorldEditsDTOv2",
+        "World.Save.Component.PageEdits.WorldEditsDTOv3",
+        "World.Save.Component.PageEdits.WorldEditsDTOv4",
+        "World.Save.Component.PageEdits.WorldEditsDTOv5",
+        "World.Save.Component.PageEdits.WorldEditsDTOv6"
+      ],
+      "legacyShape": "f7c5aa03ae1a719adff8a2ef57f268684d4b6cd1f1650cbf32cece2a90b207f0",
+      "ownerSources": [
+        "src/World/Save/Component/PageEdits.hs"
+      ],
+      "owners": [
+        "World.Chunk.Types.ChunkCoord",
+        "World.Flora.Identity.FloraInstanceId",
+        "World.Flora.Reference.FloraRef",
+        "World.Flora.Types.FloraId",
+        "World.Fluid.Lake.Types.Lake",
+        "World.Fluid.Lake.Types.LakeId",
+        "World.Fluid.River.Types.River",
+        "World.Fluid.Types.FluidType",
+        "World.Material.Id.MaterialId",
+        "World.Page.Types.WorldPageId",
+        "World.Save.Component.GameplayTags.TagAssignmentsDTO",
+        "World.Save.Component.PageEdits.PageEditsDTO",
+        "World.Save.Component.PageEdits.WorldEditDTO",
+        "World.Save.Component.PageEdits.WorldEditsDTO"
+      ],
+      "shape": "087ed69d273d84d110bd69cf919e4158a53f7965aef4e4832cb0e66a20250c98"
+    },
+    "world-pages": {
+      "acceptedVersions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "currentVersion": 16,
+      "customOwners": [
+        "UPrelude:HashMap",
+        "UPrelude:Text",
+        "World.Fluid.Lake.Types:LakeChunkEntry",
+        "World.Fluid.Lake.Types:WorldLakes",
+        "World.Fluid.OceanMask:WorldOceanMask",
+        "World.Fluid.River.Types:RiverChunkEntry",
+        "World.Fluid.River.Types:WorldRivers",
+        "World.Fluid.Seabed.Types:SeabedTable",
+        "World.Fluid.Types:IceLevelGrid",
+        "World.Generate.Types:HashSet",
+        "World.Geology.Coastal.Types:CoastalTable",
+        "World.Geology.Ore.Types:WorldOreDeposits",
+        "World.Hydrology.Types:Vector"
+      ],
+      "kind": "component",
+      "legacyOwners": [
+        "World.Save.Component.PageCore.PageCoreDTOv1",
+        "World.Save.Component.PageCore.PageCoreDTOv10",
+        "World.Save.Component.PageCore.PageCoreDTOv11",
+        "World.Save.Component.PageCore.PageCoreDTOv12",
+        "World.Save.Component.PageCore.PageCoreDTOv13",
+        "World.Save.Component.PageCore.PageCoreDTOv14",
+        "World.Save.Component.PageCore.PageCoreDTOv15",
+        "World.Save.Component.PageCore.PageCoreDTOv2",
+        "World.Save.Component.PageCore.PageCoreDTOv3",
+        "World.Save.Component.PageCore.PageCoreDTOv4",
+        "World.Save.Component.PageCore.PageCoreDTOv5",
+        "World.Save.Component.PageCore.PageCoreDTOv6",
+        "World.Save.Component.PageCore.PageCoreDTOv7",
+        "World.Save.Component.PageCore.PageCoreDTOv8",
+        "World.Save.Component.PageCore.PageCoreDTOv9",
+        "World.Save.Component.PageCore.WorldIdentityDTOv1",
+        "World.Save.Component.PageCore.WorldIdentityDTOv2",
+        "World.Save.Component.PageCore.WorldPagesDTOv1",
+        "World.Save.Component.PageCore.WorldPagesDTOv10",
+        "World.Save.Component.PageCore.WorldPagesDTOv11",
+        "World.Save.Component.PageCore.WorldPagesDTOv12",
+        "World.Save.Component.PageCore.WorldPagesDTOv13",
+        "World.Save.Component.PageCore.WorldPagesDTOv14",
+        "World.Save.Component.PageCore.WorldPagesDTOv15",
+        "World.Save.Component.PageCore.WorldPagesDTOv2",
+        "World.Save.Component.PageCore.WorldPagesDTOv3",
+        "World.Save.Component.PageCore.WorldPagesDTOv4",
+        "World.Save.Component.PageCore.WorldPagesDTOv5",
+        "World.Save.Component.PageCore.WorldPagesDTOv6",
+        "World.Save.Component.PageCore.WorldPagesDTOv7",
+        "World.Save.Component.PageCore.WorldPagesDTOv8",
+        "World.Save.Component.PageCore.WorldPagesDTOv9",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv1",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv2",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv3",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv4",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv5",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv6",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv7",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv8",
+        "World.Save.Component.WorldGenHistory.WorldGenParamsDTOv9",
+        "World.Save.Component.WorldGenNaming.LocationEncounterDTOv1",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv1",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv2",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv3",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv4",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv5",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTOv6",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv1",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv2",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv3",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv4",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv5",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTOv6",
+        "World.Save.Component.WorldGenNaming.RiverNameDTOv1",
+        "World.Save.Component.WorldGenNaming.RiverNamesDTOv1"
+      ],
+      "legacyShape": "14eb677aac66968587483eb80cc84b34ff70e28c19a2ef49f4f1f8691fd11193",
+      "ownerSources": [
+        "src/World/Save/Component/PageCore.hs"
+      ],
+      "owners": [
+        "Language.Semantic.Types.ConceptId",
+        "Language.Semantic.Types.GramNumber",
+        "Location.Instance.LocationInstanceId",
+        "Location.Instance.LocationLifecycle",
+        "Location.Overlay.Types.LocationOverlay",
+        "Unit.Types.Manager.UnitId",
+        "World.Base.GeoCoord",
+        "World.Base.GeoFeatureId",
+        "World.Chunk.Types.ChunkCoord",
+        "World.Fluid.Lake.Types.Lake",
+        "World.Fluid.Lake.Types.LakeChunkEntry",
+        "World.Fluid.Lake.Types.LakeId",
+        "World.Fluid.Lake.Types.WorldLakes",
+        "World.Fluid.OceanMask.WorldOceanMask",
+        "World.Fluid.River.Types.River",
+        "World.Fluid.River.Types.RiverChunkEntry",
+        "World.Fluid.River.Types.RiverId",
+        "World.Fluid.River.Types.WorldRivers",
+        "World.Fluid.Seabed.Types.SeabedTable",
+        "World.Fluid.Types.IceLevelGrid",
+        "World.Geology.Coastal.Types.CoastalTable",
+        "World.Geology.Ore.Types.OreSheetParams",
+        "World.Geology.Ore.Types.WorldOreDeposits",
+        "World.Geology.Timeline.BBox.EventBBox",
+        "World.Geology.Timeline.Event.GeoEvent",
+        "World.Geology.Timeline.Event.RiverDeltaParams",
+        "World.Geology.Timeline.Event.RiverSegmentCarve",
+        "World.Geology.Timeline.Feature.CalderaParams",
+        "World.Geology.Timeline.Feature.CinderConeParams",
+        "World.Geology.Timeline.Feature.CraterParams",
+        "World.Geology.Timeline.Feature.ErosionParams",
+        "World.Geology.Timeline.Feature.FeatureActivity",
+        "World.Geology.Timeline.Feature.FeatureEvolution",
+        "World.Geology.Timeline.Feature.FeatureShape",
+        "World.Geology.Timeline.Feature.FissureParams",
+        "World.Geology.Timeline.Feature.FloodParams",
+        "World.Geology.Timeline.Feature.HydrothermalParams",
+        "World.Geology.Timeline.Feature.LandslideParams",
+        "World.Geology.Timeline.Feature.LavaDomeParams",
+        "World.Geology.Timeline.Feature.LavaTubeParams",
+        "World.Geology.Timeline.Feature.PersistentFeature",
+        "World.Geology.Timeline.Feature.ShieldParams",
+        "World.Geology.Timeline.Feature.SuperVolcanoParams",
+        "World.Geology.Timeline.Feature.VolcanicFeature",
+        "World.Geology.Timeline.Types.GeoPeriod",
+        "World.Geology.Timeline.Types.GeoScale",
+        "World.Geology.Timeline.Types.GeoTimeline",
+        "World.Hydrology.Types.GlacierMoraineParams",
+        "World.Hydrology.Types.GlacierParams",
+        "World.Hydrology.Types.HydroEvolution",
+        "World.Hydrology.Types.HydroFeature",
+        "World.Hydrology.Types.LakeParams",
+        "World.Hydrology.Types.LakeSource",
+        "World.Hydrology.Types.RiverParams",
+        "World.Hydrology.Types.RiverSegment",
+        "World.Material.Id.MaterialId",
+        "World.Ocean.Types.OceanDistMap",
+        "World.Ocean.Types.OceanMap",
+        "World.Page.GeneratedId.GeneratedWorldId",
+        "World.Page.Types.WorldPageId",
+        "World.Render.Zoom.Types.ZoomMapMode",
+        "World.Save.Component.GameplayTags.TagAssignmentsDTO",
+        "World.Save.Component.PageCore.ArenaBoundsDTO",
+        "World.Save.Component.PageCore.LanguageProvenanceDTO",
+        "World.Save.Component.PageCore.PageCoreDTO",
+        "World.Save.Component.PageCore.WorldIdentityDTO",
+        "World.Save.Component.PageCore.WorldPagesDTO",
+        "World.Save.Component.WorldGenClimate.AtmoGridDTO",
+        "World.Save.Component.WorldGenClimate.CalendarConfigDTO",
+        "World.Save.Component.WorldGenClimate.ClimateGridDTO",
+        "World.Save.Component.WorldGenClimate.ClimateParamsDTO",
+        "World.Save.Component.WorldGenClimate.ClimateStateDTO",
+        "World.Save.Component.WorldGenClimate.MoistureCellDTO",
+        "World.Save.Component.WorldGenClimate.MoonConfigDTO",
+        "World.Save.Component.WorldGenClimate.OceanCellDTO",
+        "World.Save.Component.WorldGenClimate.OceanCurrentDTO",
+        "World.Save.Component.WorldGenClimate.OceanGridDTO",
+        "World.Save.Component.WorldGenClimate.OreLeversDTO",
+        "World.Save.Component.WorldGenClimate.PressureSystemDTO",
+        "World.Save.Component.WorldGenClimate.RegionClimateDTO",
+        "World.Save.Component.WorldGenClimate.SeasonalClimateDTO",
+        "World.Save.Component.WorldGenClimate.SunConfigDTO",
+        "World.Save.Component.WorldGenClimate.SurfaceBudgetDTO",
+        "World.Save.Component.WorldGenClimate.TectonicPlateDTO",
+        "World.Save.Component.WorldGenClimate.ThermohalineCellDTO",
+        "World.Save.Component.WorldGenClimate.TimelineParamsDTO",
+        "World.Save.Component.WorldGenClimate.WaterMassDTO",
+        "World.Save.Component.WorldGenClimate.WindCellDTO",
+        "World.Save.Component.WorldGenCurrent.WorldGenParamsDTO",
+        "World.Save.Component.WorldGenNaming.AbsBoundsDTO",
+        "World.Save.Component.WorldGenNaming.EtymologySourceDTO",
+        "World.Save.Component.WorldGenNaming.LocationContainerSlotDTO",
+        "World.Save.Component.WorldGenNaming.LocationEncounterDTO",
+        "World.Save.Component.WorldGenNaming.LocationEncounterOccupantDTO",
+        "World.Save.Component.WorldGenNaming.LocationInstanceDTO",
+        "World.Save.Component.WorldGenNaming.LocationInstancesDTO",
+        "World.Save.Component.WorldGenNaming.LocationSignificantItemDTO",
+        "World.Save.Component.WorldGenNaming.NameExprDTO",
+        "World.Save.Component.WorldGenNaming.RiverNameDTO",
+        "World.Save.Component.WorldGenNaming.RiverNamesDTO",
+        "World.Save.Reference.SamePageRef",
+        "World.Weather.Types.ClimateCoord",
+        "World.Weather.Types.PressureType",
+        "World.Weather.Types.SurfaceType"
+      ],
+      "shape": "aa84c15333023382ee10489ab6a261d5fc0699f236baa3afa1bc844b4431d197"
+    }
+  },
+  "format": 1,
+  "routes": {
+    "b1-session": {
+      "carriers": [
+        "metadata",
+        "session"
+      ],
+      "enabled": true
+    },
+    "b2-lua-state": {
+      "carriers": [
+        "metadata",
+        "lua-state"
+      ],
+      "enabled": true
+    }
+  }
+}
