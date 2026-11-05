@@ -45,7 +45,12 @@ generic encoding. Every reachable type is one of:
 - **generic** (the default instance): its real `S.encode` is compared with
   cereal's own `GSerializePut` encoding on distinguishing sample values, and
   must round-trip. A hand-written encoder that disagrees fails extraction
-  with `unclassified encoder`. This is evidence on samples, not a proof. A
+  with `unclassified encoder`. Samples give any two fields of one constructor
+  different values in some variant (field `i` takes its second sample in the
+  variants whose bit is set in `i`), so a serializer that swaps two equal-typed
+  fields on write and read is caught; a field type with only one constructible
+  sample cannot be told from an equal-typed neighbour. This is evidence on
+  samples, not a proof. A
   checked classification (generic, newtype, custom) with no constructible sample
   fails with `unchecked boundary`; once the nesting budget is spent, sampling
   falls back to the simplest constructible value, so a deeply wrapped type is
