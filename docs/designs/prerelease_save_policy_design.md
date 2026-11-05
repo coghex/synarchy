@@ -1055,3 +1055,97 @@ cannot be inferred from migrationTarget=current. The production codec facade
 serves persistence_snapshot.py and the current persistence_contract probe.
 No duplicate current-only audit issue found. No code, build, test, engine,
 probe or review was run for this authoring step. Two children remain unchecked.
+
+## Pending PSP-4 tracker proposal
+
+Drafted under verified syn-manager continuation `xz3vwn2fudv6gyj9fkm392qzae`
+after PSP-3 revision 2 approval. Its prerequisite is linked as #2917;
+implementation waits for that preparatory slice. PSP-4 remains unchecked and
+requires separate artifact signoff. This draft does not evaluate PSP-5 beyond
+the already-approved activation/retirement boundary.
+
+Title: [save-policy PSP-4] Separate historical test obligations from current persistence coverage
+
+Labels: `enhancement`, `save-load`, `tooling`.
+
+````markdown
+## Background
+
+PSP-4 of #2914, Phase 3, depends on #2917. Prepare current Hspec and fixture-consumer coverage so PSP-5 can retire historical tests and files at gate activation. Owner policy: "Current mode only"; do not build or maintain a historical selector.
+
+`test-headless/Spec.hs` registers `save migrations`, not a group named `save compatibility`. Its aggregate and siblings include current protections as well as historical decoding: tag-target admission and `Sim.ExactFluid.saveSpec` are registered there. `Components/Compatibility.hs` also contains current recursive-item, simulation, crafting, power, climate and diagnostic assertions. Lua tests mix current behavior with literal versions and acceptance of every previous version. Deleting those families wholesale would lose current coverage.
+
+## Requirements
+
+1. Preserve current assertions in mandatory, nonempty Hspec groups using current fixtures or synthetic current values. Inspect `World/Save/Compat` families, `Components/Compatibility.hs`, `Sim/ExactFluid.hs` and Lua save/AI tests; record each moved current assertion's old and new test path. Reuse #2917's small current fixture set where suitable, retaining independent expected values and nonempty payloads. Current tests must not read the historical corpus or decode old DTOs as their setup.
+2. Preserve current registry/assembly/integrity, optional-absence versus optional-present-error behavior, unknown-data overwrite protection, diagnostic/reference rendering and current payload round trips. Keep recursive item physical values, non-default simulation/crafting/power/climate data, container observations, river names/etymology, movement hazard policy and authored flora references where the mixed families currently exercise them. Retire historical migration expectations later; do not replace these current assertions with mere successful decoding.
+3. Keep meaningful tag-admission coverage with current inputs: nonempty cell/occurrence assignments survive real staging, while invalid cell targets, absent occurrences and out-of-bounds arena plantings are detected. Preserve exact fluid remainders and identity-specific flora removal through the current world-edits codec. Split assertions that combine old-version migration with current behavior so removing the former cannot remove the latter.
+4. Separate Lua current-version/schema and transient-reset assertions from historical accepted-range/migration assertions in `Lua/SaveModules/Components.hs`, `UnitAiHold.hs`, `UnitAiLocations.hs`, `UnitAiYieldProximity.hs` and `UnitAiHarvest.hs`. Current tests require the declared current version to work and validate meaningful payload/reset behavior; they must not require an uninterrupted historical version range. Keep intentional schema assertions; do not turn every expected value into a readback from the implementation. #2916 owns current-only acceptance after future shape changes; this test preparation does not change runtime registrations.
+5. Keep existing strict default coverage intact during preparation. Move or replace current assertions now and identify historical-only tests, registrations, fixtures and consumers for PSP-5's coordinated removal. Do not add a historical mode, optional historical suite or permanent retirement manifest. Update Cabal imports/registrations and persistence-inventory coverage links when tests move. Keep current snapshot/probe helpers and feature-specific runtime coverage intact.
+
+## Acceptance
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "save components"'
+cabal test synarchy-test-headless --test-options='--match "persistence contract"'
+cabal test synarchy-test-headless --test-options='--match "persistence reference integrity"'
+cabal test synarchy-test-headless --test-options='--match "Lua persistence components"'
+python3 tools/test_save_compat_audit.py --mode current
+python3 tools/persistence_inventory_audit.py
+python3 tools/test_persistence_inventory_audit.py
+```
+
+Also run the exact nonempty new/current groups containing moved tag-admission, exact-fluid and affected Lua AI assertions; record their paths, commands and example counts. Existing AI owners are `position hold after a completed move order`, `unit location knowledge`, `harvest collection proximity` and `skill-scaled auto-harvest`; target their changed persistence subgroups. Demonstrate retained current groups use no historical fixture files and preserve distinguishing expected values. Record the before/after assertion mapping and the bounded removal list for PSP-5. Existing default historical coverage is still registered until activation. No whole headless suite, historical probe or `make ci` is required.
+
+## Out of scope
+
+Historical corpus/test deletion and gate/default activation (PSP-5), the current Python audit implementation (#2917), schema guard (#2916), production codec/accepted-version changes, runtime migration removal, gameplay changes and new historical support. Do not weaken inventory/reference/content integrity or substitute headless codec evidence for the existing fresh-process probe.
+
+Code/test inputs land in the implementation PR. Human-facing assertion mapping and coverage references land with docs-push and are linked from it; do not publish a claim that retirement is already active.
+
+## Related
+
+- #2914: epic; depends on #2917. PSP-5 consumes the prepared current coverage and removes the retired machinery at the gate switch.
+- #2915/#2916: refusal and schema guard prerequisites of activation.
+- #2912: separate delivered migration-probe opt-in work; not duplicated here.
+- #2894: tag-admission regression must survive; #2564 is separate faction retirement scope.
+- Design: `docs/designs/prerelease_save_policy_design.md`, PSP-4/P-3, D-1/D-4/D-5/D-7.
+
+<!-- issue-origin:codex -->
+````
+
+### Exact proposed tracker side effects
+
+After approval and creation, replace this line in #2914:
+
+```text
+- [ ] PSP-4. Separate historical test obligations from current persistence coverage
+```
+
+with:
+
+```text
+- [ ] PSP-4. #N — Separate historical test obligations from current persistence coverage
+```
+
+N is the created issue number; keep the epic implementation checkbox unchecked.
+Link the same number in the design PSP-4 ledger. No other tracker edits.
+
+### Verification and deduplication
+
+Read all 69 open issue titles and three all-state searches (save historical,
+compatibility test, save fixture). #2917 owns Python current-mode preparation;
+#2073 is the completed Python owner split; #2804 is a blood GPU probe setup
+problem, not Hspec policy; #2894 fixed fixture tag targets and its current
+admission assertions must survive. No duplicate PSP-4 issue found.
+Epic #2914 links #2915/#2916/#2917 consistently with this ledger.
+
+At source master `32e1af213a27b881cd5c587061e108e35f85f69b`, inspected actual
+Spec.hs and Cabal registration, mixed Compat/Components families, the tag
+admission harness and seeded failures, exact-fluid saveSpec, Lua current-version
+and historical-range pins, and inventory audit/coverage references. Relevant
+current assertions are named in the body rather than inferred from filenames.
+No implementation, test, build, engine, probe or issue review was run.
+Two children remain unchecked; PSP-4 is not yet filed.
