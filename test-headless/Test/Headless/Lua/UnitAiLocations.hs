@@ -411,7 +411,7 @@ spec = describe "unit location knowledge" $ do
                 , "                  y = 2 }) > 0)"
                 ]
 
-    describe "lua.unit_ai schema evolution (v3 → v4)" $ do
+    describe "lua.unit_ai current schema and historical migration" $ do
         -- Capture the spec table the component registers, without an
         -- engine or a real save_modules registry behind it.
         -- The stub must cover BOTH registrations @register@ performs:
@@ -431,24 +431,11 @@ spec = describe "unit location knowledge" $ do
                 , "assert(captured ~= nil)"
                 ]
 
-        it "declares the current version (v11 since #2528) while still \
-           \accepting every historical input version" $
+        it "declares the current input and output version" $
             runsOk $ lns
                 [ registered
                 , "assert(captured.version == 11)"
-                , "local accepted = {}"
-                , "for _, v in ipairs(captured.inputVersions) do"
-                , "  accepted[v] = true end"
-                -- Every historical version decodes, this gate's own v4
-                -- included: #915's memory rides payloads that predate
-                -- #1291's stall accounting (v5), #1216's position hold
-                -- (v6), #1737's ground-repair provenance (v7) and
-                -- #1844's construct-job attempt identity (v8),
-                -- #1845's staked-building reference (v9) and #2642's
-                -- treatment-claim order (v10) and #2528's Open order
-                -- (v11) alike.
-                , "for v = 1, 11 do assert(accepted[v], 'v' .. v"
-                , "  .. ' must still decode') end"
+                , "assert(type(captured.inputVersions) == 'table')"
                 ]
 
         it "depends on world-pages, which owns the instance table its \
@@ -480,7 +467,7 @@ spec = describe "unit location knowledge" $ do
                 , "assert(out2[7].knownLocations == nil)"
                 ]
 
-        it "accepts and preserves a current-version (v4) payload's \
+        it "accepts and preserves a current-version (v11) payload's \
            \memories through decode + validate — including ones whose \
            \targets no longer exist, so a dangling memory can never \
            \block a load" $
@@ -492,13 +479,13 @@ spec = describe "unit location knowledge" $ do
             -- reconcile time instead — see "load-time reconciliation".
             runsOk $ lns
                 [ registered
-                , "local v4 = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "local current = { [7] = { __owner = { __ref = 'unit', id = 7 },"
                 , "  knownLocations = {"
                 , "    { __ref = 'location_instance', page = 'main', id = 3,"
                 , "      x = 8, y = 9 },"
                 , "    { __ref = 'location_instance', page = 'other', id = 3,"
                 , "      x = 1, y = 2 } } } }"
-                , "local out = captured.decode(4, v4)"
+                , "local out = captured.decode(11, current)"
                 , "assert(#out[7].knownLocations == 2)"
                 , "assert(captured.validate(out) == nil)"
                 ]

@@ -13,6 +13,7 @@
 module Test.Headless.Sim.ExactFluid
     ( spec
     , saveSpec
+    , currentSaveSpec
     ) where
 
 import UPrelude
@@ -697,20 +698,31 @@ saveSpec = describe "world-edits: exact fluid surfaces and identity removal (#25
             , (Ocean, 3)
             , (Lake, exactSurfaceOfZ (-2) + 5) ]
 
-    it "round-trips those remainders through a real encode and decode" $ do
-        -- The LIVE edits the sim's save writeback emits, through the
-        -- component's own encode and back out of its own decode.
-        let live = [ WeSetFluidSnapshot 1 1 Lake  (exactSurfaceOfZ 6 + 1)
-                   , WeSetFluidSnapshot 2 2 Ocean (exactSurfaceOfZ 6 + 7) ]
-            -- 'minimalGlobals' names page1 as the active/visible page,
-            -- so the capture only validates for that one.
+    pure ()
+
+currentSaveSpec ∷ Spec
+currentSaveSpec = describe "world-edits current persistence" $
+    it "round-trips exact fluid remainders and identity-specific flora removal" $ do
+        let pageId = page1
+            coord = ChunkCoord 0 0
+            iid = plantedFloraInstanceId 19
+            live = [ WeSetFluidSnapshot 1 1 Lake (exactSurfaceOfZ 6 + 1)
+                   , WeSetFluidSnapshot 2 2 Ocean (exactSurfaceOfZ 6 + 7)
+                   , WeRemoveFlora 3 4 iid ]
             snap = case captureSessionSnapshot minimalGlobals
-                            [ (minimalPage page1)
+                            [ (minimalPage pageId)
                                 { pgsEdits = HM.singleton coord live } ] of
-                Right ok  → ok
-                Left errs → error ("fixture snapshot invalid: " <> show errs)
-            reread = decodeAt (ccVersion worldEditsCodec)
-                              (ccEncode worldEditsCodec snap)
-        fmap snapshotsOf reread `shouldBe` Right
-            [ (Lake, exactSurfaceOfZ 6 + 1)
-            , (Ocean, exactSurfaceOfZ 6 + 7) ]
+                Right ok → ok
+                Left errs → error ("current fixture snapshot invalid: " <> show errs)
+            decoded = ccDecode worldEditsCodec (ccVersion worldEditsCodec)
+                          (ccEncode worldEditsCodec snap)
+        case decoded of
+            Left e → expectationFailure (T.unpack (renderComponentError e))
+            Right (WorldEditsDTO pages) → do
+                let edits = concatMap HM.elems (map pedEdits pages)
+                    surfaces = [ (ft, z) | WeSetFluidSnapshotD _ _ ft z ← concat edits ]
+                    removals = [ (x, y, removed) | WeRemoveFloraD x y removed ← concat edits ]
+                surfaces `shouldBe`
+                    [ (Lake, exactSurfaceOfZ 6 + 1)
+                    , (Ocean, exactSurfaceOfZ 6 + 7) ]
+                removals `shouldBe` [(3, 4, iid)]

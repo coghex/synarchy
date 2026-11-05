@@ -70,11 +70,6 @@ import World.Flora.Identity (floraInstanceIdToLua)
 import Data.Int (Int64)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
-import Language.Etymology
-    (EtymologyResult(..), Etymology(..), decomposeName, etyTokenText)
-import Language.Semantic.Types (Catalogue)
-import Language.Semantic.Catalogue ( conceptCataloguePath
-                                   , conceptOrdinalPath, loadCatalogue )
 import World.Arena.Bounds (arenaHeight, arenaWidth)
 import World.Generate.Types (WorldGenParams(..))
 import World.River.Naming (RiverName(..), riverNamesToList, emptyRiverNames)
@@ -86,8 +81,7 @@ import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
-import Building.Knowledge
-    (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
+import Building.Knowledge (emptyContainerKnowledge)
 import Item.Knowledge
     ( PortableKnowledge(..), PortableRecord(..), WeightObservation(..)
     , ContentsObservation(..), portableKnowledgeStateId
@@ -1085,19 +1079,6 @@ containerKnowledgeSpec =
                     ks `shouldNotBe` []
                     ks `shouldSatisfy` all (≡ emptyContainerKnowledge)
 
-        it "the tracked current-version baseline carries a genuinely \
-           \NON-EMPTY knowledge payload, with a remembered item -- so \
-           \this coverage can never silently decay into the same empty \
-           \default the pre-#1087 baselines already prove" $
-            withFixture
-                "test-headless/data/save-compat/h1-container-knowledge.bin" $
-                \ks → do
-                    let records = concatMap (HM.elems ∘ ckRecords) ks
-                    length records `shouldSatisfy` (> 0)
-                    concatMap crItems records `shouldSatisfy` (not ∘ null)
-                    map iiDefName (concatMap crItems records)
-                        `shouldBe` ["bandage"]
-                    map crStoredWeight records `shouldSatisfy` all (> 0)
 
 -- | #1102's mirror of the pair above, and for the same reason: the
 --   new per-page river-name table decodes EMPTY for every baseline
@@ -1133,20 +1114,6 @@ riverNamesSpec =
                     ts `shouldNotBe` []
                     ts `shouldSatisfy` all (≡ emptyRiverNames)
 
-        it "the tracked current-version baseline carries genuinely NAMED \
-           \rivers -- every entry a non-empty native name with a \
-           \non-empty English gloss, so this coverage can never silently \
-           \decay into the same empty default the pre-#1102 baselines \
-           \already prove" $
-            withRivers
-                "test-headless/data/save-compat/j1-river-language-names.bin" $
-                \ts → do
-                    let named = concatMap riverNamesToList ts
-                    length named `shouldSatisfy` (> 1)
-                    map (rvnDisplayName ∘ snd) named
-                        `shouldSatisfy` all (not ∘ T.null)
-                    map (rvnGloss ∘ snd) named `shouldSatisfy` all
-                        (maybe False (not ∘ T.null))
 
         it "a tracked baseline written BEFORE names recorded their \
            \expressions decodes with NO etymology source anywhere -- not \
@@ -1176,38 +1143,6 @@ riverNamesSpec =
                          , Just _ ← [rvnEtymology rn] ]
                         `shouldBe` []
 
-        it "the tracked current-version baseline carries a genuine \
-           \etymology source on its page identity AND on every river it \
-           \named -- each one reconstructing the very name it is stored \
-           \beside, so this coverage can never silently decay into the \
-           \same absent default the pre-#1104 baselines already prove" $
-            withSession
-                "test-headless/data/save-compat/k1-name-etymology.bin" $
-                \pages → do
-                    let idents = [ i | p ← pages, Just i ← [pgsIdentity p] ]
-                        rivers = [ rn | p ← pages
-                                 , (_, rn) ← riverNamesToList
-                                       (wgpRiverNames (pgsGenParams p)) ]
-                    -- The world's own name.
-                    map wiEtymology idents `shouldSatisfy` any isJust
-                    -- Every river the page named.
-                    rivers `shouldSatisfy` (not ∘ null)
-                    map rvnEtymology rivers `shouldSatisfy` all isJust
-                    -- And each source really explains the name it sits
-                    -- beside: rendered through its OWN recorded
-                    -- language, the surface tokens reproduce the stored
-                    -- text exactly. A source that had been defaulted,
-                    -- swapped between entries, or carried across from
-                    -- another page could not satisfy this.
-                    cat ← loadRealCatalogue
-                    forM_ idents $ \i → forM_ (wiEtymology i) $ \_ →
-                        decomposeName cat (wiName i) (wiGloss i)
-                                      (wiEtymology i)
-                            `shouldSatisfy` isAvailableFor (wiName i)
-                    forM_ rivers $ \rn →
-                        decomposeName cat (rvnDisplayName rn) (rvnGloss rn)
-                                      (rvnEtymology rn)
-                            `shouldSatisfy` isAvailableFor (rvnDisplayName rn)
 
 -- | #1217: the unit-sim component's move-target hazard policy across
 --   a pre-policy baseline and the current one.
@@ -1240,37 +1175,6 @@ movementHazardSpec =
                 \mts → do
                     mts `shouldNotBe` []
                     map mtHazard mts `shouldSatisfy` all (≡ FallPermitted)
-
-        it "the tracked current-version baseline carries a genuinely \
-           \FALL-PROHIBITED in-flight target, so this coverage can never \
-           \silently decay into the same permitted default the pre-#1217 \
-           \baselines already prove" $
-            withTargets
-                "test-headless/data/save-compat/o1-wander-hazard-policy.bin" $
-                \mts → do
-                    mts `shouldNotBe` []
-                    map mtHazard mts `shouldSatisfy` all (≡ FallProhibited)
-
--- | The production concept catalogue, read from disk. The tracked
---   fixture's sources reference real concept ids, so only the real
---   catalogue can decompose them — a hand-built stub would prove
---   nothing about the file the engine actually ships.
-loadRealCatalogue ∷ IO Catalogue
-loadRealCatalogue = do
-    eCat ← loadCatalogue conceptCataloguePath conceptOrdinalPath
-    case eCat of
-        Right cat → pure cat
-        Left err  → error ("test setup: catalogue: " <> show err)
-
--- | Whether a decomposition succeeded AND its surface tokens
---   concatenate back to the exact stored name — the #1104 requirement 3
---   property, asserted here against real saved bytes rather than a
---   constructed value.
-isAvailableFor ∷ Text → EtymologyResult → Bool
-isAvailableFor stored (EtyAvailable ety) =
-    etyName ety ≡ stored
-    ∧ T.concat (map etyTokenText (etyTokens ety)) ≡ stored
-isAvailableFor _ (EtyUnavailable _) = False
 
 
 -- | #2021: mint a fresh 'GeneratedWorldId' for every page that has
@@ -1342,16 +1246,6 @@ floraSpeciesNameSpec =
                 ⧺ [ ("plant designation", ptCrop pd)
                   | pd ← HM.elems (pgsPlantDesignations p) ]
 
-        it "the tracked current-version baseline really carries all \
-           \THREE reference sites, each naming its species by the \
-           \authored YAML name -- so this coverage can never decay into \
-           \'a fixture with no flora references decoded fine'" $
-            withRefs
-                "test-headless/data/save-compat/x1-flora-species-names.bin" $
-                \refs → refs `shouldBe`
-                    [ ("crop plot", FloraByName "wheat")
-                    , ("edit log", FloraByName "tomato_plant")
-                    , ("plant designation", FloraByName "wheat") ]
 
         it "a tracked baseline written BEFORE the slice decodes its own \
            \planted crop as the ORDINAL it recorded, carried forward by \

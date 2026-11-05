@@ -560,245 +560,225 @@ spec = do
             , "  .. 'the v2->v3 __owner-only migration')"
             ]
 
-        it "rejects a v3 unit_ai payload with NO __owner at all, and one \
-           \whose __owner id does not match its own outer key (round-6 \
-           \review, issue #764) -- __owner is REQUIRED on every entry, \
-           \unlike lastUid/attackTargetUid/etc., which are legitimately \
-           \absent" $
-            runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(_id) return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local noOwner = { [7] = {} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 3, payload = codec.encode(noOwner) },"
-            , "})"
-            , "assert(not prep.ok, 'a v3 entry missing __owner entirely must reject the load')"
-            , "local mismatched = { [7] = { __owner = { __ref = 'unit', id = 8 } } }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 3, payload = codec.encode(mismatched) },"
-            , "})"
-            , "assert(not prep2.ok,"
-            , "  \"a __owner id that doesn't match its own outer key must reject the load\")"
-            , "local matched = { [7] = { __owner = { __ref = 'unit', id = 7 } } }"
-            , "local prep3 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 3, payload = codec.encode(matched) },"
-            , "})"
-            , "assert(prep3.ok, 'a correctly-matched __owner must load cleanly: '"
-            , "  .. table.concat(prep3.errors or {}, '; '))"
-            ]
+        describe "current Lua reference validation" $ do
+            it "current unit_ai payload validation rejects missing or mismatched __owner \
+               \whose __owner id does not match its own outer key (round-6 \
+               \review, issue #764) -- __owner is REQUIRED on every entry, \
+               \unlike lastUid/attackTargetUid/etc., which are legitimately \
+               \absent" $
+                runsOk $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "craft = { get = function(_id) return nil end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "unitAiSave.register(fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local noOwner = { [7] = {} }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(noOwner) },"
+                , "})"
+                , "assert(not prep.ok, 'a v3 entry missing __owner entirely must reject the load')"
+                , "local mismatched = { [7] = { __owner = { __ref = 'unit', id = 8 } } }"
+                , "local prep2 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(mismatched) },"
+                , "})"
+                , "assert(not prep2.ok,"
+                , "  \"a __owner id that doesn't match its own outer key must reject the load\")"
+                , "local matched = { [7] = { __owner = { __ref = 'unit', id = 7 } } }"
+                , "local prep3 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(matched) },"
+                , "})"
+                , "assert(prep3.ok, 'a correctly-matched __owner must load cleanly: '"
+                , "  .. table.concat(prep3.errors or {}, '; '))"
+                ]
 
-        it "types building_spawn's OUTER per-building key via __owner too \
-           \(round-6 review, issue #764) -- migrates a v1 payload to v3 \
-           \(synthesizing __owner even though NO lastUid was ever set), \
-           \migrates a v2 payload by adding only __owner, and rejects a \
-           \v3 payload with a missing or mismatched __owner" $
-            runsOk $ lns
-            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-            , "local buildingSpawn = require('scripts.building_spawn')"
-            , "buildingSpawn.init('test')"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "-- v1: no lastUid at all (a building that hasn't spawned yet)."
-            , "local v1 = { [12] = { lastSpawnedAt = 1.0 } }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 1, payload = codec.encode(v1) },"
-            , "})"
-            , "assert(prep.ok, 'a v1 payload with no lastUid must still migrate '"
-            , "  .. 'cleanly and gain __owner: ' .. table.concat(prep.errors or {}, '; '))"
-            , "saveModules.applyAll()"
-            , "local snap = saveModules.registry.building_spawn.snapshot()"
-            , "assert(type(snap[12].__owner) == 'table'"
-            , "  and snap[12].__owner.__ref == 'building' and snap[12].__owner.id == 12,"
-            , "  'a fresh snapshot() must carry __owner even for a building with no lastUid')"
-            , "-- v2: lastUid already wrapped, no __owner yet."
-            , "local v2 = { [12] = { lastUid = { __ref = 'unit', id = 4 } } }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 2, payload = codec.encode(v2) },"
-            , "})"
-            , "assert(prep2.ok, 'a v2 payload must migrate to v3 cleanly: '"
-            , "  .. table.concat(prep2.errors or {}, '; '))"
-            , "-- v3: missing __owner entirely must reject."
-            , "local noOwner = { [12] = {} }"
-            , "local prep3 = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 3, payload = codec.encode(noOwner) },"
-            , "})"
-            , "assert(not prep3.ok, 'a v3 entry missing __owner entirely must reject the load')"
-            , "-- v3: mismatched __owner id must reject."
-            , "local mismatched = { [12] = { __owner = { __ref = 'building', id = 13 } } }"
-            , "local prep4 = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 3, payload = codec.encode(mismatched) },"
-            , "})"
-            , "assert(not prep4.ok,"
-            , "  \"a __owner id that doesn't match its own outer key must reject the load\")"
-            ]
+            it "current building_spawn payload validation rejects missing or mismatched __owner" $
+                runsOk $ lns
+                [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+                , "local buildingSpawn = require('scripts.building_spawn')"
+                , "buildingSpawn.init('test')"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "-- Current v3 payloads require a matching __owner."
+                , "local noOwner = { [12] = {} }"
+                , "local prep3 = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 3, payload = codec.encode(noOwner) },"
+                , "})"
+                , "assert(not prep3.ok, 'a v3 entry missing __owner entirely must reject the load')"
+                , "-- v3: mismatched __owner id must reject."
+                , "local mismatched = { [12] = { __owner = { __ref = 'building', id = 13 } } }"
+                , "local prep4 = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 3, payload = codec.encode(mismatched) },"
+                , "})"
+                , "assert(not prep4.ok,"
+                , "  \"a __owner id that doesn't match its own outer key must reject the load\")"
+                ]
 
-        it "rejects a v2 payload whose wrapped reference carries the WRONG \
-           \__ref kind for its field (round-2 review, issue #764) -- \
-           \unwrapUnitState used to trust field position alone and would \
-           \have silently applied a building id as if it were a unit id" $
-            runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(_id) return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "-- attackTargetUid must be __ref='unit' -- this payload"
-            , "-- tags it 'building' instead, same numeric id."
-            , "local badKind = { [7] = {"
-            , "  attackTargetUid = { __ref = 'building', id = 8 },"
-            , "} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(badKind) },"
-            , "})"
-            , "assert(not prep.ok,"
-            , "  'a wrong-kind wrapper on attackTargetUid must reject the load')"
-            , "-- Untagged (no __ref at all) must also be rejected -- not"
-            , "-- silently treated as a bare-number v1-shaped field, since"
-            , "-- this component's declared version is 2."
-            , "local untagged = { [7] = { attackTargetUid = { id = 8 } } }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(untagged) },"
-            , "})"
-            , "assert(not prep2.ok,"
-            , "  'an untagged wrapper on attackTargetUid must reject the load')"
-            , "-- A correctly-tagged payload must still succeed -- this is a"
-            , "-- kind check, not a blanket rejection of every wrapped value."
-            , "local goodKind = { [7] = {"
-            , "  attackTargetUid = { __ref = 'unit', id = 8 },"
-            , "} }"
-            , "local prep3 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(goodKind) },"
-            , "})"
-            , "assert(prep3.ok, 'a correctly-tagged wrapper must still load: '"
-            , "  .. table.concat(prep3.errors or {}, '; '))"
-            ]
+            it "current unit_ai payload rejects a wrapped reference with the WRONG \
+               \__ref kind for its field (round-2 review, issue #764) -- \
+               \unwrapUnitState used to trust field position alone and would \
+               \have silently applied a building id as if it were a unit id" $
+                runsOk $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "craft = { get = function(_id) return nil end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "unitAiSave.register(fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "-- attackTargetUid must be __ref='unit' -- this payload"
+                , "-- tags it 'building' instead, same numeric id."
+                , "local badKind = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { __ref = 'building', id = 8 },"
+                , "} }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(badKind) },"
+                , "})"
+                , "assert(not prep.ok,"
+                , "  'a wrong-kind wrapper on attackTargetUid must reject the load')"
+                , "-- Untagged (no __ref at all) must also be rejected -- not"
+                , "-- silently treated as a bare-number legacy-shaped field."
+                , "local untagged = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { id = 8 } } }"
+                , "local prep2 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(untagged) },"
+                , "})"
+                , "assert(not prep2.ok,"
+                , "  'an untagged wrapper on attackTargetUid must reject the load')"
+                , "-- A correctly-tagged payload must still succeed -- this is a"
+                , "-- kind check, not a blanket rejection of every wrapped value."
+                , "local goodKind = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { __ref = 'unit', id = 8 },"
+                , "} }"
+                , "local prep3 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(goodKind) },"
+                , "})"
+                , "assert(prep3.ok, 'a correctly-tagged wrapper must still load: '"
+                , "  .. table.concat(prep3.errors or {}, '; '))"
+                ]
 
-        it "rejects a v2 payload whose wrapped reference has the RIGHT \
-           \__ref kind but a non-numeric or invalid id (round-3 review, \
-           \issue #764) -- a tag-only check would still accept \
-           \{__ref='unit', id='bad'}, which would unwrap into live \
-           \aiState and be silently dropped by every diagnostic that \
-           \Lua.tointeger()s the id instead of being reported" $
-            runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(_id) return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local badId = { [7] = {"
-            , "  attackTargetUid = { __ref = 'unit', id = 'bad' },"
-            , "} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(badId) },"
-            , "})"
-            , "assert(not prep.ok,"
-            , "  'a non-numeric id on a correctly-tagged wrapper must reject the load')"
-            , "-- Zero / negative / fractional ids are equally invalid --"
-            , "-- the same positive-integer contract every other id in"
-            , "-- this codebase enforces."
-            , "local zeroId = { [7] = {"
-            , "  attackTargetUid = { __ref = 'unit', id = 0 },"
-            , "} }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(zeroId) },"
-            , "})"
-            , "assert(not prep2.ok, 'a zero id must reject the load')"
-            , "local fracId = { [7] = {"
-            , "  attackTargetUid = { __ref = 'unit', id = 8.5 },"
-            , "} }"
-            , "local prep3 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(fracId) },"
-            , "})"
-            , "assert(not prep3.ok, 'a fractional id must reject the load')"
-            ]
+            it "current unit_ai payload rejects a wrapped reference with the RIGHT \
+               \__ref kind but a non-numeric or invalid id (round-3 review, \
+               \issue #764) -- a tag-only check would still accept \
+               \{__ref='unit', id='bad'}, which would unwrap into live \
+               \aiState and be silently dropped by every diagnostic that \
+               \Lua.tointeger()s the id instead of being reported" $
+                runsOk $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "craft = { get = function(_id) return nil end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "unitAiSave.register(fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local badId = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { __ref = 'unit', id = 'bad' },"
+                , "} }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(badId) },"
+                , "})"
+                , "assert(not prep.ok,"
+                , "  'a non-numeric id on a correctly-tagged wrapper must reject the load')"
+                , "-- Zero / negative / fractional ids are equally invalid --"
+                , "-- the same positive-integer contract every other id in"
+                , "-- this codebase enforces."
+                , "local zeroId = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { __ref = 'unit', id = 0 },"
+                , "} }"
+                , "local prep2 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(zeroId) },"
+                , "})"
+                , "assert(not prep2.ok, 'a zero id must reject the load')"
+                , "local fracId = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  attackTargetUid = { __ref = 'unit', id = 8.5 },"
+                , "} }"
+                , "local prep3 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(fracId) },"
+                , "})"
+                , "assert(not prep3.ok, 'a fractional id must reject the load')"
+                ]
 
-        it "accepts a ground_item reference id of 0 (round-4 review, issue \
-           \#764) -- Item.Ground's ground-item allocator is ZERO-based \
-           \(emptyGroundItems starts gisNextId at 0), unlike unit/building/ \
-           \craft_bill/item_instance's allocators, which all start at 1; a \
-           \blanket 'id >= 1' minimum incorrectly rejected the very first \
-           \ground item a save could ever legitimately reference" $
-            runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(_id) return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local zeroGid = { [7] = {"
-            , "  pickupOrder = { gid = { __ref = 'ground_item', id = 0 } },"
-            , "} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(zeroGid) },"
-            , "})"
-            , "assert(prep.ok, 'a ground_item id of 0 must be accepted: '"
-            , "  .. table.concat(prep.errors or {}, '; '))"
-            , "-- A negative ground_item id is still invalid -- the fix"
-            , "-- widens the floor to 0, it doesn't remove it."
-            , "local negGid = { [7] = {"
-            , "  pickupOrder = { gid = { __ref = 'ground_item', id = -1 } },"
-            , "} }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(negGid) },"
-            , "})"
-            , "assert(not prep2.ok, 'a negative ground_item id must still reject the load')"
-            ]
+            it "accepts a ground_item reference id of 0 (round-4 review, issue \
+               \#764) -- Item.Ground's ground-item allocator is ZERO-based \
+               \(emptyGroundItems starts gisNextId at 0), unlike unit/building/ \
+               \craft_bill/item_instance's allocators, which all start at 1; a \
+               \blanket 'id >= 1' minimum incorrectly rejected the very first \
+               \ground item a save could ever legitimately reference" $
+                runsOk $ lns
+                [ "unit = { exists = function(_uid) return true end }"
+                , "craft = { get = function(_id) return nil end }"
+                , "item = { listDefs = function() return {} end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local fakeAiState = {}"
+                , "unitAiSave.register(fakeAiState)"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local zeroGid = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  pickupOrder = { gid = { __ref = 'ground_item', id = 0 } },"
+                , "} }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(zeroGid) },"
+                , "})"
+                , "assert(prep.ok, 'a ground_item id of 0 must be accepted: '"
+                , "  .. table.concat(prep.errors or {}, '; '))"
+                , "-- A negative ground_item id is still invalid -- the fix"
+                , "-- widens the floor to 0, it doesn't remove it."
+                , "local negGid = { [7] = { __owner = { __ref = 'unit', id = 7 },"
+                , "  pickupOrder = { gid = { __ref = 'ground_item', id = -1 } },"
+                , "} }"
+                , "local prep2 = saveModules.prepareLoad({"
+                , "  { id = 'unit_ai', version = 11, payload = codec.encode(negGid) },"
+                , "})"
+                , "assert(not prep2.ok, 'a negative ground_item id must still reject the load')"
+                ]
 
-        it "rejects a v2 building_spawn payload whose lastUid has the \
-           \RIGHT __ref kind but a non-numeric id (round-3 review, \
-           \issue #764) -- mirrors the unit_ai id-type check" $
-            runsOk $ lns
-            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-            , "local buildingSpawn = require('scripts.building_spawn')"
-            , "buildingSpawn.init('test')"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local badId = { [12] = { lastUid = { __ref = 'unit', id = 'bad' } } }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 2, payload = codec.encode(badId) },"
-            , "})"
-            , "assert(not prep.ok,"
-            , "  'a non-numeric id on lastUid must reject the load')"
-            ]
+            it "current building_spawn payload rejects lastUid with the \
+               \RIGHT __ref kind but a non-numeric id (round-3 review, \
+               \issue #764) -- mirrors the unit_ai id-type check" $
+                runsOk $ lns
+                [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+                , "local buildingSpawn = require('scripts.building_spawn')"
+                , "buildingSpawn.init('test')"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local badId = { [12] = { __owner = { __ref = 'building', id = 12 },"
+                , "  lastUid = { __ref = 'unit', id = 'bad' } } }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 3, payload = codec.encode(badId) },"
+                , "})"
+                , "assert(not prep.ok,"
+                , "  'a non-numeric id on lastUid must reject the load')"
+                ]
 
-        it "rejects a v2 building_spawn payload whose lastUid carries the \
-           \WRONG __ref kind (round-2 review, issue #764) -- mirrors the \
-           \unit_ai wrapper-tag check for building_spawn's own sole \
-           \reference field" $
-            runsOk $ lns
-            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-            , "local buildingSpawn = require('scripts.building_spawn')"
-            , "buildingSpawn.init('test')"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local badKind = { [12] = { lastUid = { __ref = 'building', id = 8 } } }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 2, payload = codec.encode(badKind) },"
-            , "})"
-            , "assert(not prep.ok,"
-            , "  'a wrong-kind wrapper on lastUid must reject the load')"
-            , "local goodKind = { [12] = { lastUid = { __ref = 'unit', id = 8 } } }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 2, payload = codec.encode(goodKind) },"
-            , "})"
-            , "assert(prep2.ok, 'a correctly-tagged lastUid must still load: '"
-            , "  .. table.concat(prep2.errors or {}, '; '))"
-            ]
-
+            it "current building_spawn payload rejects lastUid with the \
+               \WRONG __ref kind (round-2 review, issue #764) -- mirrors the \
+               \unit_ai wrapper-tag check for building_spawn's own sole \
+               \reference field" $
+                runsOk $ lns
+                [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+                , "local buildingSpawn = require('scripts.building_spawn')"
+                , "buildingSpawn.init('test')"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local badKind = { [12] = { __owner = { __ref = 'building', id = 12 },"
+                , "  lastUid = { __ref = 'building', id = 8 } } }"
+                , "local prep = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 3, payload = codec.encode(badKind) },"
+                , "})"
+                , "assert(not prep.ok,"
+                , "  'a wrong-kind wrapper on lastUid must reject the load')"
+                , "local goodKind = { [12] = { __owner = { __ref = 'building', id = 12 },"
+                , "  lastUid = { __ref = 'unit', id = 8 } } }"
+                , "local prep2 = saveModules.prepareLoad({"
+                , "  { id = 'building_spawn', version = 3, payload = codec.encode(goodKind) },"
+                , "})"
+                , "assert(prep2.ok, 'a correctly-tagged lastUid must still load: '"
+                , "  .. table.concat(prep2.errors or {}, '; '))"
+                ]
         it "declares real Haskell-owned dependencies on the ACTUAL \
            \unit_ai and building_spawn registrations (issue #761 \
            \round-8 review) -- not just a synthetic component in the \
