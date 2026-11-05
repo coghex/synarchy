@@ -16,6 +16,7 @@
 module Test.Headless.World.Save.Compat.Historical
     ( frozenV90Spec
     , languageProvenanceSpec
+    , currentPageCoreSpec
     ) where
 
 import UPrelude
@@ -419,25 +420,6 @@ languageProvenanceSpec =
                     map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
                         (HM.elems (wpBase pages)) `shouldBe` [7]
 
-        it "the CURRENT v9 page core round-trips a location's significant \
-           \obligations -- taken and untaken, each bound to its own \
-           \physical item identity -- plus the instance-level clearance \
-           \notice, so the v8 absences above are a real decode outcome \
-           \and not fields nothing ever writes" $ do
-            let dto = WorldPagesDTO [currentPageCoreSignificant]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err → expectationFailure err
-                Right dto' → do
-                    let insts = instancesOf (basePageSnapshots dto')
-                                    "legacy_page"
-                    map liSignificant insts `shouldBe`
-                        [ [ LocationSignificantItem 1 "processing_unit"
-                                (Just 6101) True
-                          , LocationSignificantItem 2 "processing_unit"
-                                (Just 6102) False
-                          ] ]
-                    map liClearEventEmitted insts `shouldBe` [True]
-
         it "a frozen v5 page core comes back with NO etymology source on \
            \its page identity, its location, or its river, while every \
            \name and gloss it stored survives EXACTLY -- a save written \
@@ -472,59 +454,6 @@ languageProvenanceSpec =
                         `shouldBe` Just (LanguageProvenance
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
-
-        it "the CURRENT v8 page core round-trips an etymology source on \
-           \its page identity, its location, AND its river -- so the v5 \
-           \absences above are real decode outcomes, not fields nothing \
-           \ever writes" $ do
-            let dto = WorldPagesDTO [currentPageCoreEtymology]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err  → expectationFailure err
-                Right dto' → do
-                    let pages = basePageSnapshots dto'
-                        ident = identityOf pages "legacy_page"
-                    (wiEtymology =≪ ident) `shouldBe` Just worldNameSource
-                    map liEtymology (instancesOf pages "legacy_page")
-                        `shouldBe` [Just keepSource]
-                    map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
-                        `shouldBe` [Just ashenRiverSource]
-
-        it "the CURRENT v8 page core round-trips a river's name AND gloss, \
-           \keyed by its feature id -- so the v4 absence above is a real \
-           \decode outcome, not a table that is always empty" $ do
-            let dto = WorldPagesDTO [currentPageCoreRivers]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err  → expectationFailure err
-                Right dto' →
-                    riversOf (basePageSnapshots dto') "legacy_page"
-                        `shouldBe` [ (GeoFeatureId 3
-                                     , RiverName "Vashendral"
-                                           (Just "Ashen River")
-                                           (Just ashenRiverSource)) ]
-
-        it "the CURRENT v8 page core round-trips a location's name AND \
-           \gloss -- so the v3 absence above is a real decode outcome, \
-           \not a field that is always Nothing" $ do
-            let dto = WorldPagesDTO [currentPageCoreNamed]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err  → expectationFailure err
-                Right dto' → do
-                    let insts = instancesOf (basePageSnapshots dto')
-                                    "legacy_page"
-                    map liDisplayName insts `shouldBe` ["Vashenkoro"]
-                    map liGloss insts `shouldBe` [Just "Ashen Keep"]
-
-        it "the CURRENT v8 page core round-trips a complete ruin encounter \
-           \including typed occupant identity, home, policy, status and \
-           \one-shot feedback latches" $ do
-            let dto = WorldPagesDTO [currentPageCoreEncounter]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err → expectationFailure err
-                Right dto' →
-                    map liEncounter
-                        (instancesOf (basePageSnapshots dto') "legacy_page")
-                    `shouldBe` map liEncounter
-                        (HM.elems (lisById encounterInstances))
 
         it "a frozen pre-#2471 v10 page keeps its whole-minute clock, \
            \date, identity and generated-world id, and gains NO \
@@ -584,30 +513,6 @@ languageProvenanceSpec =
                         Just (Just (fixtureGeneratedWorldIdForPage
                                         (WorldPageId "legacy_page")))
                     wpIdsFromPayload pages `shouldBe` True
-
-        it "the CURRENT page core round-trips a NONZERO sub-minute \
-           \remainder, so the v10 migration's zero above is a real \
-           \decode outcome" $ do
-            let dto = WorldPagesDTO [currentPageCore]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err  → expectationFailure err
-                Right dto' → do
-                    let page = HM.lookup (WorldPageId "legacy_page")
-                                   (wpBase (basePageSnapshots dto'))
-                    (pgsTimeRemainder <$> page) `shouldBe` Just 0.25
-
-        it "the CURRENT v8 page core round-trips a present provenance -- \
-           \so the two absences above are a real decode outcome, not a \
-           \field that is always Nothing" $ do
-            let dto = WorldPagesDTO [currentPageCore]
-            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
-                Left err  → expectationFailure err
-                Right dto' → do
-                    let ident = identityOf (basePageSnapshots dto') "legacy_page"
-                    (wiName <$> ident) `shouldBe` Just "Legacy World"
-                    (wiLanguage =≪ ident) `shouldBe`
-                        Just (LanguageProvenance (LangSeed 0xABCDEF0123456789)
-                                  (GeneratorVersion 1))
 
         it "the real, tracked B1 (v90) fixture's own page carries NO \
            \identity at all, and migrates that way" $
@@ -1087,4 +992,89 @@ ashenRiverSource = EtymologySource
     , esLanguage = LanguageProvenance (LangSeed 0xABCDEF0123456789)
                                       (GeneratorVersion 1)
     }
+
+-- | Current page-core coverage, using synthetic current DTO values only.
+--   This suite is separate from the historical migration family so retiring
+--   old page shapes cannot remove the assertions that protect current fields.
+currentPageCoreSpec ∷ Spec
+currentPageCoreSpec = describe "current page-core persistence" $ do
+    it "round-trips significant obligations and the clearance notice" $ do
+        let dto = WorldPagesDTO [currentPageCoreSignificant]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → do
+                let insts = currentInstancesOf (basePageSnapshots dto') "legacy_page"
+                map liSignificant insts `shouldBe`
+                    [ [ LocationSignificantItem 1 "processing_unit" (Just 6101) True
+                      , LocationSignificantItem 2 "processing_unit" (Just 6102) False ] ]
+                map liClearEventEmitted insts `shouldBe` [True]
+
+    it "round-trips distinct page, location and river etymology sources" $ do
+        let dto = WorldPagesDTO [currentPageCoreEtymology]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → do
+                let pages = basePageSnapshots dto'
+                    ident = currentIdentityOf pages "legacy_page"
+                (wiEtymology =≪ ident) `shouldBe` Just worldNameSource
+                map liEtymology (currentInstancesOf pages "legacy_page") `shouldBe`
+                    [Just keepSource]
+                map (rvnEtymology ∘ snd) (currentRiversOf pages "legacy_page")
+                    `shouldBe` [Just ashenRiverSource]
+
+    it "round-trips the named river, gloss and etymology" $ do
+        let dto = WorldPagesDTO [currentPageCoreRivers]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → currentRiversOf (basePageSnapshots dto') "legacy_page"
+                `shouldBe` [ (GeoFeatureId 3, RiverName "Vashendral"
+                                (Just "Ashen River") (Just ashenRiverSource)) ]
+
+    it "round-trips the location's authored name and gloss" $ do
+        let dto = WorldPagesDTO [currentPageCoreNamed]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → do
+                let insts = currentInstancesOf (basePageSnapshots dto') "legacy_page"
+                map liDisplayName insts `shouldBe` ["Vashenkoro"]
+                map liGloss insts `shouldBe` [Just "Ashen Keep"]
+
+    it "round-trips a complete ruin encounter with its typed occupant state" $ do
+        let dto = WorldPagesDTO [currentPageCoreEncounter]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → map liEncounter
+                    (currentInstancesOf (basePageSnapshots dto') "legacy_page")
+                `shouldBe` map liEncounter (HM.elems (lisById encounterInstances))
+
+    it "round-trips a nonzero sub-minute clock remainder" $ do
+        let dto = WorldPagesDTO [currentPageCore]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → map pgsTimeRemainder
+                    (HM.elems (wpBase (basePageSnapshots dto')))
+                `shouldBe` [0.25]
+
+    it "round-trips present language provenance" $ do
+        let dto = WorldPagesDTO [currentPageCore]
+        case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+            Left err → expectationFailure err
+            Right dto' → (wiLanguage =≪ currentIdentityOf
+                    (basePageSnapshots dto') "legacy_page")
+                `shouldBe` Just (LanguageProvenance
+                    (LangSeed 0xABCDEF0123456789) (GeneratorVersion 1))
+
+currentIdentityOf ∷ WorldPages → Text → Maybe WorldIdentity
+currentIdentityOf pages pid =
+    pgsIdentity =≪ HM.lookup (WorldPageId pid) (wpBase pages)
+
+currentInstancesOf ∷ WorldPages → Text → [LocationInstance]
+currentInstancesOf pages pid = maybe []
+    (instancesToList ∘ wgpLocationInstances ∘ pgsGenParams)
+    (HM.lookup (WorldPageId pid) (wpBase pages))
+
+currentRiversOf ∷ WorldPages → Text → [(GeoFeatureId, RiverName)]
+currentRiversOf pages pid = maybe []
+    (riverNamesToList ∘ wgpRiverNames ∘ pgsGenParams)
+    (HM.lookup (WorldPageId pid) (wpBase pages))
 
