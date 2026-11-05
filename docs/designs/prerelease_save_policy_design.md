@@ -45,13 +45,16 @@ concrete precondition
   reproducibility. At least one real-engine current-version save, process
   exit, fresh-process load, and resave remains selected for persistence changes.
   The authoritative rules agree and a public-release restoration checklist is
-  recorded. The separate migration-probe opt-in work must also be confirmed
+  recorded. Historical tooling, tests and corpus are removed at PSP-5 activation;
+  reusable current helpers remain. No historical mode is maintained. The separate
+  migration-probe opt-in work must also be confirmed
   delivered before declaring the whole policy operational.
 - **Users and operators:** The owner loading development saves; contributors
   evolving persisted gameplay; reviewers and CI maintainers.
 - **Arc label:** Existing `save-load`; no new label proposed.
 - **Release boundary:** Reinstating the full regime is a release prerequisite,
-  not a reason to leave this pre-release epic open until release.
+  not a reason to leave this pre-release epic open until release. Build its
+  baseline and verification afresh under D-7; do not revive pre-release saves.
 
 ## Verified current state and evidence
 
@@ -124,7 +127,7 @@ now v11 in `Lua/UnitAiHold.hs`, `UnitAiLocations.hs`,
 `UnitAiYieldProximity.hs`, `UnitAiHarvest.hs`, and
 `Lua/SaveModules/Components.hs`; some also demand every historical input
 version. Current-version assertions still have value; requiring the entire
-old version range is a separate promise that must become optional.
+old version range is a separate promise that D-7 retires.
 
 ### Tests, CI, and the coverage that stays
 
@@ -158,7 +161,7 @@ old version range is a separate promise that must become optional.
   `tools/probe_runner_registry.py`. It uses `tools/persistence_snapshot.py`
   and the compiled `exe:synarchy-save-codec` through the compatibility tool's
   shared bridge. Preserve that bridge and comparison protocol even if
-  historical checking becomes optional. The generic round trip does not
+  historical checking is retired. The generic round trip does not
   replace feature-specific runtime coverage such as the camera-ring
   admission failure identified in #2557/PR #2911.
 - The separate opt-in slice owns `save_compat_migration_probe.py` selection,
@@ -202,8 +205,9 @@ retired.
 ### D-4. Preserve working code, safe refusal, and current round trips
 
 Keep existing migration/DTO source where practical, stop requiring new ones,
-and retain current fresh-process round trips. Broken historical fixtures may
-be retired or regenerated with their provenance. The owner's later D-5
+and retain current fresh-process round trips. D-7 supersedes the earlier
+option to regenerate broken historical fixtures: retire the historical corpus
+at activation, preserving its provenance in git history. The owner's later D-5
 simplification supersedes the earlier permission to keep safe older decoders
 registered on a changed carrier: after a shape change that carrier accepts
 only its new current version. Remove its older accepted dispatches and affected
@@ -247,6 +251,28 @@ recording and applying both choices to this design. The later whole-design
 readiness signoff is recorded at the top of this document; issue creation
 belongs to the manager's separate processing workflow.
 
+### D-7. Retire pre-release historical tooling at activation
+
+Owner answer on PSP-3: "Current mode only". Build only current-save audit and
+self-test selection, live registrations, current codec/helpers and a small
+current fixture set with independent expectations. No historical mode is built
+or maintained. PSP-3 prepares those replacements; PSP-4 preserves current Hspec
+and consumer assertions; PSP-5 removes historical machinery in the same change
+that switches gates, so strict defaults never break before activation.
+
+Remove the historical audit, 57-fixture corpus and obsolete records, B1
+fingerprint/helper checks, historical reproducibility and historical-only tests
+from the tree. Retire the strict append-only audit replaced by PSP-2, retaining
+reusable current helpers. Git history preserves the retired material. Keep the
+APIs/helpers used by persistence_snapshot.py and the persistence_contract probe.
+Release compatibility starts afresh at the first public-release baseline; it
+does not revive a dormant historical mode or the pre-release corpus.
+
+Authority: verified syn-manager reply `5qm4ui6r7vjk4yfumtujxpxs3s` to
+PSP-3 question `p9ne2z4dqarw4v29qbc3rgtpu2`, 2026-11-05 16:44:49 UTC,
+relaying the owner and directing the P-3/PSP-3/PSP-4 design changes. It requires
+a redraft for separate signoff and explicitly forbids filing that draft yet.
+
 ## Desired behavior and scope
 
 For a persisted-layout change, a contributor advances every affected on-disk
@@ -261,7 +287,7 @@ intact and paused. The file is not rewritten and an incompatible authoritative
 generation does not silently fall back to `.prev`.
 
 In scope: the rule texts, schema/version enforcement, historical audit and
-test selection, fixture retirement bookkeeping, CI/local parity, and release
+test retirement, replacement current coverage, CI/local parity, and release
 restoration instructions. Out of scope: implementing gameplay, redesigning
 the envelope, deleting working migration code, migrating the owner's saves,
 restoring deterministic replay, relaxing content/reference integrity, changing
@@ -319,54 +345,53 @@ explicit review evidence and a distinguishing test.
 **Implementation placement approved with PSP-2 revision 2:** enum changes
 use the same new guard; do not add a separate enum-audit pre-release mode or
 updater. Keep the existing strict enum command/default gates unchanged during
-preparation. PSP-5 switches mandatory selection to the new guard and retains
-the old audit for explicit historical use. Off-wire enum changes need no
+preparation. PSP-5 switches mandatory selection to the new guard and retires
+the old strict append-only audit with the historical machinery under D-7.
+Off-wire enum changes need no
 fictional component bump, while newly persisted types must enter coverage.
 This replaces the previous draft's separate enum mode. Verified syn-manager
 reply `f3jc64fgxzn9q58ky9bjn3m5s2` to question
 `dc4x2bdhwdpx5dizc95psm85g6` relayed the owner: "Approve as drafted".
-The revised issue is #2916.
+The revised issue is #2916. Its requirement 4 was reconciled by the manager
+after D-7 (verified reply `2j49dp577uskvcfc24t956ayen`, 2026-11-05);
+GitHub readback confirms the historical-retention drift is resolved.
 
-### P-3. Split current correctness from optional historical evidence
+### P-3. Prepare current correctness and retire historical obligations
 
-Provide explicit current and historical audit/test selections. The current
-selection retains discovery correctness, honest required/optional registration,
-malformed/unsupported refusal, current codec behavior and bridge errors, and
-the automated schema guard. Historical selection owns the B1 frozen fingerprint,
-oldest-version obligations, historical baselines, migration expectations, and
-historical corpus reproduction. Synthetic tests of those retained tools can
-remain cheap default tests if they do not impose the real historical corpus
-as a prerequisite.
+Build only current audit/self-test selection. Retain live discovery, honest
+required/optional registration, malformed/unsupported refusal, current codec
+behavior and bridge errors. Combine this with PSP-2's schema guard at activation.
+No historical mode is built or maintained.
 
-Remove the requirement to add a new permanent baseline on every component
-bump. Maintain a small replaceable current fixture set only for tests that
-need real bytes. Update its summaries, checksums, and independent descriptor
-expectations together, exercising nonempty changed data; do not weaken a
-descriptor oracle into comparing the implementation to itself. Current-version
-pins remain conscious assertions, but no longer demand an uninterrupted range
-of historical versions.
+Use a small replaceable current fixture set, with nonempty data, provenance,
+checksums, summaries and independent descriptors. Synthetic current values may
+supplement it. Do not compare the implementation with its own generated expected
+output, relabel old bytes, or infer currentness from migrationTarget=current.
+Current selection must work without opening the historical corpus.
 
-Retire a broken historical fixture with its manifest entry, summary, oracle
-row, and named consumers in the same change. Preserve the retirement reason
-and original provenance in the existing retirement record; never relabel old
-bytes as current or claim they remain supported. Before removing any test,
-retain its current behavioral assertion using current fixtures or synthetic
-current values. Optional historical runs must report absent/retired coverage
-honestly; a reduced corpus is not proof of release compatibility. Bulk fixture
-or DTO deletion is not a prerequisite to completing this arc.
+PSP-3 prepares current audit/self-tests; PSP-4 preserves current Hspec and fixture
+consumer behavior. PSP-5 switches defaults and removes the historical audit,
+corpus, obsolete manifest/oracle records, B1 fingerprint/helper obligations,
+historical reproducibility and historical-only tests together. Preserve current
+assertions and reusable production codec/comparison helpers before deletion.
+Historical provenance remains in git history, not a maintained retirement corpus.
+Existing strict defaults stay intact through preparation; no new historical
+selection or promise is introduced. Runtime migration/DTO source may remain.
 
 ### P-4. Activate one consistent pre-release policy across all entry points
 
 CI, `make ci`, direct audit commands, Hspec registration, and documented review
 gates must agree. Path selection alone must not re-enable historical obligations
 on `master` pushes, on Cabal changes, or through the default self-test façade.
-An explicit historical invocation remains available. Keep the current
+PSP-5 removes the historical machinery when those defaults switch. Keep the
+current
 fresh-process probe selected under its existing persistence-change policy;
 there is no need to reduce its three existing cycles to one.
 
 The current schema guard and current codec checks remain mandatory. Retain
-framing safety checks; only historical immutability/reproduction obligations
-become optional. `ci_parity_save_compat.py` must test the new actual policy,
+framing safety checks; historical immutability/reproduction obligations
+are retired, including their obsolete implementations and records.
+`ci_parity_save_compat.py` must test the new actual policy,
 including absence of implicit historical work, rather than deleting its parity
 assertions. The standalone migration-probe opt-in issue owns probe defaults;
 verify that dependency without expanding this design into its issue body.
@@ -380,7 +405,7 @@ traceable. Whole-design readiness signoff is recorded above.
 ### Q-1. Automated current-schema guard or review enforcement?
 
 Resolved by D-5: automated current-schema/version guard. PSP-2 and PSP-5 no
-longer await this decision. PSP-3/PSP-4 remain preparatory partitions until
+longer await this decision. PSP-3/PSP-4 prepare current coverage until
 PSP-5 activates the replacement mandatory safety gates.
 
 ### Q-2. Which saves enter the release compatibility promise?
@@ -482,59 +507,53 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 
 ### PSP-3. Separate current-save auditing from historical compatibility auditing
 
-- **Outcome:** Audit and Python self-test entry points can select current
-  correctness independently of the historical corpus and its reproducibility.
-- **Scope / touched paths:** `tools/save_compat_audit.py`, its common,
-  components, manifest, fingerprint, registration and generation owners;
-  `tools/test_save_compat_audit*.py`, particularly coverage, codec, comparison,
-  and reproducibility selection; `docs/save_compat/manifest.json` if explicit
-  selection metadata is needed. Preserve `save_compat_audit_codec.py`'s
-  production-codec API for `persistence_snapshot.py` and the current probe.
-- **Phase / ordering:** 2, independent preparation after PSP-1.
-  **Depends on:** PSP-1.
-- **Relevant decisions:** D-1, D-3, D-4, D-5. **Open questions:** None.
-- **Acceptance signals:** Current mode does not demand oldest-version coverage,
-  B1 helper completeness/fingerprint stability, or a permanent baseline per
-  bump. Explicit historical mode still diagnoses those obligations honestly.
-  Current descriptors, checksums and helper failure behavior are still checked
-  for the current fixtures tests actually use. Synthetic negative tests prove
-  classification and neither mode silently runs the other.
-- **Gates:** The façade's targeted current/historical self-test selections;
-  codec and comparison self-tests through the compiled helper; current audit;
-  one explicit historical audit against the still-intact corpus to validate
-  partitioning. No migration engine probe is required.
-- **Out of scope:** Changing CI defaults, Hspec registration, retiring all
-  fixtures, or altering production serialization.
+- **Outcome:** Current audit and Python self-tests run independently of historical
+  files; no historical mode is built or maintained.
+- **Scope / touched paths:** `tools/save_compat_audit.py`, necessary discovery,
+  manifest, codec and helper owners; `tools/test_save_compat_audit*.py`; a small
+  separate current fixture set and its independent expected descriptors. Preserve
+  production codec/comparison APIs used by `persistence_snapshot.py` and the probe.
+- **Phase / ordering:** 2, independent preparation alongside PSP-2.
+  **Depends on:** PSP-1 (#2915).
+- **Relevant decisions:** D-1, D-3, D-4, D-5, D-7. **Open questions:** None.
+- **Acceptance signals:** Live registration, current framing/codec/helper behavior
+  and fixture integrity remain checked. Current selection never opens historical
+  files or executes historical reproducibility. Nonempty selections and negative
+  cases prove corrupt current inputs fail and absent historical inputs do not
+  matter. Current expectations are independent of the implementation under test.
+- **Gates:** `cabal build all`; `python3 tools/save_compat_audit.py --mode current`;
+  `python3 tools/test_save_compat_audit.py --mode current`, including compiled
+  codec and comparison checks. Verify old default selection stays unchanged.
+- **Retirement boundary:** PSP-5 removes historical tooling/corpus/tests at the
+  gate switch after PSP-4 prepares current consumers. No historical-mode work.
+- **Out of scope:** Default/CI activation, historical deletion, Hspec registration,
+  schema guard implementation, or production serialization changes.
 
 ### PSP-4. Separate historical test obligations from current persistence coverage
 
-- **Outcome:** Hspec and fixture consumers distinguish optional legacy promises
-  from mandatory current behavior, and fixture retirement is an atomic operation.
-- **Scope / touched paths:** `test-headless/Spec.hs`,
-  `World/Save/Compat*.hs` and its families, `World/Save/Components/Compatibility.hs`,
-  the Lua current-version pins listed above, `test-headless/data/save-compat/`,
-  `docs/save_compat/manifest.json`, descriptor/summary consumers in the Python
-  codec and reproducibility tests, and Cabal registration if needed. Inspect
-  the extra `save migrations` registrations for tag staging and exact fluid
-  state; retain their current semantics in mandatory groups. Update inventory
-  coverage links only if renamed tests require it; no audit relaxation.
+- **Outcome:** Current Hspec and fixture consumer assertions survive retirement
+  of historical obligations. Do not build a maintained historical selector.
+- **Scope / touched paths:** `test-headless/Spec.hs`, `World/Save/Compat*.hs`,
+  `World/Save/Components/Compatibility.hs`, Lua current-version pins, current
+  fixtures and their consumers, and Cabal registration as needed. Extract current
+  tag-staging and exact-fluid assertions from the mixed `save migrations` groups.
+  Keep persistence inventory coverage links valid without relaxing its audit.
 - **Phase / ordering:** 3, critical path. **Depends on:** PSP-3.
-- **Relevant decisions:** D-1, D-4, D-5. **Open questions:** None;
-  activation still waits for the mandatory guard and PSP-5.
-- **Acceptance signals:** A nonempty mandatory current suite covers registry,
-  assembly, integrity, storage/unknown-optional protection and current payloads.
-  Historical migration cases have an explicit opt-in selector with a visible
-  count. Removing one obsolete fixture updates every consumer together; a
-  needed behavioral assertion is replaced with current data. No empty-match
-  success or blanket deletion of `Compatibility`/`Compat` modules counts.
-  Current-version tests no longer imply acceptance of every earlier version.
-- **Gates:** Actual current save groups, `persistence contract`,
-  `persistence reference integrity`, `Lua persistence components`, moved
-  feature-specific groups; PSP-3's current self-tests; persistence inventory
-  audit and its self-tests. Preserve and verify an explicit historical selector
-  while leaving existing default coverage active until PSP-5.
-- **Out of scope:** Proactive bulk fixture removal, removal of useful migration
-  implementations, reducing feature-specific current round trips.
+- **Relevant decisions:** D-1, D-4, D-5, D-7. **Open questions:** None.
+- **Acceptance signals:** Nonempty mandatory current groups cover registry,
+  assembly, integrity, storage/unknown-optional protections and current payloads.
+  Replace historical fixture dependencies with current/synthetic inputs and retain
+  meaningful independent expectations. Current-version tests need not accept every
+  earlier version. No empty-match success or blanket Compat deletion counts.
+- **Gates:** Actual current save groups, `persistence contract`, `persistence
+  reference integrity`, `Lua persistence components`, moved feature groups,
+  PSP-3 current self-tests, and persistence inventory audit/self-tests.
+- **Retirement boundary:** Prepare retained current coverage here, leave strict
+  default coverage intact until PSP-5, and identify historical-only registrations,
+  consumers and records for removal together at that activation. Do not maintain
+  an optional historical suite. PSP-5 owns deletion and the default switch.
+- **Out of scope:** Removing useful runtime migrations, reducing current round
+  trips, historical-selector construction, or premature gate/corpus retirement.
 
 ### PSP-5. Activate the pre-release gate set and publish the operating policy
 
@@ -544,6 +563,10 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 - **Scope / touched paths:** `.github/workflows/ci.yml`, `tools/ci-local.sh`,
   `tools/ci_expensive_gates.py`, `tools/ci_parity_{audit,config,save_compat}.py`
   and affected parity tests; the audit/test defaults prepared in PSP-2–4;
+  removal of historical audit/strict enum audit, B1 checks, reproducibility, the
+  57-fixture historical corpus and obsolete manifest/oracle records, historical-only
+  Hspec/Python tests, registrations and consumers. Preserve reusable current
+  helpers and current fixtures/assertions; retired provenance remains in git history;
   root `CLAUDE.md`, `src/World/Save/CLAUDE.md`, `docs/persistence_contract.md`
   §5 and test disposition, `docs/engine_contracts.md` §The `make ci` gate set,
   §Enum append-only audit and save/load wording, `tools/README.md` and relevant
@@ -552,13 +575,15 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
   the lab's authority or blindly editing measured corpus records.
 - **Phase / ordering:** 4, critical path. **Depends on:** PSP-1, PSP-2,
   PSP-3, PSP-4; confirm the manager's separate probe opt-in issue #2912 has landed.
-- **Relevant decisions:** D-1–D-6. **Open questions:** None. Implementation
+- **Relevant decisions:** D-1–D-7. **Open questions:** None. Implementation
   depends on PSP-1–PSP-4 and #2912 as stated above.
 - **Acceptance signals:** Default invocations require the current guard/tests
-  and never historical corpus success; explicit historical invocation works.
+  and never historical corpus success. Historical machinery is removed in the
+  same change as gate activation; no historical mode remains. Current commands
+  and production snapshot/probe helpers work without the retired files.
   Save/Cabal/fixture changes and master pushes cannot implicitly restore old
   obligations. CI/local parity tests prove both positive current selection and
-  negative historical selection. `persistence_contract` remains CI-eligible;
+  absence of implicit historical selection and stale references. `persistence_contract` remains CI-eligible;
   inventory/capability gates are unchanged. Rules no longer require freezing
   an outgoing pre-release DTO, a legacy baseline/oracle row per bump, or the
   migration probe. They name the actual version boundary and release checklist.
@@ -581,7 +606,9 @@ rule text claiming activation before the implementing gates are ready.
 ## Public-release restoration checklist
 
 The release owner must complete this checklist before public release; it is
-not a new child issue to file during this design task.
+not a new child issue to file during this design task. Historical pre-release
+tooling and fixtures have been retired under D-7. Git history is reference
+material, not a dormant supported mode to re-enable.
 
 1. Declare the first public-release save format as the supported baseline,
    following D-6, and record the retention promise from that baseline forward.
@@ -589,16 +616,16 @@ not a new child issue to file during this design task.
    metadata, Lua schemas and framing; capture real, nonempty release fixtures
    with provenance, checksums, canonical summaries and descriptor oracles.
 2. Restore the requirement that evolution of supported formats preserves their
-   exact historical decoders and supplies explicit migrations. Re-enable
-   historical fingerprint and append-only protections, with explicit migration
+   exact historical decoders and supplies explicit migrations. Build release-era
+   fingerprint and append-only protections afresh, with explicit migration
    exceptions only through safe frozen representations. Keep current version
    enforcement and transaction/refusal tests as well.
-3. Restore supported-baseline manifest coverage: required/current/oldest versions,
+3. Build fresh supported-baseline manifest coverage: required/current/oldest versions,
    declared-vs-real descriptor agreement, fixture presence/integrity, historical
    canonical-result checks and reproducibility for supported public-release
    formats. Do not resurrect retired pre-release saves or repair their corpus
    as a release requirement; they remain outside the compatibility promise.
-4. Restore mandatory historical Hspec selection, the migration probe's real
+4. Establish release-baseline historical Hspec coverage, the migration probe's real
    load/publish/resave/restart/reload coverage, sweep/lab selection, CI and
    `make ci` parity, and the relevant expensive-gate selection. Run the actual
    release validation; turning a flag back on is not evidence of passing it.
@@ -608,9 +635,12 @@ not a new child issue to file during this design task.
 
 ## Handoff
 
-This design has six settled decision records and five delivery slices. The
+This design has seven settled decision records and five delivery slices. The
 owner amended D-5 during PSP-2 processing to require current-only acceptance
 after a shape change; the revised PSP-2 artifact is approved and filed as #2916.
+D-7 subsequently requires current-only auditing and retires historical machinery
+at PSP-5 activation. PSP-3 and PSP-4 prepare current coverage; their revised
+tracker artifacts still require separate approval.
 D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
@@ -624,6 +654,11 @@ approval for every tracker artifact. Recheck the tracker and #2912 during
 processing; this publication does not itself create or approve issue bodies.
 
 ## EPIC processing record
+
+D-7 supersedes historical-mode wording in the original approved bodies below.
+The manager reconciled #2916 requirement 4 (verified message
+`2j49dp577uskvcfc24t956ayen`); readback confirmed it. The original bodies remain
+here as approval evidence. Exact #2914 amendments await PSP-3 revision 2 signoff.
 
 The body below records the original approved issue. Amended D-5 supersedes
 its retained-decoder wording; the approved PSP-2 revision 2 included exact
@@ -910,82 +945,108 @@ evaluated. No builds, tests, engines or probes were run for this redraft.
 
 ## Pending PSP-3 tracker proposal
 
-Drafted under the continuation in verified syn-manager approval reply
-`f3jc64fgxzn9q58ky9bjn3m5s2`. PSP-3 remains unchecked and awaits its own
-artifact signoff. Its prerequisite PSP-1 is linked as #2915; implementation
-waits for that issue to land. PSP-2 (#2916) is independent preparation.
+Revision 2, current mode only. Supersedes the draft published at `3f1283bdac`
+and question `p9ne2z4dqarw4v29qbc3rgtpu2` (continuation
+`ubqxpa2w2fzrq4xdxfewkcc3qw`). Owner revision instruction and provenance are
+recorded in D-7. This draft is not approved and no issue has been created.
 
 Title: [save-policy PSP-3] Separate current-save auditing from historical compatibility auditing
 
-Labels: `enhancement`, `save-load`, `tooling` (existing).
+Labels: `enhancement`, `save-load`, `tooling`.
 
 ````markdown
 ## Background
 
-PSP-3 of #2914, Phase 2, independent preparation after PSP-1; depends on #2915. It can proceed alongside #2916. Prepare explicit current/historical audit selections here; PSP-5 activates the new default policy.
+PSP-3 of #2914, Phase 2, depends on #2915; independent preparation alongside #2916. The owner chose "Current mode only": build current-save auditing and self-tests, with no maintained historical mode. PSP-5 switches defaults and removes historical machinery after PSP-3/4 preserve current coverage.
 
-`save_compat_audit_manifest.py:audit` currently combines live registration/fixture integrity with B1 fingerprint/helper checks, historical baseline coverage and oldest-version obligations. `test_save_compat_audit.py` only partitions by reproducibility; its ordinary selection still decodes historical fixtures and demands the full corpus. The codec/comparison owners also expose APIs used by `persistence_snapshot.py` and the current fresh-process probe, so removing historical obligations must not remove those APIs or their current-behavior tests.
+`save_compat_audit_manifest.py:audit` mixes live registrations and fixture integrity with B1 fingerprint/helper checks, historical coverage and oldest-version obligations. The self-test facade only partitions reproducibility; ordinary tests still demand historical fixtures. Codec/comparison helpers also serve `persistence_snapshot.py` and the current `persistence_contract` probe and must survive.
 
 ## Requirements
 
-1. Add explicit `--mode current` and `--mode historical` audit and self-test selections through the existing `save_compat_audit.py` and `test_save_compat_audit.py` facades. Keep existing no-mode/default commands and their mandatory coverage unchanged until PSP-5. Preserve one self-test facade and the existing owner-module boundaries.
-2. Current mode checks live Haskell/metadata/Lua registration discovery, honest required/optional declarations, current framing/codec behavior and helper failures. It must not require B1 fingerprint/helper completeness, oldest-version coverage, historical migration success/reproducibility or a permanent historical baseline for every bump. For current fixtures that tests actually need, retain file/checksum/summary integrity and independent expected descriptors, verified through the real compiled codec with nonempty data. Do not replace independent expectations with output generated by the implementation under test. #2916 owns schema/version enforcement; PSP-5 combines that guard with this current mode.
-3. Classify current fixture/test inputs explicitly. Do not infer currentness from a baseline's `migrationTarget: current`: historical fixtures also target today's decoder. Current selection must run without reading or decoding the historical corpus. Use a small replaceable current set or synthetic current values where appropriate, preserving the behavioral assertions that mixed tests presently provide. Current selected fixture corruption or a dishonest descriptor remains a failure; historical-only damage cannot make current mode fail. Keep fixture provenance honest, and never relabel old bytes as current.
-4. Historical mode retains the historical coverage/fingerprint/migration obligations and diagnoses missing or retired coverage honestly. Preserve the tracked historical corpus for this preparatory change; if any necessary retirement occurs, update its manifest, summary, independent oracle and consumers together and retain its original provenance/reason. A reduced corpus must not report full release compatibility.
-5. Partition self-tests by what they require, not just filename. Keep current codec/helper, malformed/unsupported refusal and comparison protocol regressions using current/synthetic inputs. Preserve `save_compat_audit_codec.py` operations and facade re-exports used by `persistence_snapshot.py`, including compiled-helper resolution and the distinct equal/mismatch/decode/tool-error outcomes. Retain registration/generation rollback behavior. Cheap synthetic historical-tool checks may be shared if they require no historical corpus; do not silently execute historical corpus work in current mode.
-6. Add selection and negative tests: every test is explicitly classified, duplicate/unclassified entries and empty selections fail, selected counts are nonzero, neither mode silently expands to the other, and reproducibility filters cannot leak historical work into current mode. Cover historical-only missing/corrupt inputs passing current mode but failing historical mode, and current fixture/checksum/descriptor corruption failing current mode. Keep existing reproducibility flags' no-mode behavior; reject incompatible combinations clearly.
+1. Add `--mode current` to `tools/save_compat_audit.py` and `tools/test_save_compat_audit.py`. Build only that new selection; no historical mode. Leave existing no-mode commands and strict default coverage unchanged until PSP-5. Preserve the existing facade/owner boundaries where useful.
+2. Current auditing checks live Haskell/metadata/Lua registrations, required/optional declarations, current framing/codec behavior and helper failures. It requires no B1 fingerprint/helper completeness, oldest-version coverage, historical migration/reproducibility or permanent baseline per bump. #2916 owns schema/version enforcement.
+3. Use a small replaceable set of current fixtures, with nonempty data, provenance, checksums, summaries and independent expected descriptors checked by the real compiled codec. Synthetic current values may supplement them. Do not derive expected results from the implementation under test, relabel historical bytes as current, or infer currentness from `migrationTarget: current`. Current selection must not read or decode the historical corpus.
+4. Preserve current codec/helper, malformed/unsupported refusal and comparison regressions using current inputs. Keep APIs/re-exports used by `persistence_snapshot.py` and the current probe, including compiled-helper resolution and distinct equal/mismatch/decode/tool-error outcomes. Preserve current registration/generation rollback behavior where retained. Mixed tests must retain their current assertions before historical dependencies are removed.
+5. Self-tests prove a nonempty current selection; duplicate or missing selected test registrations and empty selections fail. Missing/corrupt historical-only files do not affect current mode. Corrupt current bytes/checksums and dishonest descriptors fail. Prove current mode never executes historical reproducibility; reject incompatible legacy reproducibility flags clearly.
+
+## Retirement boundary
+
+This slice prepares current audit/self-tests and current fixtures. PSP-4 prepares current Hspec coverage and fixture consumers. PSP-5, in the same change that switches the gates, removes the historical audit, the 57-fixture historical corpus and its obsolete manifest/oracle records, B1 fingerprint/helper checks, historical reproducibility and historical-only tests. It also retires the strict append-only audit replaced by #2916, preserving reusable current helpers. Historical material survives in git history; no historical mode is built or maintained. Existing strict defaults remain intact until that activation. The public-release checklist starts fresh from the first release baseline.
 
 ## Acceptance
 
 ```bash
 cabal build all
 python3 tools/save_compat_audit.py --mode current
-python3 tools/save_compat_audit.py --mode historical
 python3 tools/test_save_compat_audit.py --mode current
-python3 tools/test_save_compat_audit.py --mode historical --without-reproducibility
 ```
 
-Expected: both explicit audits pass against the intact selected inputs; both self-test selections execute nonempty assertions and pass, including compiled-codec and comparison checks. Synthetic negative cases establish the selection/failure matrix above. Record selected test/fixture identities and counts, proving that historical-only files and reproducibility are not opened/executed by current mode. Verify existing no-mode commands still select their original coverage without running the same tests twice solely to prove selection. No migration engine probe, full headless suite or `make ci` is required.
+Both current selections pass; self-tests execute nonempty compiled-codec/comparison assertions and the negative cases above. Record selected test/fixture identities and counts. A synthetic tree without historical files still passes current selection. Verify unchanged no-mode selection during preparation without duplicating expensive runs just to prove selection. No new historical mode, migration engine probe, whole headless suite or `make ci` is required.
 
 ## Out of scope
 
-CI/local default activation (PSP-5), Hspec registration changes (PSP-4), implementing the schema guard (#2916), broad fixture deletion, changing production serialization or the migration-probe opt-in work.
-
-Scope: audit/self-test facades and necessary existing owner modules; explicit manifest selection metadata only if needed. Tool-consumed manifest/fixture records belong with the code PR; usage/contracts/evidence land with docs-push and are linked in its body.
+Default/CI activation and historical deletion (PSP-5), Hspec preparation (PSP-4), schema guard implementation (#2916), production serialization changes, and probe opt-in work. Scope is audit/self-test facades, necessary owner helpers and current fixture records. Tool-consumed records belong in the code PR; human documentation lands with docs-push and is linked from it.
 
 ## Related
 
-- #2914: epic; depends on #2915. PSP-4 depends on this partition; PSP-5 activates it.
-- #2916: independent schema/version guard preparation; do not duplicate it.
+- #2914: epic; #2915: prerequisite; #2916: independent current-schema guard.
 - #2912: separate delivered probe opt-in dependency of activation.
-- #2049/#2073: existing production/test owner splits; this changes selection policy, not those boundaries.
-- Design: `docs/designs/prerelease_save_policy_design.md`, PSP-3/P-3, D-1/D-3/D-4/D-5.
+- #2049/#2073: prior production/test owner splits; preserve useful boundaries.
+- Design: `docs/designs/prerelease_save_policy_design.md`, P-3/PSP-3, D-1/D-3/D-4/D-5/D-7.
 
 <!-- issue-origin:codex -->
 ````
 
-Approval also authorizes this exact replacement in epic #2914, with N
-bound to the new issue number, and the matching PSP-3 ledger link:
+### Exact proposed tracker side effects
 
-```markdown
+After separate signoff and creation, apply only these three exact replacements
+to #2914, keeping its checkbox unchecked. N is the newly created issue number.
+Link that same number in the design PSP-3 ledger. No sibling issue edits.
+
+1. Replace:
+
+```text
 - [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
 ```
 
-becomes:
+with:
 
-```markdown
+```text
 - [ ] PSP-3. #N — Separate current-save auditing from historical compatibility auditing
 ```
 
-The epic implementation checkbox stays unchecked. No other tracker edits.
+2. Replace:
 
-Evidence/dedup: all 68 open titles and three open/closed searches (save audit,
-compatibility, save fixture) checked. #2073 split the existing test owners;
-it did not separate current/historical policy selection. #2049 is the delivered
-production split. No duplicate open issue found. Epic child links #2915/#2916
-match the ledger; the actual #2915 body was rechecked. Verified the combined
-manifest audit, fixture integrity and registry hooks, reproducibility-only
-facade selection, codec descriptor oracle, comparison outcomes and the
-persistence_snapshot imports. Historical baseline migration targets do not
-establish that bytes are current. No later slice was evaluated. No builds,
-tests, engines or probes were run while drafting.
+```text
+Explicit historical runs remain available and report retired coverage honestly.
+```
+
+with:
+
+```text
+PSP-3/4 prepare current coverage; PSP-5 switches gates and removes historical auditing, the 57-fixture corpus and obsolete records, B1 checks, historical reproducibility/tests and the strict append-only audit replaced by the new guard. Preserve reusable current helpers. Retired material survives in git history; no historical mode is maintained.
+```
+
+3. Replace:
+
+```text
+establish the first release baseline, freeze its shapes, capture real fixtures, and restore migration, supported-baseline and historical verification obligations before release.
+```
+
+with:
+
+```text
+establish the first release baseline, freeze its shapes, capture real fixtures, and build migration, supported-baseline and historical verification afresh before release. Do not resurrect the pre-release corpus or a dormant historical mode.
+```
+
+### Verification and deduplication
+
+Rechecked master `32e1af213a27b881cd5c587061e108e35f85f69b` and all 68 open
+issue titles plus three all-state title searches (save audit, compatibility,
+current save). #2049/#2073 are earlier owner splits, not this policy change.
+#2915/#2916 match the linked ledger; #2912 is delivered. The historical
+manifest still contains 51 active baselines/57 fixtures. Current selection
+cannot be inferred from migrationTarget=current. The production codec facade
+serves persistence_snapshot.py and the current persistence_contract probe.
+No duplicate current-only audit issue found. No code, build, test, engine,
+probe or review was run for this authoring step. Three children remain unchecked.
