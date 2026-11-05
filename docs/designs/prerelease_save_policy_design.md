@@ -27,7 +27,7 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Retire mandatory pre-release legacy-save compatibility
+- [x] EPIC. Retire mandatory pre-release legacy-save compatibility — [#2914]
 - [ ] PSP-1. Prove safe unsupported-version refusal at the load boundary
 - [ ] PSP-2. Enforce current-schema version changes without requiring migrations
 - [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
@@ -606,12 +606,13 @@ then exactly one dependency-ready child per invocation, with separate owner
 approval for every tracker artifact. Recheck the tracker and #2912 during
 processing; this publication does not itself create or approve issue bodies.
 
-## Pending tracker proposal
+## EPIC processing record
 
-EPIC draft, 2026-11-05, awaiting separate owner approval via syn-manager.
-This proposal does not change the processing ledger or approve any child.
-Approval authorizes one epic with existing labels, followed by the EPIC
-ledger link; no new label or other tracker edit is proposed.
+Created [#2914](https://github.com/coghex/synarchy/issues/2914) on 2026-11-05.
+Verified syn-manager reply `ge89pkamx45zn8svwv3dxxk4g6` to question
+`hftund5mig95kjc4rc4u548knn` relayed the owner: "Approve, create it".
+The exact approved draft below was filed with existing labels; only the EPIC
+ledger entry is processed. No child is approved by this record.
 
 Title: [epic] Retire mandatory pre-release legacy-save compatibility
 
