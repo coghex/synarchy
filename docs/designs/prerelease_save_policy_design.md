@@ -32,7 +32,7 @@ concrete precondition
 - [x] PSP-2. Enforce current-schema version changes without requiring migrations — [#2916]
 - [x] PSP-3. Separate current-save auditing from historical compatibility auditing — [#2917]
 - [x] PSP-4. Separate historical test obligations from current persistence coverage — [#2918]
-- [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
+- [x] PSP-5. Activate the pre-release gate set and publish the operating policy — [#2919]
 
 ## Epic contract
 
@@ -679,7 +679,8 @@ after a shape change; the revised PSP-2 artifact is approved and filed as #2916.
 D-7 subsequently requires current-only auditing and retires historical machinery
 at PSP-5 activation. PSP-3 and PSP-4 prepare current coverage and are filed
 as #2917/#2918. D-8 extends activation retirement to the historical migration
-probe and its references. PSP-5 still requires its own artifact signoff.
+probe and its references. PSP-5 is approved and filed as #2919. All tracker
+artifacts are now processed; implementation and review remain separate work.
 D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
@@ -695,8 +696,8 @@ processing; this publication does not itself create or approve issue bodies.
 ## EPIC processing record
 
 D-8 supersedes older on-demand-probe wording in the original approval records
-below. Exact #2914 corrections are included with the pending PSP-5 proposal;
-no existing tracker artifact is changed by this draft publication.
+below. The four exact #2914 corrections were approved and applied with PSP-5
+creation; the original approval bodies remain as historical evidence.
 
 
 D-7 supersedes historical-mode wording in the original approved bodies below.
@@ -1198,12 +1199,16 @@ current assertions are named in the body rather than inferred from filenames.
 No implementation, test, build, engine, probe or issue review was run.
 One child remains unchecked: PSP-5.
 
-## Pending PSP-5 tracker proposal
+## PSP-5 processing record
 
 The final slice was requested by verified syn-manager reply
 `3j2yt52xt2vhtqvsw5d84fijjw` after PSP-4 approval. Its probe boundary is now
-resolved by D-8. PSP-5 remains unchecked and unfiled; this full artifact and
-its exact epic edits require separate approval. Implementation waits for
+resolved by D-8. Created [#2919](https://github.com/coghex/synarchy/issues/2919)
+from the exact approved payload. Verified syn-manager reply
+`rjmdzdsqeuqd5y6i5vvkz5epde` to question `mg9mu6stwct6c96jii9nc83m7w`
+(continuations `iktc7bxk77c8mwymgit8rxf3tw`, `yxbermvkkyh2wa27acfnj6mpms`)
+relayed the owner: "Approve as drafted". All four approved #2914 edits below
+were applied with N = 2919 and verified by readback. Implementation waits for
 #2915/#2916/#2917/#2918 to land; #2912 is already delivered.
 
 Title: [save-policy PSP-5] Activate the pre-release gate set and publish the operating policy
@@ -1274,11 +1279,11 @@ Code, executable Markdown and tool-consumed records follow the code PR. Human-fa
 <!-- issue-origin:codex -->
 ````
 
-### Exact proposed tracker side effects
+### Approved and applied tracker side effects
 
-After separate signoff and creation, apply these four exact replacements to
-#2914; N is the newly created issue number. Keep the epic checkbox unchecked
-and link that number in the design PSP-5 ledger. No other tracker edits.
+These four replacements were applied to #2914 with N = 2919. The epic
+implementation checkbox remains unchecked; the design ledger links #2919.
+No other tracker edits were made.
 
 1. Replace:
 
@@ -1344,4 +1349,18 @@ census intentionally keeps removed registry rows, so scoped retirement must
 preserve other measured records instead of making ordinary seeding prune them.
 Current snapshot/probe helpers and current fixture/assertion coverage remain.
 No implementation, test, build, engine, probe or issue review was run.
-One child remains unchecked: PSP-5.
+No ledger entries remain unchecked.
+
+## Tracker processing complete
+
+All six artifacts were individually approved and filed: epic #2914 and children
+#2915, #2916, #2917, #2918, #2919. The processing ledger has zero unchecked
+entries. The epic implementation checkboxes remain unchecked; creating issues
+is not implementation completion. The manager owns readiness reviews and solver
+dispatch. No code, tests, engine runs, issue reviews or implementation PRs were
+performed by this design-processing task.
+
+This document is the arc record and keeps its processing history. Do not archive
+it while epic #2914 remains open or open issues cite this path. Once the epic is
+closed and no open issue cites it, follow the repository's archival rule with
+`git mv` and `docs-push`; that future disposition is not performed here.
