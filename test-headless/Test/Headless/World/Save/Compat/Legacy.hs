@@ -35,7 +35,7 @@ import World.Save.Envelope
     , legacyMetadataComponentVersion, currentEnvelopeVersion
     , foreignOptionalComponentIds
     , decodeSessionEnvelopeClassified, generationFailureProgress
-    , LoadProgress(..) )
+    , GenerationFailure(..), LoadProgress(..) )
 import World.Save.Serialize (loadPhaseFor)
 import Engine.Load.Status (LoadPhase(..))
 import World.Save.Envelope.Codec
@@ -56,6 +56,46 @@ import Test.Headless.World.Save.Compat.B1Fixture
 unknownOptionalDataSpec ∷ Spec
 unknownOptionalDataSpec =
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
+        it "uses version diagnostics for unsupported B1 metadata and session \
+           \versions before decoding either malformed payload" $ do
+            let cases =
+                    [ (metadataComponentId, 0, "legacy metadata component", "v0")
+                    , (metadataComponentId, 2, "legacy metadata component", "v2")
+                    , (ComponentId "session", 89, "legacy session component", "v89")
+                    , (ComponentId "session", 91, "legacy session component", "v91")
+                    ]
+            forM_ cases $ \(target, version, boundary, found) → do
+                let specs =
+                        [ (metadataComponentId
+                          , if target ≡ metadataComponentId
+                                then version else legacyMetadataComponentVersion
+                          , True
+                          , if target ≡ metadataComponentId
+                                then BS.empty else S.encode minimalSaveMetadataV1ForExtra)
+                        , (ComponentId "session"
+                          , if target ≡ ComponentId "session"
+                                then version else sessionComponentVersion
+                          , True
+                          , if target ≡ ComponentId "session"
+                                then BS.empty else extractSessionPayload fixtureBytes)
+                        ]
+                    bytes = case encodeEnvelope defaultEnvelopeLimits
+                                currentEnvelopeVersion specs of
+                        Right b → b
+                        Left e → error ("test setup: " <> show e)
+                case decodeSessionEnvelopeClassified HS.empty HS.empty bytes of
+                    Right _ → expectationFailure
+                        "expected unsupported legacy version to be refused"
+                    Left failure → do
+                        shouldBe (generationFailureProgress failure) ReachedEnvelope
+                        case failure of
+                            GenerationIncompatible _ message →
+                                shouldContain (T.unpack message)
+                                    ("unsupported save version: " <> boundary
+                                     <> " found " <> found <> " (reader supports ")
+                            other → expectationFailure
+                                ("expected incompatibility, got " <> show other)
+
         it "refuses to migrate a legacy envelope carrying an extra \
            \optional component beyond {metadata, session}, rather than \
            \silently dropping it" $ do
@@ -243,6 +283,26 @@ b2FallbackSpec =
                     isMigrated `shouldBe` True
                     luaComponents `shouldBe` []
             foreignOptionalComponentIds HS.empty bytes `shouldBe` []
+
+        it "reports unsupported old and future lua-state versions at the \
+           \legacy boundary, before decoding malformed bytes" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            forM_ [0, 2] $ \version → do
+                let tampered = replaceB2LuaStateSpec bytes version True BS.empty
+                    luaNames = HS.fromList ["unit_ai", "building_spawn"]
+                case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                    Right _ → expectationFailure
+                        "expected unsupported legacy lua-state version to be refused"
+                    Left failure → do
+                        shouldBe (generationFailureProgress failure) ReachedEnvelope
+                        case failure of
+                            GenerationIncompatible _ message →
+                                shouldContain (T.unpack message)
+                                    ("unsupported save version: legacy Lua module lua-state found v"
+                                     <> show version <> " (reader supports v1)")
+                            other → expectationFailure
+                                ("expected incompatibility, got " <> show other)
 
         -- Issue #1919, review round 1. Both legacy fallbacks run REAL
         -- component machinery (B1's decodeSessionV90/migrateSessionV90,

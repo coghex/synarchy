@@ -54,7 +54,7 @@ import World.Save.Envelope.Types
     , ComponentDescriptor(..) )
 import World.Save.Component (componentKnownIds, componentRequiredIds)
 import World.Save.Component.Types
-    (ComponentPhase(..), coreSessionComponentId)
+    (ComponentPhase(..), coreSessionComponentId, containerKnowledgeComponentId)
 import Engine.Load.Status (LoadPhase(..))
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -337,6 +337,15 @@ corruptEnvelopeVersion bytes =
         bumped = BS.map (`xor` 0xFF) versionBytes
     in BS.take 4 bytes <> bumped <> BS.drop 8 bytes
 
+reversionEnvelope ∷ Word32 → BS.ByteString → BS.ByteString
+reversionEnvelope version bytes =
+    BS.take 4 bytes <> BS.pack
+        [ fromIntegral (shiftR version 24)
+        , fromIntegral (shiftR version 16)
+        , fromIntegral (shiftR version 8)
+        , fromIntegral version
+        ] <> BS.drop 8 bytes
+
 -- | Re-encode a structurally valid envelope with ONE component's
 --   declared schema version changed, leaving every payload byte alone.
 --   Checksums are recomputed by 'encodeEnvelope', so the result is a
@@ -346,7 +355,13 @@ corruptEnvelopeVersion bytes =
 --   through the real load path, since the envelope codec itself never
 --   inspects component versions.
 reversionComponent ∷ ComponentId → Word32 → BS.ByteString → BS.ByteString
-reversionComponent target newVer bytes =
+reversionComponent target newVer =
+    reversionComponentWithPayload target newVer Nothing
+
+reversionComponentWithPayload
+    ∷ ComponentId → Word32 → Maybe BS.ByteString → BS.ByteString
+    → BS.ByteString
+reversionComponentWithPayload target newVer replacement bytes =
     case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
              known required bytes of
         Left err → error ("reversionComponent: decode: " <> show err)
@@ -354,7 +369,9 @@ reversionComponent target newVer bytes =
             let specs = [ ( cdId d
                           , if cdId d ≡ target then newVer else cdVersion d
                           , cdRequired d
-                          , HM.lookupDefault BS.empty (cdId d) (dePayloads de) )
+                          , case (cdId d ≡ target, replacement) of
+                                (True, Just payload) → payload
+                                _ → HM.lookupDefault BS.empty (cdId d) (dePayloads de) )
                         | d ← emComponents (deManifest de) ]
             in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
                         specs of
@@ -1135,6 +1152,66 @@ spec = do
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
                     Left err → T.unpack (lfMessage err) `shouldContain` "incompatible"
+
+        it "reports unsupported framing, metadata, required and \
+           \optional-present Haskell versions without changing either \
+           \generation or recovering from .prev" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                auth ← BS.readFile (authPath dir)
+                prev ← BS.readFile (prevPath dir)
+                let cases =
+                        [ ( "framing v0", reversionEnvelope 0 auth
+                          , "unsupported save version: envelope framing found v0 (reader supports v1)" )
+                        , ( "framing v2", reversionEnvelope 2 auth
+                          , "unsupported save version: envelope framing found v2 (reader supports v1)" )
+                        , ( "metadata v0", reversionComponent metadataComponentId 0 auth
+                          , "unsupported save version: metadata component found v0 (reader supports v1, v2, v3)" )
+                        , ( "metadata v99 with malformed bytes"
+                          , reversionComponentWithPayload metadataComponentId 99
+                                (Just BS.empty) auth
+                          , "unsupported save version: metadata component found v99 (reader supports v1, v2, v3)" )
+                        , ( "required Haskell v0", reversionComponent coreSessionComponentId 0 auth
+                          , "unsupported save version: component \"core-session\" found v0 (reader supports v1, v2, v3)" )
+                        , ( "required Haskell v99 with malformed bytes"
+                          , reversionComponentWithPayload coreSessionComponentId 99
+                                (Just BS.empty) auth
+                          , "unsupported save version: component \"core-session\" found v99 (reader supports v1, v2, v3)" )
+                        , ( "optional-present Haskell v0", reversionComponent containerKnowledgeComponentId 0 auth
+                          , "unsupported save version: component \"container-knowledge\" found v0 (reader supports v1, v2)" )
+                        , ( "optional-present Haskell v99 with malformed bytes"
+                          , reversionComponentWithPayload containerKnowledgeComponentId 99
+                                (Just BS.empty) auth
+                          , "unsupported save version: component \"container-knowledge\" found v99 (reader supports v1, v2)" )
+                        ]
+                forM_ cases $ \(label, incompatible, expected) → do
+                    BS.writeFile (authPath dir) incompatible
+                    selected ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                    case selected of
+                        Right s → expectationFailure
+                            (label <> ": expected refusal, got " <> show (lsSource s))
+                        Left failure →
+                            shouldContain (T.unpack (lfMessage failure)) expected
+                    shouldReturn (BS.readFile (authPath dir)) incompatible
+                    shouldReturn (BS.readFile (prevPath dir)) prev
+                BS.writeFile (authPath dir)
+                    (reversionComponentWithPayload metadataComponentId
+                        metadataComponentVersion (Just BS.empty) auth)
+                acceptedMalformed ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case acceptedMalformed of
+                    Right s → expectationFailure
+                        ("expected accepted-version malformed metadata to fail, got "
+                         <> show (lsSource s))
+                    Left failure → do
+                        shouldContain (T.unpack (lfMessage failure))
+                            "Failed to decode metadata component"
+                        unless (not (T.isInfixOf "unsupported save version"
+                                     (lfMessage failure))) $
+                            expectationFailure
+                                "accepted metadata version was misreported as unsupported"
+                shouldReturn (BS.readFile (prevPath dir)) prev
+                BS.writeFile (authPath dir) auth
 
         it "reports an unsafe-path failure and never reads through a \
            \slot directory that is itself a symlink" $

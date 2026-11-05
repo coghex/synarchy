@@ -140,6 +140,33 @@ rollbackFixtureLua = lns
 spec ∷ Spec
 spec = do
     describe "save_modules registry (issue #761 requirements 2/3/4)" $ do
+        it "refuses old and future required and optional versions before \
+           \decoding malformed payloads" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local calls = 0"
+            , "local function spec(version, required) return {"
+            , "  version=version, inputVersions={version}, required=required,"
+            , "  scope='global', deps={}, snapshot=function() return {} end,"
+            , "  decode=function(v, d) calls = calls + 1; return d end,"
+            , "  validate=function() return nil end, apply=function() end,"
+            , "  default=function() return {} end } end"
+            , "saveModules.register('required_version', spec(2, true))"
+            , "saveModules.register('optional_version', spec(3, false))"
+            , "local function rejected(requiredVersion, optionalVersion)"
+            , "  local prep = saveModules.prepareLoad({"
+            , "    { id='required_version', version=requiredVersion, payload='broken' },"
+            , "    { id='optional_version', version=optionalVersion, payload='broken' },"
+            , "  })"
+            , "  assert(not prep.ok, 'unsupported versions must fail')"
+            , "  local msg = table.concat(prep.errors, '; ')"
+            , "  assert(string.find(msg, \"Lua module 'required_version' found v\" .. requiredVersion .. \" (reader supports v2)\", 1, true), msg)"
+            , "  assert(string.find(msg, \"Lua module 'optional_version' found v\" .. optionalVersion .. \" (reader supports v3)\", 1, true), msg)"
+            , "  assert(calls == 0, 'unsupported versions must not reach decode')"
+            , "end"
+            , "rejected(1, 4) -- older required, future optional-present"
+            , "rejected(4, 1) -- future required, older optional-present"
+            ]
+
         it "accepts a valid required registration and a valid optional \
            \registration" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"

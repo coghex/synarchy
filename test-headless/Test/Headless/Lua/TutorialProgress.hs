@@ -779,8 +779,8 @@ spec = describe "Tutorial progress" $ do
             [ "local prep = saveModules.prepareLoad("
             , "    componentsFor({ completed = {} }, 2))"
             , "assert(not prep.ok, 'a v2 payload must not decode as v1')"
-            , "assert(table.concat(prep.errors, '; ')"
-            , "       :find('unsupported schema version'))"
+            , "assert(string.find(table.concat(prep.errors, '; '),"
+            , "       \"unsupported save version: Lua module 'tutorial_progress' found v2 (reader supports v1)\", 1, true))"
             ]
 
         it "accepts a payload whose ids are all still real, keeping the \

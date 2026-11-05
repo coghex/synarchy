@@ -190,7 +190,16 @@ readerRequiredComponentIds luaRequiredNames =
         `HS.union` HS.map luaComponentId luaRequiredNames
 
 renderEnvelopeError ∷ EnvelopeError → Text
-renderEnvelopeError = tshow
+renderEnvelopeError err = case err of
+    UnsupportedEnvelopeVersion found → unsupportedSaveVersion
+        "envelope framing" found [currentEnvelopeVersion]
+    _ → tshow err
+
+unsupportedSaveVersion ∷ Text → Word32 → [Word32] → Text
+unsupportedSaveVersion boundary found supported =
+    "unsupported save version: " <> boundary <> " found v" <> tshow found
+        <> " (reader supports "
+        <> T.intercalate ", " ["v" <> tshow v | v ← supported] <> ")"
 
 renderComponentErrors ∷ [ComponentError] → Text
 renderComponentErrors = T.intercalate "; " . map renderComponentError
@@ -416,14 +425,11 @@ decodeLegacyStructureAndMetadata bytes =
                      \shape always does -- refusing to migrate rather \
                      \than treat an optional payload as the required one"
             when (cdVersion metaDesc ≢ legacyMetadataComponentVersion) $
-                Left ("Save format incompatible: expected legacy metadata \
-                      \component v"
-                      <> tshow legacyMetadataComponentVersion
-                      <> ", got v" <> tshow (cdVersion metaDesc))
+                Left (unsupportedSaveVersion "legacy metadata component"
+                      (cdVersion metaDesc) [legacyMetadataComponentVersion])
             when (cdVersion sessionDesc ≢ sessionComponentVersion) $
-                Left ("Save format incompatible: expected legacy session \
-                      \component v" <> tshow sessionComponentVersion
-                      <> ", got v" <> tshow (cdVersion sessionDesc))
+                Left (unsupportedSaveVersion "legacy session component"
+                      (cdVersion sessionDesc) [sessionComponentVersion])
             meta ← decodeMetadataComponent decoded
             pure (decoded, meta)
   where
@@ -555,10 +561,8 @@ decodeB2StructureAndMetadata bytes =
                                      (findDescriptor luaStateComponentId
                                                       (deManifest decoded))
                 when (cdVersion luaStateDesc ≢ luaStateComponentVersion) $
-                    Left ("Save format incompatible: expected legacy \
-                          \\"lua-state\" component v"
-                          <> tshow luaStateComponentVersion
-                          <> ", got v" <> tshow (cdVersion luaStateDesc))
+                    Left (unsupportedSaveVersion "legacy Lua module lua-state"
+                          (cdVersion luaStateDesc) [luaStateComponentVersion])
                 meta ← decodeMetadataComponent decoded
                 pure (decoded, meta)
   where
@@ -1005,10 +1009,8 @@ decodeMetadataComponent decoded = do
                  (findDescriptor metadataComponentId (deManifest decoded))
     let version = cdVersion desc
     when (version `notElem` metadataComponentInputVersions) $
-        Left ("Save format incompatible: expected metadata component v"
-              <> T.intercalate "/"
-                   (map tshow metadataComponentInputVersions)
-              <> ", got v" <> tshow version)
+        Left (unsupportedSaveVersion "metadata component" version
+              metadataComponentInputVersions)
     payload ← maybe (Left "metadata component payload missing \
                            \(unreachable — already required)") Right
                     (HM.lookup metadataComponentId (dePayloads decoded))

@@ -599,12 +599,14 @@ spec = do
                 -- …while anything outside the set is rejected as an
                 -- unsupported version, naming every version that IS
                 -- accepted.
-                let expected = "unsupported schema version (reader supports "
-                             <> T.intercalate ", " [ "v" <> T.pack (show v)
-                                                   | v ← vers ] <> ")"
+                let expected v = "unsupported save version: component \""
+                             <> componentIdText (cpId p) <> "\" found v"
+                             <> T.pack (show v) <> " (reader supports "
+                             <> T.intercalate ", " [ "v" <> T.pack (show supported)
+                                                   | supported ← vers ] <> ")"
                 forM_ [0, cpVersion p + 1] $ \v →
                     cpDecodeErr p v BS.empty
-                        `shouldBe` Just (ComponentError (cpId p) v DecodePhase expected)
+                        `shouldBe` Just (ComponentError (cpId p) v DecodePhase (expected v))
 
         it "reports an unsupported version identically for a SINGLETON \
            \reader (component, version, phase, and the full message)" $
@@ -614,7 +616,7 @@ spec = do
                     (ccEncode texPaletteCodec richSnapshot)
                 `shouldBe` Just (ComponentError texPaletteComponentId 2
                     DecodePhase
-                    "unsupported schema version (reader supports v1)")
+                    "unsupported save version: component \"texture-palette\" found v2 (reader supports v1)")
 
         it "reports an unsupported version identically for a TWO-version \
            \reader -- the existing 'reader supports v1, v2' rendering" $ do
@@ -622,11 +624,11 @@ spec = do
                     (ccEncode craftBillsCodec richSnapshot)
                 `shouldBe` Just (ComponentError craftBillsComponentId 3
                     DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
+                    "unsupported save version: component \"craft-bills\" found v3 (reader supports v1, v2)")
             decodeErrorOf powerNodesCodec 7 BS.empty
                 `shouldBe` Just (ComponentError powerNodesComponentId 7
                     DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
+                    "unsupported save version: component \"power-nodes\" found v7 (reader supports v1, v2)")
 
         -- unit-sim gained a third version with #1217's per-request hazard
         -- policy; it is the reader that exercises the rendering between
@@ -636,16 +638,16 @@ spec = do
             decodeErrorOf unitSimCodec 0 BS.empty
                 `shouldBe` Just (ComponentError unitSimComponentId 0
                     DecodePhase
-                    "unsupported schema version (reader supports v1, v2, v3)")
+                    "unsupported save version: component \"unit-sim\" found v0 (reader supports v1, v2, v3)")
 
         it "reports an unsupported version identically for a \
            \SIXTEEN-version reader" $
             decodeErrorOf worldPagesCodec 17 BS.empty
                 `shouldBe` Just (ComponentError worldPagesComponentId 17
                     DecodePhase
-                    "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10, v11, v12, v13, v14, v15, v16)")
+                    "unsupported save version: component \"world-pages\" found v17 (reader supports \
+                    \v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, \
+                    \v13, v14, v15, v16)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

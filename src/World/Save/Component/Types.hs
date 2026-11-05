@@ -466,7 +466,9 @@ componentCodec spec =
         , ccDecode    = \v bytes → case lookup v dispatch of
             Just decode → decode cid bytes
             Nothing     → Left (ComponentError cid v DecodePhase
-                                  ("unsupported schema version (reader supports "
+                                  ("unsupported save version: component \""
+                                   <> cidText cid <> "\" found v" <> tshow v
+                                   <> " (reader supports "
                                    <> T.intercalate ", " renderedVersions <> ")"))
         , ccValidate  = csValidate spec
         }
@@ -479,6 +481,7 @@ componentCodec spec =
     dispatch = [ (cvVersion cv, cvDecode cv) | cv ← accepted ]
     renderedVersions =
         [ "v" <> tshow (cvVersion cv) | cv ← accepted ]
+    cidText (ComponentId t) = t
 
 -- | Pull one component's typed, self-validated value out of an
 --   already-structurally-valid 'DecodedEnvelope' (assembly path). The

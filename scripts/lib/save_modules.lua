@@ -690,9 +690,13 @@ local function prepareLoadImpl(componentsList, isMigratingLegacyBaseline)
                 end
             end
         elseif not isVersionSupported(reg, entry.version) then
-            errors[#errors + 1] = "'" .. id .. "': unsupported schema version "
-                .. tostring(entry.version) .. " (reader supports "
-                .. table.concat(reg.inputVersions, ",") .. ")"
+            local supported = {}
+            for _, version in ipairs(reg.inputVersions) do
+                supported[#supported + 1] = "v" .. tostring(version)
+            end
+            errors[#errors + 1] = "unsupported save version: Lua module '"
+                .. id .. "' found v" .. tostring(entry.version)
+                .. " (reader supports " .. table.concat(supported, ", ") .. ")"
         else
             local data, derr = dataCodec.decode(entry.payload)
             if data == nil and derr ~= nil then
