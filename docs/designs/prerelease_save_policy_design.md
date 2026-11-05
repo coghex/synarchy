@@ -48,7 +48,8 @@ concrete precondition
   recorded. Historical tooling, tests and corpus are removed at PSP-5 activation;
   reusable current helpers remain. No historical mode is maintained. The separate
   migration-probe opt-in work must also be confirmed
-  delivered before declaring the whole policy operational.
+  delivered before declaring the whole policy operational. D-8 then retires
+  that historical probe at activation, superseding its on-demand availability.
 - **Users and operators:** The owner loading development saves; contributors
   evolving persisted gameplay; reviewers and CI maintainers.
 - **Arc label:** Existing `save-load`; no new label proposed.
@@ -200,7 +201,8 @@ below. D-6 settles the baseline as the first public-release save format.
 Owner decision in the task brief; the manager has filed that small issue as #2912.
 The probe must run only when explicitly wanted before release. Do not create
 a duplicate child or use that change as proof that the rest of the regime is
-retired.
+retired. D-8 later supersedes continued on-demand availability: PSP-5 removes
+the probe at activation. #2912 remains a completed intermediate step.
 
 ### D-4. Preserve working code, safe refusal, and current round trips
 
@@ -272,6 +274,21 @@ Authority: verified syn-manager reply `5qm4ui6r7vjk4yfumtujxpxs3s` to
 PSP-3 question `p9ne2z4dqarw4v29qbc3rgtpu2`, 2026-11-05 16:44:49 UTC,
 relaying the owner and directing the P-3/PSP-3/PSP-4 design changes. It requires
 a redraft for separate signoff and explicitly forbids filing that draft yet.
+
+### D-8. Retire the historical migration probe with its corpus
+
+Owner answer: "Retire it in PSP-5". At the same gate switch, remove
+`tools/save_compat_migration_probe.py` together with its dedicated self-test,
+registry, timeout, sweep, runner, census and lab references. Keep any helper
+used by current probes. This supersedes #2912's runnable-on-demand promise;
+that completed opt-in issue remains the intermediate step, not ongoing support.
+Historical probe source, fixtures and retired measurements survive in git
+history. Release verification is built afresh from its first supported baseline.
+
+Authority: verified syn-manager reply `34bhbcdfuuzkcwuqbz3bbq7yi2` to question
+`ere9za9kecyg5ht4xk6q37qv9i`, 2026-11-05 17:07:32 UTC, relaying the owner
+and directing a design decision record followed by the PSP-5 draft for signoff.
+This policy answer does not itself approve the PSP-5 tracker artifact.
 
 ## Desired behavior and scope
 
@@ -375,6 +392,8 @@ corpus, obsolete manifest/oracle records, B1 fingerprint/helper obligations,
 historical reproducibility and historical-only tests together. Preserve current
 assertions and reusable production codec/comparison helpers before deletion.
 Historical provenance remains in git history, not a maintained retirement corpus.
+D-8 also removes the historical migration probe and all its active references
+at PSP-5 activation, preserving helpers that current probes use.
 Existing strict defaults stay intact through preparation; no new historical
 selection or promise is introduced. Runtime migration/DTO source may remain.
 
@@ -393,12 +412,14 @@ framing safety checks; historical immutability/reproduction obligations
 are retired, including their obsolete implementations and records.
 `ci_parity_save_compat.py` must test the new actual policy,
 including absence of implicit historical work, rather than deleting its parity
-assertions. The standalone migration-probe opt-in issue owns probe defaults;
-verify that dependency without expanding this design into its issue body.
+assertions. #2912 delivered the intermediate migration-probe opt-in; under
+D-8, PSP-5 removes that probe and its registry/sweep/runner/census/lab references
+at the same gate switch. Do not leave a broken advertised on-demand command.
 
 ## Open questions
 
-No unresolved policy questions remain. The resolved IDs are retained below
+No unresolved policy questions remain. Q-3 was resolved during processing by
+D-8. The resolved IDs are retained below
 so the original question, accepted answers, and affected decisions remain
 traceable. Whole-design readiness signoff is recorded above.
 
@@ -420,6 +441,13 @@ request. Both owner answers are recorded in D-5/D-6 with the verified reply's
 provenance. The five slice boundaries remain unchanged and have whole-design
 readiness signoff in verified message `f9dh8cp6n3ub4yqain6cx2uzhw`. Neither
 settled answer needs reopening.
+
+### Q-3. Keep the optional migration probe after deleting its inputs?
+
+Resolved by D-8: retire it in PSP-5. The current probe unconditionally reads
+`docs/save_compat/manifest.json`, so keeping its command after corpus removal
+would leave it broken. The owner explicitly superseded #2912's continued
+on-demand availability; no historical input API or maintained mode is added.
 
 ## Verification strategy
 
@@ -565,22 +593,29 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
   and affected parity tests; the audit/test defaults prepared in PSP-2–4;
   removal of historical audit/strict enum audit, B1 checks, reproducibility, the
   57-fixture historical corpus and obsolete manifest/oracle records, historical-only
-  Hspec/Python tests, registrations and consumers. Preserve reusable current
+  Hspec/Python tests, registrations and consumers; the migration probe and its
+  self-test, registry/timeout, sweep, runner, census and lab references under D-8.
+  Preserve reusable current
   helpers and current fixtures/assertions; retired provenance remains in git history;
   root `CLAUDE.md`, `src/World/Save/CLAUDE.md`, `docs/persistence_contract.md`
   §5 and test disposition, `docs/engine_contracts.md` §The `make ci` gate set,
   §Enum append-only audit and save/load wording, `tools/README.md` and relevant
   tool headers. `Makefile` remains a wrapper unless an explicit manual target
   is useful. Check `.quruntul/adapter.py` registration impact without changing
-  the lab's authority or blindly editing measured corpus records.
+  the lab's authority or blindly editing measured corpus records. Retire only
+  the named census row through a scoped locked write, preserving every other
+  probe's data; ordinary seed/reconcile must not become automatic deletion.
 - **Phase / ordering:** 4, critical path. **Depends on:** PSP-1, PSP-2,
   PSP-3, PSP-4; confirm the manager's separate probe opt-in issue #2912 has landed.
-- **Relevant decisions:** D-1–D-7. **Open questions:** None. Implementation
+- **Relevant decisions:** D-1–D-8. **Open questions:** None. Implementation
   depends on PSP-1–PSP-4 and #2912 as stated above.
 - **Acceptance signals:** Default invocations require the current guard/tests
   and never historical corpus success. Historical machinery is removed in the
   same change as gate activation; no historical mode remains. Current commands
-  and production snapshot/probe helpers work without the retired files.
+  and production snapshot/probe helpers work without the retired files. The
+  historical probe is absent from runner/sweep/lab/census selection; explicit
+  use of its old key fails without launching an engine or reporting zero-work
+  success. #2912's runnable-on-demand promise is superseded, not left broken.
   Save/Cabal/fixture changes and master pushes cannot implicitly restore old
   obligations. CI/local parity tests prove both positive current selection and
   absence of implicit historical selection and stale references. `persistence_contract` remains CI-eligible;
@@ -590,9 +625,10 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 - **Gates:** `python3 tools/ci_expensive_gates.py --self-test`,
   `python3 tools/ci_parity_audit.py --self-test` and bare audit; automated guard,
   current audit/self-tests and current Hspec groups; inventory audits; a real
-  `persistence_contract` probe. If registry/adapter inputs change, also run
+  `persistence_contract` probe. Registry/adapter retirement also requires
   `tools/test_run_probes.py`, `tools/ci_probes.py --self-test`,
-  `tools/test_persistence_contract_sweep.py`, and `python3 .quruntul/checks.py`.
+  `tools/test_persistence_contract_sweep.py`, `tools/test_readme_registry_count.py`,
+  `tools/test_probe_census.py`, census validation, and `python3 .quruntul/checks.py`.
   Do not request a full migration probe as acceptance for this policy.
 - **Out of scope:** Full local CI without an explicit request, the separate
   opt-in issue's implementation, or reinstating release compatibility now.
@@ -607,7 +643,8 @@ rule text claiming activation before the implementing gates are ready.
 
 The release owner must complete this checklist before public release; it is
 not a new child issue to file during this design task. Historical pre-release
-tooling and fixtures have been retired under D-7. Git history is reference
+tooling, fixtures and the migration probe will have been retired under D-7/D-8
+when this pre-release arc completes. Git history is reference
 material, not a dormant supported mode to re-enable.
 
 1. Declare the first public-release save format as the supported baseline,
@@ -625,7 +662,8 @@ material, not a dormant supported mode to re-enable.
    canonical-result checks and reproducibility for supported public-release
    formats. Do not resurrect retired pre-release saves or repair their corpus
    as a release requirement; they remain outside the compatibility promise.
-4. Establish release-baseline historical Hspec coverage, the migration probe's real
+4. Establish release-baseline historical Hspec coverage and fresh migration
+   verification of real
    load/publish/resave/restart/reload coverage, sweep/lab selection, CI and
    `make ci` parity, and the relevant expensive-gate selection. Run the actual
    release validation; turning a flag back on is not evidence of passing it.
@@ -635,12 +673,13 @@ material, not a dormant supported mode to re-enable.
 
 ## Handoff
 
-This design has seven settled decision records and five delivery slices. The
+This design has eight settled decision records and five delivery slices. The
 owner amended D-5 during PSP-2 processing to require current-only acceptance
 after a shape change; the revised PSP-2 artifact is approved and filed as #2916.
 D-7 subsequently requires current-only auditing and retires historical machinery
-at PSP-5 activation. PSP-3 and PSP-4 prepare current coverage; their revised
-tracker artifacts still require separate approval.
+at PSP-5 activation. PSP-3 and PSP-4 prepare current coverage and are filed
+as #2917/#2918. D-8 extends activation retirement to the historical migration
+probe and its references. PSP-5 still requires its own artifact signoff.
 D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
@@ -654,6 +693,11 @@ approval for every tracker artifact. Recheck the tracker and #2912 during
 processing; this publication does not itself create or approve issue bodies.
 
 ## EPIC processing record
+
+D-8 supersedes older on-demand-probe wording in the original approval records
+below. Exact #2914 corrections are included with the pending PSP-5 proposal;
+no existing tracker artifact is changed by this draft publication.
+
 
 D-7 supersedes historical-mode wording in the original approved bodies below.
 The manager reconciled #2916 requirement 4 (verified message
@@ -1151,5 +1195,153 @@ Spec.hs and Cabal registration, mixed Compat/Components families, the tag
 admission harness and seeded failures, exact-fluid saveSpec, Lua current-version
 and historical-range pins, and inventory audit/coverage references. Relevant
 current assertions are named in the body rather than inferred from filenames.
+No implementation, test, build, engine, probe or issue review was run.
+One child remains unchecked: PSP-5.
+
+## Pending PSP-5 tracker proposal
+
+The final slice was requested by verified syn-manager reply
+`3j2yt52xt2vhtqvsw5d84fijjw` after PSP-4 approval. Its probe boundary is now
+resolved by D-8. PSP-5 remains unchecked and unfiled; this full artifact and
+its exact epic edits require separate approval. Implementation waits for
+#2915/#2916/#2917/#2918 to land; #2912 is already delivered.
+
+Title: [save-policy PSP-5] Activate the pre-release gate set and publish the operating policy
+
+Labels: `enhancement`, `save-load`, `tooling`.
+
+````markdown
+## Background
+
+PSP-5 of #2914 is the final activation slice. Implement after #2915, #2916, #2917 and #2918 land; #2912's intermediate probe opt-in is already delivered. Owner decisions: "Current mode only" and "Retire it in PSP-5". At one gate switch, activate current-save safety and remove the historical machinery, including the migration probe. The latter supersedes #2912's promise to keep that probe runnable on demand.
+
+Today CI/local commands still require the combined compatibility audit, historical reproducibility and strict enum append-only audit. `ci_parity_save_compat.py` checks their executable selection, not just command presence. The migration probe unconditionally reads the historical manifest; leaving its entry point after corpus removal would break it. Current snapshot/probe helpers share audit modules and must survive.
+
+## Requirements
+
+1. Activate #2916's current-schema guard, #2917's current audit/self-tests and #2918's current Hspec coverage together across direct defaults, `.github/workflows/ci.yml`, `tools/ci-local.sh` and documented gates. Bare audit/self-test commands select current behavior. Remove obsolete historical flags/commands with clear argument failures, never a silent successful no-op. Keep unrelated gates and the current headless lane guarantees intact.
+2. Wire a real comparison base into the schema guard: PR base, the full before/after span on master pushes, and the local merge base including tracked working edits. Record resolved base/candidate identities. Missing comparison evidence fails clearly; do not compare the candidate to itself, skip the guard, or bless same-version drift through record regeneration. Preserve #2916's non-vacuous bootstrap behavior where the base predates its record. Use the existing docs-only policy consistently; source, current record/fixtures, tooling and Cabal edits must not bypass current checks.
+3. In that same activation change, delete historical auditing, B1 fingerprint/helper obligations, historical reproducibility, the 57-fixture historical corpus and obsolete manifest/oracle records, historical-only Hspec/Python tests and registrations, and the strict append-only audit replaced by the current guard. Follow #2918's assertion mapping/removal list. Preserve the small current fixture set, independent expectations, current framing/refusal/integrity/storage tests, reusable schema helpers, and compiled codec/comparison APIs used by `persistence_snapshot.py` and `persistence_contract`. No maintained historical mode, retirement corpus or mandatory outgoing DTO/migration/fixture per bump remains. Retired material survives in git history; useful runtime migration/DTO source need not be deleted.
+4. Remove `tools/save_compat_migration_probe.py`, its dedicated self-tests and all active registry, timeout, sweep-selection, runner, census and lab references. Keep any helpers used by current probes. Reconcile `.quruntul/adapter.py`/checks, `probe_runner_registry.py`, `ci_probes.py`, sweep tests, README counts and affected census consumers together. The old probe key must fail as unknown/retired without launching an engine, not succeed with zero work. Remove only its census row through a scoped locked retirement path, preserving every other probe's measurements/attempts/policy; ordinary census seeding must not become an automatic pruning operation. Git history preserves the retired evidence.
+5. Replace historical gate-selection/parity assertions with positive tests of current safety and negative tests of historical reachability. Cover PR and multi-commit master changes, local tracked edits, Cabal/fixture/tool paths, docs-only paths and unavailable bases. Current checks still execute and fail on bad inputs after historical files are absent. Keep `persistence_contract` CI-eligible and selected for persistence changes, with its existing three fresh-process cycles; retain inventory/capability gates and feature-specific persistence requirements.
+6. Publish consistent operating rules in root `CLAUDE.md`, `src/World/Save/CLAUDE.md`, persistence/engine contracts, `tools/README.md` and relevant tool headers. A shape change advances every affected component/metadata/Lua/framing version and makes each affected carrier current-only, disabling its older accepted dispatches and affected exact-shape legacy routes. Unsupported saves fail before publication, preserve the old paused session and are not rewritten; incompatible authoritative generations do not fall back to `.prev`. The bridge-only `currentSaveVersion` is not on-disk protection. Explain the guard's semantic limits and current-test procedure.
+
+## Release checklist
+
+Publish this checklist as a release prerequisite, without implementing it now: begin the support promise with the first public-release format; freeze its transitive wire shapes and capture real nonempty release fixtures with independent expectations; build supported-baseline tracking, migrations, historical verification and real restart coverage afresh; wire and actually validate release gates. Do not resurrect pre-release saves, their corpus or a dormant historical mode. Keep current correctness and transaction/refusal guarantees throughout. This epic may close before release once its activation and checklist are delivered.
+
+## Acceptance
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+python3 tools/current_save_schema_audit.py --self-test
+python3 tools/ci_expensive_gates.py --self-test
+python3 tools/ci_parity_audit.py --self-test
+python3 tools/ci_parity_audit.py
+python3 tools/save_compat_audit.py
+python3 tools/test_save_compat_audit.py
+python3 tools/persistence_inventory_audit.py
+python3 tools/test_persistence_inventory_audit.py
+python3 tools/engine_env_capability_audit.py
+python3 tools/test_engine_env_capability_audit.py
+python3 tools/test_run_probes.py
+python3 tools/ci_probes.py --self-test
+python3 tools/test_persistence_contract_sweep.py
+python3 tools/test_readme_registry_count.py
+python3 tools/test_probe_census.py
+python3 tools/probe_census.py --validate
+python3 .quruntul/checks.py
+```
+
+Run the guard's real base-ref check with recorded SHAs and the nonempty current Hspec groups retained by #2918, including `save components`, `save envelope`, `atomic save storage`, `persistence contract`, `persistence reference integrity`, `Lua persistence components` and moved feature assertions. Record selection and example counts. Prove the old probe is absent from runner/sweep/lab selection and census, and that unrelated census records are preserved.
+
+Run one owned, isolated current probe via `python3 tools/run_probes.py --only persistence_contract --exact --jobs 1 --port 9324` (or another available non-8008 port), using the manager's live-probe slot protocol and retaining its evidence. Verify terminal save/load success and all three fresh-process comparisons. No migration probe, whole local headless suite or `make ci` is required. Verify active references/imports after removal, rather than deleting shared files by name.
+
+## Scope and delivery
+
+Gate/default wiring, historical-tool/test/corpus/probe retirement and the operating rules only. No gameplay/serialization redesign, new migration support, unrelated CI optimization or bulk runtime DTO deletion. Coordinate shared CI surfaces with #2742. #2912 is complete and is not reopened or reimplemented.
+
+Code, executable Markdown and tool-consumed records follow the code PR. Human-facing contracts/evidence use docs-push and are linked in the PR before final review; describe staged activation accurately until the code lands. Preserve concurrent census work through its owning lock/write path.
+
+## Related
+
+- #2914: epic; implementation depends on #2915, #2916, #2917, #2918.
+- #2912: delivered intermediate opt-in; owner superseded continued probe availability in D-8.
+- #2742: overlapping CI surfaces; #2564: separate faction retirement.
+- Design: `docs/designs/prerelease_save_policy_design.md`, PSP-5/P-4, D-1–D-8.
+
+<!-- issue-origin:codex -->
+````
+
+### Exact proposed tracker side effects
+
+After separate signoff and creation, apply these four exact replacements to
+#2914; N is the newly created issue number. Keep the epic checkbox unchecked
+and link that number in the design PSP-5 ledger. No other tracker edits.
+
+1. Replace:
+
+```text
+- [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
+```
+
+with:
+
+```text
+- [ ] PSP-5. #N — Activate the pre-release gate set and publish the operating policy
+```
+
+2. Replace:
+
+```text
+historical reproducibility/tests and the strict append-only audit replaced by the new guard.
+```
+
+with:
+
+```text
+historical reproducibility/tests, the strict append-only audit replaced by the new guard, and the historical migration probe with its self-test, registry, sweep, runner, census and lab references.
+```
+
+3. Replace:
+
+```text
+unrelated worldgen gates; probe opt-in belongs to #2912.
+```
+
+with:
+
+```text
+unrelated worldgen gates. #2912 delivered intermediate probe opt-in; PSP-5 now owns retirement of that probe under the later owner decision.
+```
+
+4. Replace:
+
+```text
+- #2912: separate probe opt-in dependency.
+```
+
+with:
+
+```text
+- #2912: delivered intermediate opt-in dependency; PSP-5 supersedes its runnable-on-demand promise by retiring the historical probe.
+```
+
+### Verification and deduplication
+
+Rechecked all 70 open titles and three all-state searches (save policy,
+compatibility CI, historical gate); no duplicate activation issue found.
+#2742 owns CI runtime optimization, not this owner-approved policy retirement.
+Epic child links #2915–#2918 reconcile with the design. #2912 is closed;
+its #2913 implementation landed at master `32e1af213a27b881cd5c587061e108e35f85f69b`.
+
+Inspected actual CI/local audit commands, reproducibility selection and parity
+execution, source/fixture/Cabal patterns, push/PR comparison-base handling,
+probe imports and manifest-only inputs, runner/timeout/CI classification,
+sweep opt-in tests, lab OPT_IN_ONLY/checks and census reconciliation. The
+census intentionally keeps removed registry rows, so scoped retirement must
+preserve other measured records instead of making ordinary seeding prune them.
+Current snapshot/probe helpers and current fixture/assertion coverage remain.
 No implementation, test, build, engine, probe or issue review was run.
 One child remains unchecked: PSP-5.
