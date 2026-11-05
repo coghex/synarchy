@@ -12,8 +12,9 @@ Request: `user-syn-save-policy-20261105`, owner via the Synarchy manager,
 2026-11-05. Task brief read first:
 `~/.local/state/project-manager/synarchy/tasks/save-policy-design.md`.
 
-The policy decisions below are settled. The implementation proposals and
-slice boundaries still need readiness signoff; Q-1 and Q-2 are open. This
+The policy decisions below are settled, including the owner's answers to
+Q-1 and Q-2. The implementation details and slice boundaries still need
+readiness signoff. This
 document is published for review and resumption, not authorization to file
 issues or change the runtime. No engine, probe, build, or test was run while
 writing it.
@@ -37,7 +38,7 @@ concrete precondition
   version and safely refuse older saves without creating a migration, frozen
   outgoing DTO, or permanent historical fixture.
 - **Done when:** All five slices are accepted; normal CI and local gates
-  require current-save correctness and the agreed version-change enforcement,
+  require current-save correctness and automated version-change enforcement,
   but not historical migrations, corpus preservation, or historical fixture
   reproducibility. At least one real-engine current-version save, process
   exit, fresh-process load, and resave remains selected for persistence changes.
@@ -184,7 +185,7 @@ current save/load contract.
 
 Owner decision in the task brief. Release must restore supported-baseline
 tracking, migration coverage, and the full verification obligations described
-below. Which baseline begins that promise is deliberately left to Q-2.
+below. D-6 settles the baseline as the first public-release save format.
 
 ### D-3. Migration-probe opt-in is a separate existing work item
 
@@ -203,6 +204,32 @@ current-version round trip. No contrary evidence requires reopening these
 recommendations. Disabling an unsafe decoder registration after its shared
 wire types change is required for safe refusal; it is not a request to delete
 the migration implementation.
+
+### D-5. Enforce schema/version changes with an automated guard
+
+Owner answer to Q-1 on 2026-11-05: "Automated guard." Add the lightweight
+current-schema/version guard: a changed positional shape must advance every
+affected component version, and unsafe older versions must be refused.
+No migration or historical fixture is required. Review-only enforcement was
+not selected; review and targeted tests still cover the static guard's stated
+semantic limits. PSP-2 implements this choice and PSP-5 makes it mandatory.
+
+### D-6. Begin the compatibility promise with the first public-release save
+
+Owner answer to Q-2 on 2026-11-05: "First release save." The full
+compatibility promise starts at the first public-release save format.
+Pre-release saves remain outside that promise and are not resurrected at
+release. Existing working migrations may stay under D-4, but do not establish
+a support obligation for development saves. Restoring the B1-and-later
+pre-release corpus as a release requirement was not selected.
+
+**Decision provenance for D-5/D-6:** verified `syn-manager` message
+`uw5x59zk2qw882wu427vaf6csn` in `#syn-save-policy`, 2026-11-05 14:59:08 UTC,
+replies directly to question `3sx3nmsq853m5tupnjda739vzi` and relays both
+owner answers under `user-syn-save-policy-20261105`. The owner also directly
+instructed this session to read that reply and act on it. This authorizes
+recording and applying both choices to this design; it neither authorizes
+issue creation nor supplies whole-design readiness signoff.
 
 ## Desired behavior and scope
 
@@ -251,7 +278,7 @@ as well as normal malformed-byte and current-round-trip cases.
 
 ### P-2. Replace historical immutability with current-schema/version enforcement
 
-**Conditional on Q-1.** Recommended enforcement is a small source-based guard
+**Selected by D-5.** Enforcement uses a small source-based guard
 recording the current wire shape and version of each component and framing
 boundary. Reuse the existing discovery, enum-carrier, and fingerprint helpers
 where sound; do not repurpose the B1 fingerprint as if it already covered all
@@ -270,24 +297,22 @@ prove arbitrary serializer semantics or see swapping two indistinguishable
 positional values. Such encoding/meaning changes still require a bump, explicit
 review evidence, and a targeted distinguishing test.
 
-Under this proposal, the enum audit gains a pre-release, version-aware update
+The implementation proposal gives the enum audit a pre-release, version-aware update
 path instead of a blanket non-append veto. Its historical append-only mode
 remains available. A changed off-wire enum does not create a fictional save
 component version, but newly reachable types cannot escape coverage. Keep
 existing strict checks in force until the replacement has negative tests and
 is wired into the mandatory gate set. Do not remove the old checks first.
 
-If the owner chooses review enforcement instead, replace this proposal and
-PSP-2's scope with an explicit review contract and its residual detection
-limits before readiness. Do not quietly substitute review for an approved
-automated guard.
+Review-only enforcement was considered and rejected by D-5. Do not substitute
+a review checklist for the selected automated guard.
 
 ### P-3. Split current correctness from optional historical evidence
 
 Provide explicit current and historical audit/test selections. The current
 selection retains discovery correctness, honest required/optional registration,
 malformed/unsupported refusal, current codec behavior and bridge errors, and
-the agreed schema guard. Historical selection owns the B1 frozen fingerprint,
+the automated schema guard. Historical selection owns the B1 frozen fingerprint,
 oldest-version obligations, historical baselines, migration expectations, and
 historical corpus reproduction. Synthetic tests of those retained tools can
 remain cheap default tests if they do not impose the real historical corpus
@@ -328,31 +353,28 @@ verify that dependency without expanding this design into its issue body.
 
 ## Open questions
 
+No unresolved policy questions remain. The resolved IDs are retained below
+so the original question, accepted answers, and affected decisions remain
+traceable. Whole-design readiness signoff is still outstanding.
+
 ### Q-1. Automated current-schema guard or review enforcement?
 
-P-2 recommends the automated guard; review-only enforcement is smaller but
-does not mechanically detect arbitrary same-version record drift. This is a
-material engineering tradeoff, not a settled owner choice. It blocks PSP-2
-and the activation of relaxed historical rules in PSP-5. PSP-3/PSP-4 may be
-specified as preparatory partitions, but must not disable their replacement
-safety obligations before this choice is settled.
+Resolved by D-5: automated current-schema/version guard. PSP-2 and PSP-5 no
+longer await this decision. PSP-3/PSP-4 remain preparatory partitions until
+PSP-5 activates the replacement mandatory safety gates.
 
 ### Q-2. Which saves enter the release compatibility promise?
 
-Recommendation: establish the first public release as the supported baseline
-and preserve all subsequently supported release formats; do not resurrect
-retired pre-release saves. The other reading of "full regime comes back" is
-restoring the B1-and-later pre-release corpus too, which entails recovering
-retired fixtures and repairing their decoders before release. The owner must
-choose. This affects the release checklist and PSP-5's policy text, not D-1's
-permission to refuse development saves now.
+Resolved by D-6: the first public-release save format starts the promise.
+Pre-release saves are not resurrected. PSP-5's policy text and the release
+checklist use this boundary.
 
 Both questions were posted together to `#syn-save-policy` as
 `syn-designer-1`, verified message `3sx3nmsq853m5tupnjda739vzi`, under this
-request. No answer or design-readiness signoff has been recorded. On receipt,
-record the verified answer and resolve each Q-N to a new D-N; then present
-the resulting design/slice boundaries for readiness. Keep this document
-`exploring` until then.
+request. Both owner answers are recorded in D-5/D-6 with the verified reply's
+provenance. The five slice boundaries remain unchanged. No whole-design
+readiness signoff has been recorded; keep this document `exploring` until
+that signoff, without reopening either settled answer.
 
 ## Verification strategy
 
@@ -366,7 +388,7 @@ The end-state evidence must demonstrate: current nonempty data survives real
 codec and fresh-process round trips; unsupported older and future versions
 fail before publication; a known old version uses only its correct decoder;
 optional-present errors cannot default away; same-version shape changes fail
-the agreed enforcement; historical fixture failure cannot accidentally block
+the automated enforcement; historical fixture failure cannot accidentally block
 the default pre-release path; and CI/local selection remains equal. Inventory,
 reference integrity, storage recovery/protection, pause/reset semantics, and
 feature-specific persistence tests retain their present obligations.
@@ -381,7 +403,7 @@ tests alone did not expose the #2557 camera-ring admission problem.
 
 These are proposed one-PR slices, listed in valid dependency order. No issue
 numbers are reserved. All slices require design readiness before tracker
-processing; a Q-N stop applies in addition to that global readiness gate.
+processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 
 ### PSP-1. Prove safe unsupported-version refusal at the load boundary
 
@@ -395,8 +417,8 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   transactional-load tests. Extend the existing transaction probe only if
   its unsupported-version preservation case is missing.
 - **Phase / ordering:** 1, can land first. **Depends on:** none.
-- **Relevant decisions:** D-1, D-4. **Open questions:** None for refusal;
-  no choice of the Q-1 enforcement mechanism in this slice.
+- **Relevant decisions:** D-1, D-4. **Open questions:** None; PSP-2 owns
+  the automated enforcement selected by D-5.
 - **Acceptance signals:** Required and optional-present unsupported component,
   metadata, Lua and framing versions fail clearly before application; malformed
   bytes remain distinct. A registered old decoder works unchanged. Incompatible
@@ -411,7 +433,7 @@ processing; a Q-N stop applies in addition to that global readiness gate.
 
 ### PSP-2. Enforce current-schema version changes without requiring migrations
 
-- **Outcome:** Under Q-1's recommended option, mechanical shape changes cannot
+- **Outcome:** Under D-5, mechanical shape changes cannot
   pass by refreshing a golden file at the same version; compatible refusal
   replaces the demand to author migrations.
 - **Scope / touched paths:** `tools/enum_append_only_audit*.py`, its generated
@@ -420,8 +442,7 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   required. Owner-visible declarations and custom-codec coverage are explicit.
   Policy comments in `Component/Types.hs` describe retained-decoder safety.
 - **Phase / ordering:** 2, critical path. **Depends on:** PSP-1.
-- **Relevant decisions:** D-1, D-4. **Open questions:** Q-1; stop before
-  drafting a final issue until the enforcement approach is selected.
+- **Relevant decisions:** D-1, D-4, D-5. **Open questions:** None.
 - **Acceptance signals:** Negative tests cover unchanged-version record field
   add/remove/reorder/retype, enum change, nested shared shape, partial carrier
   bump, baseline-only rewrite, unknown coverage, and a retained unsafe older
@@ -447,8 +468,7 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   production-codec API for `persistence_snapshot.py` and the current probe.
 - **Phase / ordering:** 2, independent preparation after PSP-1.
   **Depends on:** PSP-1.
-- **Relevant decisions:** D-1, D-3, D-4. **Open questions:** No new policy
-  choice beyond Q-1's separately owned replacement enforcement.
+- **Relevant decisions:** D-1, D-3, D-4, D-5. **Open questions:** None.
 - **Acceptance signals:** Current mode does not demand oldest-version coverage,
   B1 helper completeness/fingerprint stability, or a permanent baseline per
   bump. Explicit historical mode still diagnoses those obligations honestly.
@@ -475,8 +495,8 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   state; retain their current semantics in mandatory groups. Update inventory
   coverage links only if renamed tests require it; no audit relaxation.
 - **Phase / ordering:** 3, critical path. **Depends on:** PSP-3.
-- **Relevant decisions:** D-1, D-4. **Open questions:** None about preserving
-  current coverage; activation still waits for Q-1.
+- **Relevant decisions:** D-1, D-4, D-5. **Open questions:** None;
+  activation still waits for the mandatory guard and PSP-5.
 - **Acceptance signals:** A nonempty mandatory current suite covers registry,
   assembly, integrity, storage/unknown-optional protection and current payloads.
   Historical migration cases have an explicit opt-in selector with a visible
@@ -508,8 +528,9 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   the lab's authority or blindly editing measured corpus records.
 - **Phase / ordering:** 4, critical path. **Depends on:** PSP-1, PSP-2,
   PSP-3, PSP-4; confirm the manager's separate probe opt-in item has landed.
-- **Relevant decisions:** D-1–D-4. **Open questions:** Q-1 and Q-2; stop
-  before activation until both and design readiness have explicit signoff.
+- **Relevant decisions:** D-1–D-6. **Open questions:** None. Design readiness
+  remains the tracker-processing prerequisite; implementation depends on
+  PSP-1–PSP-4 and the separate probe opt-in item as stated above.
 - **Acceptance signals:** Default invocations require the current guard/tests
   and never historical corpus success; explicit historical invocation works.
   Save/Cabal/fixture changes and master pushes cannot implicitly restore old
@@ -519,7 +540,7 @@ processing; a Q-N stop applies in addition to that global readiness gate.
   an outgoing pre-release DTO, a legacy baseline/oracle row per bump, or the
   migration probe. They name the actual version boundary and release checklist.
 - **Gates:** `python3 tools/ci_expensive_gates.py --self-test`,
-  `python3 tools/ci_parity_audit.py --self-test` and bare audit; agreed guard,
+  `python3 tools/ci_parity_audit.py --self-test` and bare audit; automated guard,
   current audit/self-tests and current Hspec groups; inventory audits; a real
   `persistence_contract` probe. If registry/adapter inputs change, also run
   `tools/test_run_probes.py`, `tools/ci_probes.py --self-test`,
@@ -539,7 +560,8 @@ rule text claiming activation before the implementing gates are ready.
 The release owner must complete this checklist before public release; it is
 not a new child issue to file during this design task.
 
-1. Resolve Q-2 and declare the supported baseline and retention promise.
+1. Declare the first public-release save format as the supported baseline,
+   following D-6, and record the retention promise from that baseline forward.
    Freeze the release's full transitive DTO/enum shapes, component versions,
    metadata, Lua schemas and framing; capture real, nonempty release fixtures
    with provenance, checksums, canonical summaries and descriptor oracles.
@@ -550,9 +572,9 @@ not a new child issue to file during this design task.
    enforcement and transaction/refusal tests as well.
 3. Restore supported-baseline manifest coverage: required/current/oldest versions,
    declared-vs-real descriptor agreement, fixture presence/integrity, historical
-   canonical-result checks and reproducibility. If Q-2 includes pre-release
-   saves, recover their retired records/fixtures and repair every promised
-   decoding route before claiming support; git history alone is not coverage.
+   canonical-result checks and reproducibility for supported public-release
+   formats. Do not resurrect retired pre-release saves or repair their corpus
+   as a release requirement; they remain outside the compatibility promise.
 4. Restore mandatory historical Hspec selection, the migration probe's real
    load/publish/resave/restart/reload coverage, sweep/lab selection, CI and
    `make ci` parity, and the relevant expensive-gate selection. Run the actual
@@ -563,14 +585,15 @@ not a new child issue to file during this design task.
 
 ## Handoff
 
-This design adds four settled decision records, two open questions and five
-proposed delivery slices. There is no divergence from the manager's requested
-retention, refusal, fixture or fresh-process recommendations. Q-1 selects how
-to enforce the version-bump obligation; Q-2 resolves the scope of the future
-promise. The task's authorized endpoint is publication of this document and
+This design now has six settled decision records, no unresolved policy
+questions, and five proposed delivery slices. There is no divergence from the
+manager's requested retention, refusal, fixture or fresh-process
+recommendations. D-5 selects automated enforcement; D-6 starts the future
+promise at the first public-release save format. The task's authorized
+endpoint is publication of this document and
 reporting its commit in `#syn-save-policy`, not issue creation.
 
-After answers and explicit readiness signoff, `process-design-doc` processes
+After explicit readiness signoff, `process-design-doc` processes
 EPIC first and then exactly one dependency-ready child per invocation, with
 separate owner approval for every tracker artifact. Recheck the tracker and
 the separately managed opt-in issue then; do not infer readiness from this
