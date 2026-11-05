@@ -103,9 +103,21 @@ class AdapterChecks(unittest.TestCase):
 
     def test_every_registered_probe_is_one_suite_unless_deferred_or_direct_only(self):
         deferred = {k for k, p in self.census.items() if (p.get("census") or {}).get("deferred")}
-        expected = {key for key, _, _ in probe_runner_registry.PROBES} - deferred - set(self.module.DIRECT_ONLY)
+        expected = ({key for key, _, _ in probe_runner_registry.PROBES} - deferred
+                    - set(self.module.DIRECT_ONLY) - set(self.module.OPT_IN_ONLY))
         self.assertEqual(set(self.probes()), expected)
         self.assertEqual(len(self.suites), len(set(self.suites)))
+
+    def test_save_compat_migration_is_opt_in_and_still_runs_on_request(self):
+        # #2912: pinned independently of the census, so a census change cannot
+        # silently put the hour-long migration probe back on the lab's schedule.
+        self.assertEqual(set(self.module.OPT_IN_ONLY), {"save_compat_migration"})
+        self.assertNotIn("save_compat_migration", self.probes())
+        self.assertTrue(set(self.probes()), "other probe suites are still offered")
+        self.assertIn("save_compat_migration", {key for key, _, _ in probe_runner_registry.PROBES})
+        self.assertEqual(
+            [key for key, _, _ in probe_runner_registry.select("save_compat_migration", exact=True)],
+            ["save_compat_migration"])
 
     def test_classification_follows_the_ci_classifier(self):
         for key, suite in self.probes().items():

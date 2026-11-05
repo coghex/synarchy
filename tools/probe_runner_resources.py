@@ -123,8 +123,9 @@ import save_compat_audit_codec
 #   * `persistence_contract_sweep` RETAINS the hold although its own
 #     Cabal contact is gone with the repl, and requirement 3 of #2274
 #     asks for the reason to be recorded here. The sweep is a probe that
-#     runs a NESTED `tools/run_probes.py`, and its default nested
-#     selection includes `save_compat_migration` — an exclusive holder.
+#     runs a NESTED `tools/run_probes.py`, and its selectable nested
+#     keys include `save_compat_migration` (opt-in since #2912, not in
+#     the default selection) — an exclusive holder.
 #     `descendant_hold_env` below exports both interests, but an ancestor's
 #     SHARED hold cannot cover a nested EXCLUSIVE request. A sweep holding
 #     `cabal-build` merely shared would still let its nested runner

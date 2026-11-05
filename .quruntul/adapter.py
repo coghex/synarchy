@@ -20,7 +20,9 @@ Builds and launches go through Synarchy's own machinery, so its cross-process
 `cabal-build` lock, probe resource holds and port spans keep applying. The
 census (`docs/probe_census.json`, read from the `docs-wip` worktree when there
 is one) is used in two ways: a census-deferred probe is not offered, and a
-probe's existing census measurement seeds its tests' first status. The adapter
+probe's existing census measurement seeds its tests' first status. An opt-in
+probe (`OPT_IN_ONLY`) is likewise not offered, independent of the census; run
+it on request through `tools/run_probes.py --only KEY --exact`. The adapter
 imports nothing from quruntul; the context supplies `Suite`, `Prepared` and
 `digest`. Check it with `python3 .quruntul/checks.py`.
 """
@@ -41,6 +43,13 @@ TRIAL_MARGIN_SECONDS = 300  # process start-up and teardown around a probe
 # Probes run_probes.py cannot launch unattended: they need a mode flag on a
 # direct invocation (tools/ci_probes.py MANUAL_ONLY_REASONS says so).
 DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which run_probes.py cannot pass"}
+# Probes the lab never schedules on its own (#2912): the owner decided on
+# 2026-11-05 that pre-release saves need no routine migration protection, and
+# the probe replays every legacy fixture for about an hour. They stay registered
+# and runnable on demand with `python3 tools/run_probes.py --only KEY --exact`.
+# A set here, not a census deferral: a deferral is owner-policy state the census
+# tools write and a targeted run could clear, and this policy must not depend on it.
+OPT_IN_ONLY = {"save_compat_migration": "optional; about an hour per run; run on request via tools/run_probes.py --only save_compat_migration --exact"}
 # The run-level outcome of a protocol probe, beside its declared checks: a probe
 # can report every check PASS and still exit nonzero, which probe_flake records
 # as a failed run.
@@ -142,7 +151,7 @@ class Synarchy:
         ports = _port_bases(registry, [key for key, _, _ in registry.PROBES])
         for key, script, description in registry.PROBES:
             entry = census.get(key) or {}
-            if (entry.get("census") or {}).get("deferred") or key in DIRECT_ONLY:
+            if (entry.get("census") or {}).get("deferred") or key in DIRECT_ONLY or key in OPT_IN_ONLY:
                 continue  # the census's deferral stays authoritative while the census exists
             ci = key in eligible
             framework = "command" if key in protocol and not ci else "exit"
