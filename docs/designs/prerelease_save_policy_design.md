@@ -31,7 +31,7 @@ concrete precondition
 - [x] PSP-1. Prove safe unsupported-version refusal at the load boundary — [#2915]
 - [x] PSP-2. Enforce current-schema version changes without requiring migrations — [#2916]
 - [x] PSP-3. Separate current-save auditing from historical compatibility auditing — [#2917]
-- [ ] PSP-4. Separate historical test obligations from current persistence coverage
+- [x] PSP-4. Separate historical test obligations from current persistence coverage — [#2918]
 - [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
 
 ## Epic contract
@@ -1056,12 +1056,16 @@ serves persistence_snapshot.py and the current persistence_contract probe.
 No duplicate current-only audit issue found. No code, build, test, engine,
 probe or review was run for this authoring step. Two children remain unchecked.
 
-## Pending PSP-4 tracker proposal
+## PSP-4 processing record
 
 Drafted under verified syn-manager continuation `xz3vwn2fudv6gyj9fkm392qzae`
 after PSP-3 revision 2 approval. Its prerequisite is linked as #2917;
-implementation waits for that preparatory slice. PSP-4 remains unchecked and
-requires separate artifact signoff. This draft does not evaluate PSP-5 beyond
+implementation waits for that preparatory slice. Created
+[#2918](https://github.com/coghex/synarchy/issues/2918) from the exact approved
+payload. Verified syn-manager reply `3j2yt52xt2vhtqvsw5d84fijjw` to question
+`837x3ytidzugxs33pc7wv2s4cw` (continuation `2y6kc7da26jx95tkhp9trdre2e`)
+relayed the owner: "Approve as drafted". The approved epic link below was
+applied with N = 2918 and verified by readback. No later child is approved. This draft does not evaluate PSP-5 beyond
 the already-approved activation/retirement boundary.
 
 Title: [save-policy PSP-4] Separate historical test obligations from current persistence coverage
@@ -1116,9 +1120,9 @@ Code/test inputs land in the implementation PR. Human-facing assertion mapping a
 <!-- issue-origin:codex -->
 ````
 
-### Exact proposed tracker side effects
+### Approved and applied tracker side effects
 
-After approval and creation, replace this line in #2914:
+The approved replacement in #2914 was:
 
 ```text
 - [ ] PSP-4. Separate historical test obligations from current persistence coverage
@@ -1148,4 +1152,4 @@ admission harness and seeded failures, exact-fluid saveSpec, Lua current-version
 and historical-range pins, and inventory audit/coverage references. Relevant
 current assertions are named in the body rather than inferred from filenames.
 No implementation, test, build, engine, probe or issue review was run.
-Two children remain unchecked; PSP-4 is not yet filed.
+One child remains unchecked: PSP-5.
