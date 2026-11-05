@@ -605,3 +605,76 @@ its commit. The manager launches `process-design-doc` separately: EPIC first,
 then exactly one dependency-ready child per invocation, with separate owner
 approval for every tracker artifact. Recheck the tracker and #2912 during
 processing; this publication does not itself create or approve issue bodies.
+
+## Pending tracker proposal
+
+EPIC draft, 2026-11-05, awaiting separate owner approval via syn-manager.
+This proposal does not change the processing ledger or approve any child.
+Approval authorizes one epic with existing labels, followed by the EPIC
+ledger link; no new label or other tracker edit is proposed.
+
+Title: [epic] Retire mandatory pre-release legacy-save compatibility
+
+Labels: `epic`, `save-load`.
+
+```markdown
+## Goal
+
+Before public release, permit save-format changes to advance the real on-disk versions and safely refuse older development saves, without requiring new migrations, frozen outgoing DTOs, or permanent historical fixtures. Keep current-save correctness mandatory.
+
+## Background
+
+Verified at master ad35e6f7c (2026-11-05): exact component-version dispatch exists, but currentSaveVersion is only a bridge marker. Contracts and CI/local gates still require historical compatibility. Headless groups mix historical and current protections; the current probe supplies three fresh-process load/resave cycles.
+
+The owner approved an automated current-schema/version guard and a future compatibility promise beginning with the first public-release save format. Retired pre-release saves will not be resurrected at release.
+
+## Children
+
+Phase 1:
+- [ ] PSP-1. Prove safe unsupported-version refusal at the load boundary
+
+Phase 2:
+- [ ] PSP-2. Enforce current-schema version changes without requiring migrations
+- [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
+
+Phase 3:
+- [ ] PSP-4. Separate historical test obligations from current persistence coverage
+
+Phase 4:
+- [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
+
+## Dependency structure
+
+PSP-1 can land first. PSP-2 depends on PSP-1 (critical path). PSP-3 depends on PSP-1 (independent preparation alongside PSP-2). PSP-4 depends on PSP-3. PSP-5 depends on PSP-1 through PSP-4 and is blocked by #2912 until it lands. Keep strict gates until tested replacement safety checks activate in PSP-5.
+
+## Done when
+
+- All five children and #2912 are delivered. CI, local gates, direct audit defaults and headless selection enforce current correctness and automated schema/version changes without requiring historical migrations, corpus preservation or historical reproducibility. Explicit historical runs remain available and report retired coverage honestly.
+- Every changed wire shape advances each affected component, metadata, Lua or framing version. Unsupported versions fail before decoding/publication with a clear diagnostic identifying the boundary, found version and supported versions. Unsafe older registrations and legacy fallback routes are refused; incompatible authoritative files never fall back to .prev. The old session remains intact and paused, and the file is not rewritten.
+- Current codec, inventory, reference/content integrity, storage recovery and feature-specific persistence coverage remain. The existing three fresh-process current-version load/resave cycles remain selected for persistence changes. Current assertions survive historical test/fixture retirement, with provenance retained.
+- Working migrations and DTO implementations remain; retaining a decoder requires its transitive wire shape to remain safe. The automated guard rejects same-version shape drift even after baseline regeneration and documents its semantic limits.
+- Authoritative rules agree and the public-release restoration checklist is published: establish the first release baseline, freeze its shapes, capture real fixtures, and restore migration, supported-baseline and historical verification obligations before release. This epic can close before release once that checklist is recorded.
+
+## Out of scope
+
+Gameplay, envelope redesign, bulk migration deletion, restoring development saves, deterministic replay, unrelated worldgen gates; probe opt-in belongs to #2912.
+
+## Related
+
+- #2912: separate probe opt-in dependency.
+- #2742: coordinate shared CI/gate surfaces.
+- #2564: separate faction retirement scope.
+- Supporting design: docs/designs/prerelease_save_policy_design.md.
+
+<!-- issue-origin:codex -->
+```
+
+Evidence and dedup: rechecked all 66 open issue titles and three open/closed
+searches (pre-release save, compatibility save, historical save). No duplicate
+policy epic found. Read #2912, #2742 and #2564: respectively separate probe
+opt-in, CI optimization, and faction retirement. Current dispatch, existing
+CI/local compatibility commands, actual headless group registrations,
+persistence policy and current fresh-process probe match the epic premise
+at `ad35e6f7c`. Six unique ledger entries match the five delivery headings;
+dependencies exist and are acyclic. No child body was drafted or evaluated.
+No builds, tests, engines or probes were run for this tracker-only step.
