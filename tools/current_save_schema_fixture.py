@@ -52,6 +52,9 @@ tryLegacyMetadataFallbacks bytes = case decodeLegacySessionMetadata bytes of
     NotLegacyShaped → decodeB2SessionMetadata bytes
     other           → other
 
+decodeCurrent ∷ ByteString → Either EnvelopeError Int
+decodeCurrent bytes = decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion 0
+
 otherFunction ∷ Int
 otherFunction = 0
 """
@@ -92,6 +95,12 @@ module World.Save.Envelope.Codec where
 
 encodeEnvelope ∷ Int → Int
 encodeEnvelope n = n
+
+decodeEnvelope ∷ Limits → Word32 → Int → Either EnvelopeError Int
+decodeEnvelope limits expectedVersion n = do
+    version ← pure n
+    when (version ≢ expectedVersion) (Left (UnsupportedEnvelopeVersion version))
+    pure n
 """
 
 REGISTRY = """\
@@ -101,6 +110,7 @@ saveComponentRegistry ∷ [SomeCodec]
 saveComponentRegistry =
     [ registerComponent alphaCodec
     , registerComponent betaCodec
+    , registerComponent gammaCodec
     ]
 """
 
@@ -123,8 +133,11 @@ data AlphaDTO = AlphaDTO
     , adAlias  ∷ !AlphaAlias
     , adWrap   ∷ !AlphaWrap
     , adShared ∷ !SharedDTO
+    , adPair   ∷ !(PairOf Int Text)
     } deriving stock (Show, Generic)
       deriving anyclass (Serialize)
+
+type PairOf a b = (a, b)
 
 data AlphaKindDTO = KindA | KindB
     deriving stock (Show, Generic)
@@ -149,7 +162,7 @@ data AlphaDTOv1 = AlphaDTOv1
 
 migrateAlphaDTOv1
     ∷ AlphaDTOv1 → AlphaDTO
-migrateAlphaDTOv1 (AlphaDTOv1 n) = AlphaDTO n KindA 0 (AlphaWrap 0) (SharedDTO 0 0)
+migrateAlphaDTOv1 (AlphaDTOv1 n) = AlphaDTO n KindA 0 (AlphaWrap 0) (SharedDTO 0 0) (0, n)
 
 alphaCodec ∷ ComponentCodec AlphaDTO
 alphaCodec = componentCodec ComponentSpec
@@ -186,6 +199,47 @@ betaCodec = componentCodec ComponentSpec
     , csEncode        = id
     , csDecode        = id
     , csOlderVersions = []
+    , csValidate      = const []
+    }
+"""
+
+GAMMA = """\
+module World.Save.Component.Gamma where
+
+gammaComponentId ∷ ComponentId
+gammaComponentId = ComponentId "gamma"
+
+data GammaDTO = GammaDTO
+    { gdValue ∷ !Int
+    } deriving stock (Show, Generic)
+      deriving anyclass (Serialize)
+
+data GammaDTOv1 = GammaDTOv1
+    { g1Value ∷ !Int
+    } deriving stock (Show, Generic)
+      deriving anyclass (Serialize)
+
+data GammaDTOv2 = GammaDTOv2
+    { g2Value ∷ !Word32
+    } deriving stock (Show, Generic)
+      deriving anyclass (Serialize)
+
+migrateGammaDTOv1 ∷ GammaDTOv1 → GammaDTO
+migrateGammaDTOv1 (GammaDTOv1 n) = GammaDTO n
+
+migrateGammaDTOv2 ∷ GammaDTOv2 → GammaDTO
+migrateGammaDTOv2 (GammaDTOv2 n) = GammaDTO (fromIntegral n)
+
+gammaCodec ∷ ComponentCodec GammaDTO
+gammaCodec = componentCodec ComponentSpec
+    { csComponent     = gammaComponentId
+    , csVersion       = 3
+    , csRequired      = False
+    , csDeps          = []
+    , csEncode        = id
+    , csDecode        = id
+    , csOlderVersions = [ atVersion 1 migrateGammaDTOv1
+                        , atVersion 2 migrateGammaDTOv2 ]
     , csValidate      = const []
     }
 """
@@ -277,6 +331,7 @@ def base_files() -> dict[str, str]:
         "src/World/Save/Component/Types.hs": COMPONENT_TYPES,
         "src/World/Save/Component/Alpha.hs": ALPHA,
         "src/World/Save/Component/Beta.hs": BETA,
+        "src/World/Save/Component/Gamma.hs": GAMMA,
         "src/Quirk/Types.hs": QUIRK,
         "src/World/Save/Types.hs": SAVE_TYPES,
         "src/World/Save/Compat/MetadataV1.hs": METADATA_V1,

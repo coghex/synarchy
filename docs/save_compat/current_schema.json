@@ -23,7 +23,7 @@
         "World.Save.Component.EntitySnapshots.PageBuildingsDTOv3",
         "World.Save.Component.PageActivity.ItemInstanceDTOv1"
       ],
-      "legacyShape": "1a3ef6807f9adb7d67763a4caadb3e22ebf4da29e6e596755c35d59e58f591a3",
+      "legacyShape": "dfb8479d288cacd70c10255d4aad01e4a3f83646880a80b200af6db4b5a8c81a",
       "ownerSources": [
         "src/World/Save/Component/EntitySnapshots.hs"
       ],
@@ -37,7 +37,7 @@
         "World.Save.Component.PageActivity.ItemInstanceDTO",
         "World.Save.Component.PageActivity.ItemStorageDTO"
       ],
-      "shape": "730aabe3effdbb435368bff8e639a830f72b9e4a036dda00b1a2f5b2f4201ca6"
+      "shape": "8952ce6626688b7796e6a5274ce3716b28d1ed445a28844d4402fc7f57938c8e"
     },
     "container-knowledge": {
       "acceptedVersions": [
@@ -56,7 +56,7 @@
         "World.Save.Component.Knowledge.PageContainerKnowledgeDTOv1",
         "World.Save.Component.PageActivity.ItemInstanceDTOv1"
       ],
-      "legacyShape": "5d43a255ca980eda3963709ca9ac2a916ec3b4376cc35bfc2c3880ad80ec4c21",
+      "legacyShape": "05391d75c22f05562660864b03f2c49c92ea1c6d2d2e2e026ed91618b95a5174",
       "ownerSources": [
         "src/World/Save/Component/Knowledge.hs"
       ],
@@ -69,7 +69,7 @@
         "World.Save.Component.PageActivity.ItemInstanceDTO",
         "World.Save.Component.PageActivity.ItemStorageDTO"
       ],
-      "shape": "0acb1e86335476e0bbf3fa086b9b0c6cee0e2b300498afeb77a3adc9a95787e1"
+      "shape": "e03be6b199a5fe8db15b2bd85e00615e268ed704b951f055316be6512e4b6c89"
     },
     "core-session": {
       "acceptedVersions": [
@@ -86,7 +86,7 @@
         "World.Save.Component.Session.CoreSessionDTOv1",
         "World.Save.Component.Session.CoreSessionDTOv2"
       ],
-      "legacyShape": "7fa34945a29025f297a2ca8d41e069e25510b39fd820aaca3d3ef6d0bb30d9d0",
+      "legacyShape": "d962ade60e83a00e523c7127650d7b2e02928c35a57d9f44626addb7e4f089bf",
       "ownerSources": [
         "src/World/Save/Component/Session.hs"
       ],
@@ -97,7 +97,7 @@
         "World.Save.Component.Session.CoreSessionDTO",
         "World.Save.Component.Session.LiveCameraDTO"
       ],
-      "shape": "626962f9950d2057118a9f499cd9f6fcb0a93659d755b83579e4788b5f1891df"
+      "shape": "8fea713e8150799f108140076f1e9799fb081f73e8e171d31ce55d895076816d"
     },
     "craft-bills": {
       "acceptedVersions": [
@@ -116,7 +116,7 @@
         "World.Save.Component.EntitySystems.CraftBillsDTOv1",
         "World.Save.Component.EntitySystems.PageCraftBillsDTOv1"
       ],
-      "legacyShape": "9b4a6b55651b5132112a2e95f6e0beb9982ce922720c738147b181970c1f61ee",
+      "legacyShape": "2bc3cc6b30583c9f41166339e6a0e41a683d211de7c02e47b2e56de20c422927",
       "ownerSources": [
         "src/World/Save/Component/EntitySystems.hs"
       ],
@@ -132,7 +132,7 @@
         "World.Save.Component.EntitySystems.PageCraftBillsDTO",
         "World.Save.Reference.SamePageRef"
       ],
-      "shape": "3336bbe4ba85d1533be87328b399d39714866fe4664e31f2cc403ffe837e300c"
+      "shape": "c90d9a256c4f40fcb459a435be06edbb2d4000b04829e5dee08f47373edfd501"
     },
     "framing": {
       "acceptedVersions": [
@@ -240,7 +240,7 @@
         "World.Save.Compat.MetadataV1.SaveMetadataV1",
         "World.Save.Compat.MetadataV2.SaveMetadataV2"
       ],
-      "legacyShape": "f3645ef2567ae5017e0eeac34de2169d27c0751fbe65da1f1823c6534719f9b9",
+      "legacyShape": "5d552deb57f63a2a73f3acf21213026a7118f5dd9fde65e6effccbbd03cdcb2a",
       "ownerSources": [
         "src/World/Save/Envelope.hs"
       ],
@@ -248,7 +248,7 @@
         "World.Page.GeneratedId.GeneratedWorldId",
         "World.Save.Types.SaveMetadata"
       ],
-      "shape": "400d4d11502a4af523e3b8b3460459d5366378941fea9208bad314e6dbdf0d51"
+      "shape": "f2025214238c894bf09bdc82791eed7a538c24c0a63876f503e2aecd0e669fa5"
     },
     "portable-knowledge": {
       "acceptedVersions": [
@@ -273,7 +273,7 @@
         "World.Save.Component.PortableKnowledge.PortableRecordDTO",
         "World.Save.Component.PortableKnowledge.WeightObservationDTO"
       ],
-      "shape": "344dfcb21676ddeefe781ea8ecc963c89559d50a0a6d28b3c2159395fd7cd31f"
+      "shape": "e101985e45d0134625926ef54f57c7427cd0990a6a366b374a375a7477b0910a"
     },
     "power-nodes": {
       "acceptedVersions": [
@@ -292,7 +292,7 @@
         "World.Save.Component.EntitySystems.PowerNodeDTOv1",
         "World.Save.Component.EntitySystems.PowerNodesDTOv1"
       ],
-      "legacyShape": "52b3fd449c71e8d6dfdd867e31a709a6b560aab30e44fced631e7582274ca6b2",
+      "legacyShape": "037dba14c0278ec91707ba5534dbac542209e6d57e90c9fc82500739d307fe31",
       "ownerSources": [
         "src/World/Save/Component/EntitySystems.hs"
       ],
@@ -307,7 +307,7 @@
         "World.Save.Component.EntitySystems.PowerNodesDTO",
         "World.Save.Reference.SamePageRef"
       ],
-      "shape": "b81d127e10b4566cc7c844478f10829cb1627c998cc081801efec30ee19ae241"
+      "shape": "c23b876f46d87f28e404e548d7936629b97b9ac0ea6a291a212ea736bb30cbed"
     },
     "relation-causes": {
       "acceptedVersions": [
@@ -328,7 +328,7 @@
         "World.Save.Component.RelationCauses.RelationCausesDTO",
         "World.Save.Component.RelationCauses.RelationValueDTO"
       ],
-      "shape": "0309e37bb2bbb76de550d35fd8f7efdc804d8ea7cca579b32c0e8b8dc7f71eca"
+      "shape": "e412e25d8273c51b30872f50d5c8af2e87c2b34aae9c06f64582c20bf006b896"
     },
     "session": {
       "acceptedVersions": [
@@ -484,7 +484,7 @@
         "World.Weather.Types.PressureType",
         "World.Weather.Types.SurfaceType"
       ],
-      "shape": "766b54e320f67ac9dbf7790f4e986f60d4022339e032e2eb48e8baf1d4f8be1d"
+      "shape": "96d513f37c2fe5e13087dc70e63c7ced3d6085682a812b2e986fba2c448c9cb2"
     },
     "texture-palette": {
       "acceptedVersions": [
@@ -503,7 +503,7 @@
       "owners": [
         "World.Save.Component.Session.TexPaletteDTO"
       ],
-      "shape": "4674ffc13779e28bd47dde9b6cfa15339673bb8d210f9165af28044e2b340ddc"
+      "shape": "3b19bfa290cd77d366341affdfebf3002fb277aa691ce8463be2c8134587bc37"
     },
     "transfer-orders": {
       "acceptedVersions": [
@@ -536,7 +536,7 @@
         "World.Save.Component.Transfer.TransferStateDTO",
         "World.Save.Reference.SamePageRef"
       ],
-      "shape": "88bb6a3367412fad76c2e92728fd92ff3deb19493a3de473668e7e7dec219e7b"
+      "shape": "6fce153b5aeabac02450ba64b3908cf0a8c4ab13ce34adfd41a47dc25548b4d2"
     },
     "unit-sim": {
       "acceptedVersions": [
@@ -558,7 +558,7 @@
         "World.Save.Component.EntitySimulation.UnitSimDTOv2",
         "World.Save.Component.EntitySimulation.UnitSimStateDTOv1"
       ],
-      "legacyShape": "d8104ea102676c4f5b34842ec2c353438b82218ebb4d50f31e3862771c78462e",
+      "legacyShape": "12097555c76640d6f7958dc2c8c1803e107afdf95b3cf950bfc1b5bf2ea9fdcc",
       "ownerSources": [
         "src/World/Save/Component/EntitySimulation.hs"
       ],
@@ -575,7 +575,7 @@
         "World.Save.Component.EntitySimulation.UnitSimStateDTO",
         "World.Save.Reference.SamePageRef"
       ],
-      "shape": "4b15b57d671f5912cfec5838408e1cf278228f753e785f9f6830d0435effcd65"
+      "shape": "5fcef73b39a6c276f2b303ddfa602226bb52adea5f3b542fbd17219b531680c0"
     },
     "units": {
       "acceptedVersions": [
@@ -608,7 +608,7 @@
         "World.Save.Component.EntitySnapshots.UnitsDTOv5",
         "World.Save.Component.PageActivity.ItemInstanceDTOv1"
       ],
-      "legacyShape": "a1f260b3caefd58d59b8e9e2e0ce399756c70a8f8212ea2e6cfcc34bf767f72e",
+      "legacyShape": "d5a6d4bd7722734f83cad27da65baf5fc014a7086aa553a4406d64041a0cffa3",
       "ownerSources": [
         "src/World/Save/Component/EntitySnapshots.hs"
       ],
@@ -631,7 +631,7 @@
         "World.Save.UnitFaction.MembershipSourceDTO",
         "World.Save.UnitFaction.UnitFactionDTO"
       ],
-      "shape": "ccc9d82b91b88346c7acbd3b5c095c43416bbd9df369b47ca36d19edc830a6b8"
+      "shape": "94301603a5697bfdd4f0fecef3cef6376eae4ed5d07cf3361849387a08f92510"
     },
     "world-activity": {
       "acceptedVersions": [
@@ -676,7 +676,7 @@
         "World.Save.Component.PageActivity.WorldActivityDTOv7",
         "World.Save.Component.PageActivity.WorldActivityDTOv8"
       ],
-      "legacyShape": "dc54ee6e0338b428f4b2e7217f72209da29a06e6742b3e1aa23ea28ddc6c1472",
+      "legacyShape": "0e4eedc399c8d6d891002bbfb519c537f0342d93883b07f4fb0746c5c53c1f2f",
       "ownerSources": [
         "src/World/Save/Component/PageActivity.hs"
       ],
@@ -712,7 +712,7 @@
         "World.Save.Component.PageActivity.TillDesignationDTO",
         "World.Save.Component.PageActivity.WorldActivityDTO"
       ],
-      "shape": "517b35d2372dd95d2d46f03f9dcb2ecc81fa4567c42d899c7710463de4b87ec1"
+      "shape": "843a75df3a5582004af9e67cde388ea48557241f5171281c964711cc0cefc1c5"
     },
     "world-edits": {
       "acceptedVersions": [
@@ -749,7 +749,7 @@
         "World.Save.Component.PageEdits.WorldEditsDTOv5",
         "World.Save.Component.PageEdits.WorldEditsDTOv6"
       ],
-      "legacyShape": "f7c5aa03ae1a719adff8a2ef57f268684d4b6cd1f1650cbf32cece2a90b207f0",
+      "legacyShape": "fa2a7857b9b8d9eec1bdd87db44d8554f36ef4159e0efd4e5e5a3d659c52ab8f",
       "ownerSources": [
         "src/World/Save/Component/PageEdits.hs"
       ],
@@ -769,7 +769,7 @@
         "World.Save.Component.PageEdits.WorldEditDTO",
         "World.Save.Component.PageEdits.WorldEditsDTO"
       ],
-      "shape": "087ed69d273d84d110bd69cf919e4158a53f7965aef4e4832cb0e66a20250c98"
+      "shape": "f180574b9f34d96fa8272474bb4b0ba538c2e6184144a9ecbf94f690c678b207"
     },
     "world-pages": {
       "acceptedVersions": [
@@ -865,7 +865,7 @@
         "World.Save.Component.WorldGenNaming.RiverNameDTOv1",
         "World.Save.Component.WorldGenNaming.RiverNamesDTOv1"
       ],
-      "legacyShape": "14eb677aac66968587483eb80cc84b34ff70e28c19a2ef49f4f1f8691fd11193",
+      "legacyShape": "f88b72749a02f9be8a42c42bd94739ecf57ae25ddadb0e69b7122874860d4960",
       "ownerSources": [
         "src/World/Save/Component/PageCore.hs"
       ],
@@ -975,7 +975,7 @@
         "World.Weather.Types.PressureType",
         "World.Weather.Types.SurfaceType"
       ],
-      "shape": "aa84c15333023382ee10489ab6a261d5fc0699f236baa3afa1bc844b4431d197"
+      "shape": "37ab5f948fe5120ad5c6241bf7c146a52ab537be6ed173eac6c622478ded1e8f"
     }
   },
   "format": 1,
@@ -990,7 +990,17 @@
     "b2-lua-state": {
       "carriers": [
         "metadata",
-        "lua-state"
+        "lua-state",
+        "buildings",
+        "core-session",
+        "craft-bills",
+        "power-nodes",
+        "texture-palette",
+        "unit-sim",
+        "units",
+        "world-activity",
+        "world-edits",
+        "world-pages"
       ],
       "enabled": true
     }

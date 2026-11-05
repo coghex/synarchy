@@ -106,7 +106,11 @@ def compare(base: Model, cand: Model) -> list[str]:
             continue
         bumped = c.current_version > b.current_version
         shape_changed = c.shape != b.shape
-        legacy_changed = bool(c.legacy_shape) and c.legacy_shape != b.legacy_shape
+        known = {**b.decl_hashes, **b.legacy_hashes}
+        legacy_edited = sorted(
+            q for q, digest in c.legacy_hashes.items()
+            if known.get(q) != digest)
+        legacy_changed = bool(legacy_edited)
         if c.kind == "legacy":
             if shape_changed:
                 affected[cid] = "its frozen shape changed"

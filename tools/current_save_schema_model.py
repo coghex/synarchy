@@ -54,6 +54,7 @@ from enum_append_only_audit_model import (
     Scan,
 )
 from enum_append_only_audit_parse import (
+    declaration_blocks,
     split_top_level,
     strip_haskell_comments,
 )
@@ -103,8 +104,19 @@ LEGACY_ROUTES = {
                     "tryLegacyMetadataFallbacks"),
         "callees": ("decodeB2SessionEnvelope", "decodeB2SessionMetadata"),
         "carriers": ("metadata", "lua-state"),
+        # B2 decodes every REQUIRED Haskell component of its era through
+        # the shared codecs (`assembleSnapshot`), so a version change in
+        # any of them affects the route too.
+        "required_components": True,
     },
 }
+
+# Lower-case words a legacy dispatcher body may contain: its own names,
+# the route decoders, its parameters and the Haskell keywords it uses.
+# Anything else is a call this reader cannot attribute to a route, so
+# the route's state is UNKNOWN and the build fails rather than guessing
+# it is disabled.
+DISPATCHER_WORDS = frozenset({"bytes", "other", "case", "of", "_"})
 
 
 class SchemaError(Exception):
@@ -124,6 +136,8 @@ class Carrier:
     custom_owners: list[str]
     owner_sources: list[str]
     decl_hashes: dict[str, str] = field(default_factory=dict)
+    legacy_hashes: dict[str, str] = field(default_factory=dict)
+    required: bool = False
 
     def to_record(self) -> dict:
         return {
@@ -173,21 +187,48 @@ def _sha(text: str) -> str:
 
 
 _BANG_RE = re.compile(r"(?<![\w'])[!~](?=[\w(\[])")
+_TOKEN_RE = re.compile(r"[\w'.]+|\S")
 _WIRE_CLASSES = ("Generic", "Serialize")
 
 
-def declaration_digest(decl: Declaration) -> str:
-    """Digest of one declaration's wire-relevant text: kind, name,
-    constructor/field text with comments, layout and strictness gone,
-    and how `Generic`/`Serialize` are derived."""
-    body = " ".join(decl.body.split())
-    body = _BANG_RE.sub("", body)
-    body = body.replace("::", "∷").replace("->", "→")
+def _tokens(text: str) -> str:
+    """Whitespace-free token stream: `a∷b` and `a ∷ b` are the same."""
+    text = _BANG_RE.sub("", text)
+    text = text.replace("::", "∷").replace("->", "→")
+    return " ".join(_TOKEN_RE.findall(text))
+
+
+def declaration_digest(decl: Declaration, params: str = "") -> str:
+    """Digest of one declaration's wire-relevant text: kind, name, type
+    parameters (their ORDER decides what an applied alias or newtype
+    means), constructor/field text with comments, layout and strictness
+    gone, and how `Generic`/`Serialize` are derived."""
     deriving = sorted(
         f"{strategy or '-'}:{cls}"
         for strategy, names in decl.deriving_classes.items()
         for cls in names if cls in _WIRE_CLASSES)
-    return _sha(f"{decl.kind} {decl.name} = {body} | {','.join(deriving)}")
+    return _sha(f"{decl.kind} {decl.name} [{_tokens(params)}] = "
+                f"{_tokens(decl.body)} | {','.join(deriving)}")
+
+
+def declaration_params(root: Path, scan: Scan) -> dict[str, str]:
+    """Qualified declaration -> the text between its name and its `=`
+    (the type parameters), which the reused parser discards."""
+    out: dict[str, str] = {}
+    for module, rel in sorted(scan.module_paths.items()):
+        text = strip_haskell_comments(
+            (root / rel).read_text(encoding="utf-8"))
+        for _line, block in declaration_blocks(text):
+            head = split_top_level(block, "=")[0]
+            m = re.match(r"(?:data|newtype|type)[ \t]+([A-Z][\w']*)(.*)",
+                         head, re.S)
+            if m:
+                deriving = re.search(
+                    r"(?<![\w'])deriving(?![\w'])", m.group(2))
+                out[f"{module}.{m.group(1)}"] = (
+                    m.group(2)[:deriving.start()] if deriving
+                    else m.group(2))
+    return out
 
 
 @dataclass
@@ -223,8 +264,7 @@ def discover_instances(root: Path, scan: Scan) -> list[Instance]:
             m = _INSTANCE_HEAD_RE.search(tail)
             if m is None:
                 continue
-            found.append(Instance(module, m.group(1),
-                                  _sha(flat.replace("::", "∷"))))
+            found.append(Instance(module, m.group(1), _sha(_tokens(flat))))
     return found
 
 
@@ -238,6 +278,7 @@ class Index:
         self.by_name: dict[str, list[Declaration]] = {}
         for d in scan.declarations:
             self.by_name.setdefault(d.name, []).append(d)
+        self.params = declaration_params(root, scan)
         self.instances = discover_instances(root, scan)
         self.instances_by_head: dict[str, list[Instance]] = {}
         for inst in self.instances:
@@ -264,6 +305,9 @@ class Index:
                         f"both derives Serialize and has a hand-written "
                         f"instance ({', '.join(keys)}) -- say which one "
                         f"owns its wire shape")
+
+    def digest(self, decl: Declaration) -> str:
+        return declaration_digest(decl, self.params.get(decl.qualified, ""))
 
     def resolve(self, name: str, via: str) -> list[Declaration]:
         decls = self.by_name.get(name, [])
@@ -325,11 +369,15 @@ def closure_of(index: Index, seeds: list[Declaration],
     return out
 
 
-def _shape(closure: Closure, extra: list[str] = ()) -> str:
-    lines = [f"decl {q} {declaration_digest(d)}"
-             for q, d in sorted(closure.decls.items())]
-    lines += [f"inst {k} {i.digest}"
-              for k, i in sorted(closure.customs.items())]
+def _hashes(index: Index, closure: Closure) -> dict[str, str]:
+    out = {q: index.digest(d) for q, d in closure.decls.items()}
+    out.update({f"instance {k}": i.digest
+                for k, i in closure.customs.items()})
+    return out
+
+
+def _shape(hashes: dict[str, str], extra: list[str] = ()) -> str:
+    lines = [f"{k} {v}" for k, v in sorted(hashes.items())]
     lines += list(extra)
     return _sha("\n".join(lines))
 
@@ -337,22 +385,23 @@ def _shape(closure: Closure, extra: list[str] = ()) -> str:
 def _carrier(index: Index, cid: str, kind: str, current: int,
              accepted: list[int], current_seeds: list[Declaration],
              legacy_seeds: list[Declaration], extra: list[str] = (),
-             owner_sources: list[str] = ()) -> Carrier:
+             owner_sources: list[str] = (), required: bool = False
+             ) -> Carrier:
     cur = closure_of(index, current_seeds, cid)
     old = closure_of(index, legacy_seeds, f"{cid} (legacy)")
     legacy_only = Closure(
         {q: d for q, d in old.decls.items() if q not in cur.decls},
         {k: i for k, i in old.customs.items() if k not in cur.customs})
+    cur_hashes = _hashes(index, cur)
+    old_hashes = _hashes(index, legacy_only)
     return Carrier(
         id=cid, kind=kind, current_version=current,
-        accepted=sorted(accepted), shape=_shape(cur, extra),
-        legacy_shape=_shape(legacy_only) if legacy_only.decls
-        or legacy_only.customs else "",
+        accepted=sorted(accepted), shape=_shape(cur_hashes, extra),
+        legacy_shape=_shape(old_hashes) if old_hashes else "",
         owners=sorted(cur.decls), legacy_owners=sorted(legacy_only.decls),
         custom_owners=sorted(cur.customs),
         owner_sources=sorted(owner_sources),
-        decl_hashes={q: declaration_digest(d)
-                     for q, d in sorted(cur.decls.items())})
+        decl_hashes=cur_hashes, legacy_hashes=old_hashes, required=required)
 
 
 # ---------------------------------------------------------------------------
@@ -552,16 +601,55 @@ def _lua_table_text(text: str, open_index: int) -> tuple[str, str]:
     raise SchemaError("unterminated saveMods.register table")
 
 
+_SAVE_MODULES_REQUIRE_RE = re.compile(
+    r"""require\s*\(?\s*["']scripts\.lib\.save_modules["']\s*\)?""")
+_LUA_ALIAS_RE = re.compile(
+    r"""(?:local\s+)?([A-Za-z_]\w*)\s*=\s*require\s*\(?\s*"""
+    r"""["']scripts\.lib\.save_modules["']\s*\)?""")
+_LUA_ID_RE = re.compile(r"""\s*(["'])([A-Za-z_]\w*)\1\s*,\s*\{""")
+
+
+def discover_lua_registrations(root: Path) -> list[tuple[Path, str, int]]:
+    """Every registration call of the Lua save-module registry under
+    scripts/, as (file, id, offset of its table's `{`). Exhaustive by
+    construction: every `<alias>.register(` on the module's require
+    alias, or on the require expression itself, MUST read as a quoted
+    literal id followed by a table, or the build fails -- an unreadable
+    site is never treated as an absent carrier."""
+    sites: list[tuple[Path, str, int]] = []
+    for path in sorted((root / SCRIPTS_REL).rglob("*.lua")):
+        text = path.read_text(encoding="utf-8")
+        if "save_modules" not in text:
+            continue
+        rel = path.relative_to(root).as_posix()
+        aliases = {m.group(1) for m in _LUA_ALIAS_RE.finditer(text)}
+        names = "|".join(re.escape(a) for a in sorted(aliases))
+        callers = [rf"(?:{names})"] if names else []
+        callers.append(_SAVE_MODULES_REQUIRE_RE.pattern)
+        call_re = re.compile(
+            r"(?<![\w.])(?:" + "|".join(callers) + r")\s*[.:]\s*register"
+            r"\s*\(")
+        for call in call_re.finditer(text):
+            m = _LUA_ID_RE.match(text, call.end())
+            if m is None:
+                raise SchemaError(
+                    f"unknown coverage: {rel} calls the Lua save-module "
+                    f"registry's register(...) with something other than "
+                    f"a quoted literal id and a table literal, so its "
+                    f"carrier cannot be identified")
+            sites.append((path, m.group(2), m.end() - 1))
+    return sites
+
+
 def lua_modules(root: Path) -> dict[str, dict]:
-    scripts = root / SCRIPTS_REL
-    found = components.discover_lua_save_modules(scripts)
+    found = discover_lua_registrations(root)
     if not found:
         raise SchemaError(
             f"unknown coverage: no saveMods.register call sites under "
             f"{SCRIPTS_REL}")
     seen: dict[str, Path] = {}
     per_file: dict[Path, int] = {}
-    for path, lua_id in found:
+    for path, lua_id, _ in found:
         if lua_id in seen:
             raise SchemaError(
                 f"ambiguous coverage: Lua save module `{lua_id}` is "
@@ -569,27 +657,19 @@ def lua_modules(root: Path) -> dict[str, dict]:
                 f"{path.relative_to(root)}")
         seen[lua_id] = path
         per_file[path] = per_file.get(path, 0) + 1
-    codec = root / DATA_CODEC_REL
-    if not codec.is_file():
+    if not (root / DATA_CODEC_REL).is_file():
         raise SchemaError(
             f"unknown coverage: shared Lua save codec {DATA_CODEC_REL} "
             f"is missing")
     modules: dict[str, dict] = {}
-    for lua_id, path in seen.items():
+    for path, lua_id, brace in found:
         rel = path.relative_to(root).as_posix()
         if per_file[path] > 1:
             raise SchemaError(
                 f"ambiguous coverage: {rel} registers {per_file[path]} Lua "
                 f"save modules; one registration per file is required so "
                 f"each module's owning source is unambiguous")
-        text = path.read_text(encoding="utf-8")
-        m = re.search(
-            rf'saveMods\.register\(\s*"{re.escape(lua_id)}"\s*,\s*\{{', text)
-        if m is None:
-            raise SchemaError(
-                f"{rel}: cannot read the saveMods.register(\"{lua_id}\", "
-                f"{{...}}) table")
-        table, wide = _lua_table_text(text, m.end() - 1)
+        table, wide = _lua_table_text(path.read_text(encoding="utf-8"), brace)
         fields = {}
         for name, pattern in (
                 ("version", r"(?<![\w.])version\s*=\s*(\d+)\s*,"),
@@ -603,10 +683,17 @@ def lua_modules(root: Path) -> dict[str, dict]:
                     f"{rel}: lua.{lua_id} declares no literal `{name}` "
                     f"in its saveMods.register table")
             fields[name] = fm.group(1)
+        entries = [e.strip() for e in fields["inputVersions"].split(",")
+                   if e.strip()]
+        bad = [e for e in entries if not re.fullmatch(r"\d+", e)]
+        if bad or not entries:
+            raise SchemaError(
+                f"{rel}: lua.{lua_id}'s inputVersions must be integer "
+                f"literals, found {bad or 'none'} -- a non-literal entry "
+                f"hides which versions it accepts")
         modules[lua_id] = {
             "version": int(fields["version"]),
-            "accepted": sorted(int(v) for v in
-                               re.findall(r"\d+", fields["inputVersions"])),
+            "accepted": sorted(int(e) for e in entries),
             "required": fields["required"] == "true", "source": rel}
     return modules
 
@@ -640,6 +727,45 @@ def _dispatcher_body(text: str, name: str) -> str:
     return "\n".join(blocks)
 
 
+_FRAMING_GUARD = ("when ( version ≢ expectedVersion ) "
+                  "( Left ( UnsupportedEnvelopeVersion version ) )")
+_DECODE_ENVELOPE_CALL_RE = re.compile(
+    r"(?<![\w'.])decodeEnvelope\s+([\w']+)\s+([\w']+)")
+
+
+def _check_framing_dispatch(root: Path, scan: Scan) -> None:
+    """The framing carrier accepts exactly `currentEnvelopeVersion` only
+    if (1) the decoder rejects every version but the one it is handed,
+    with no other disjunct, and (2) every caller hands it
+    `currentEnvelopeVersion`. Anything else cannot be established from
+    source, so it fails instead of assuming current-only acceptance."""
+    codec = _tokens(strip_haskell_comments(
+        (root / ENVELOPE_CODEC_REL).read_text(encoding="utf-8")))
+    if codec.count(_FRAMING_GUARD) != 1 \
+            or codec.count("UnsupportedEnvelopeVersion") != 1:
+        raise SchemaError(
+            f"unknown coverage: {ENVELOPE_CODEC_REL} must reject exactly "
+            f"`version ≢ expectedVersion` with UnsupportedEnvelopeVersion "
+            f"and nothing else; the framing carrier's accepted set cannot "
+            f"be established")
+    calls = 0
+    for module, rel in sorted(scan.module_paths.items()):
+        if rel == ENVELOPE_CODEC_REL:
+            continue
+        text = strip_haskell_comments((root / rel).read_text(encoding="utf-8"))
+        for _limits, version in _DECODE_ENVELOPE_CALL_RE.findall(text):
+            calls += 1
+            if version != "currentEnvelopeVersion":
+                raise SchemaError(
+                    f"unknown coverage: {rel} decodes an envelope against "
+                    f"`{version}`, not currentEnvelopeVersion; the framing "
+                    f"carrier would accept more than its current version")
+    if not calls:
+        raise SchemaError(
+            "unknown coverage: no decodeEnvelope call site found, so the "
+            "framing carrier's accepted version cannot be established")
+
+
 def build_model(root: Path) -> Model:
     root = Path(root)
     try:
@@ -663,7 +789,8 @@ def _build_model(root: Path) -> Model:
     for cid, info in sorted(component_codecs(index).items()):
         carriers[cid] = _carrier(
             index, cid, "component", info["version"], info["accepted"],
-            info["current"], info["legacy"], owner_sources=[info["source"]])
+            info["current"], info["legacy"], owner_sources=[info["source"]],
+            required=info["required"])
 
     # Metadata.
     envelope_text = (root / ENVELOPE_REL).read_text(encoding="utf-8")
@@ -700,7 +827,8 @@ def _build_model(root: Path) -> Model:
             accepted=info["accepted"],
             shape=_sha(f"lua-codec {codec_digest}"), legacy_shape="",
             owners=[], legacy_owners=[], custom_owners=[],
-            owner_sources=sorted([info["source"], DATA_CODEC_REL]))
+            owner_sources=sorted([info["source"], DATA_CODEC_REL]),
+            required=info["required"])
 
     # Framing.
     framing = fingerprint.envelope_framing_fingerprint(
@@ -708,6 +836,7 @@ def _build_model(root: Path) -> Model:
         root / CABAL_REL)
     framing_version = fingerprint.current_envelope_version(
         root / ENVELOPE_REL)
+    _check_framing_dispatch(root, scan)
     carriers["framing"] = Carrier(
         id="framing", kind="framing", current_version=framing_version,
         accepted=[framing_version], shape=framing, legacy_shape="",
@@ -742,12 +871,30 @@ def _build_model(root: Path) -> Model:
         owners=[], legacy_owners=[], custom_owners=[],
         owner_sources=[ENVELOPE_REL])
 
-    # Legacy routes.
+    # Legacy routes. A dispatcher may only speak the route vocabulary:
+    # a call this reader cannot attribute (a renamed decoder, a
+    # forwarding helper) leaves the route's state unknown, and unknown
+    # fails rather than reading as "disabled".
+    known = set(DISPATCHER_WORDS)
+    for spec in LEGACY_ROUTES.values():
+        known |= set(spec["entries"]) | set(spec["callees"])
     routes: dict[str, Route] = {}
     for rid, spec in sorted(LEGACY_ROUTES.items()):
         bodies = "\n".join(_dispatcher_body(envelope_text, e)
                            for e in spec["entries"])
+        unknown = sorted({w for w in re.findall(
+            r"(?<![\w'.])[a-z_][\w']*", bodies) if w not in known})
+        if unknown:
+            raise SchemaError(
+                f"unknown coverage: legacy-route dispatcher(s) "
+                f"{', '.join(spec['entries'])} call {', '.join(unknown)}, "
+                f"which LEGACY_ROUTES does not attribute to any route; "
+                f"route `{rid}` cannot be classified as enabled or disabled")
         enabled = any(re.search(rf"(?<![\w']){c}(?![\w'])", bodies)
                       for c in spec["callees"])
-        routes[rid] = Route(rid, enabled, list(spec["carriers"]))
+        carrier_ids = list(spec["carriers"])
+        if spec.get("required_components"):
+            carrier_ids += sorted(c.id for c in carriers.values()
+                                  if c.kind == "component" and c.required)
+        routes[rid] = Route(rid, enabled, carrier_ids)
     return Model(carriers, routes)
