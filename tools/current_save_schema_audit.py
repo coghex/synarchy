@@ -78,6 +78,7 @@ test that distinguishes the old meaning from the new one.
   python3 tools/current_save_schema_audit.py                 # record only
   python3 tools/current_save_schema_audit.py --base-ref origin/master
   python3 tools/current_save_schema_audit.py --update-record
+  python3 tools/current_save_schema_audit.py --base-ref origin/master --json
 
 `--update-record` regenerates the record from source and nothing else;
 it is a projection, never a way to pass the base-ref check. Exit 0 =
@@ -109,22 +110,28 @@ def load_record(root: Path) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def run_check(root: Path, base_ref: str | None) -> int:
-    problems: list[str] = []
+def evaluate(root: Path, base_ref: str | None) -> dict:
+    """Run the checks; the result carries the resolved evidence."""
+    result: dict = {"ok": False, "problems": [], "baseRef": base_ref,
+                    "baseSha": None, "candidateSha": None, "dirty": None,
+                    "carriers": 0, "routes": 0}
+    problems: list[str] = result["problems"]
     try:
         cand = model.build_model(root)
     except model.SchemaError as exc:
-        print(f"FAIL: {exc}")
-        return 1
+        problems.append(str(exc))
+        return result
+    result["carriers"], result["routes"] = len(cand.carriers), len(cand.routes)
     problems += compare.check_record(
         cand, load_record(root), model.RECORD_REL)
     if base_ref is not None:
         try:
             ev = vcs.resolve(root, base_ref)
         except vcs.EvidenceError as exc:
-            print(f"FAIL: comparison evidence missing: {exc}")
-            return 1
-        print(f"current-schema: {ev.describe()}")
+            problems.append(f"comparison evidence missing: {exc}")
+            return result
+        result.update(baseSha=ev.base_sha, candidateSha=ev.candidate_sha,
+                      dirty=ev.dirty, describe=ev.describe())
         evidence_problems = compare.check_evidence(ev)
         if evidence_problems:
             problems += evidence_problems
@@ -134,17 +141,29 @@ def run_check(root: Path, base_ref: str | None) -> int:
                     vcs.export_tree(root, ev.base_sha, Path(tmp))
                     base = model.build_model(Path(tmp))
                 except (vcs.EvidenceError, model.SchemaError) as exc:
-                    print(f"FAIL: comparison evidence missing: base "
-                          f"{ev.base_sha} could not be read: {exc}")
-                    return 1
+                    problems.append(
+                        f"comparison evidence missing: base {ev.base_sha} "
+                        f"could not be read: {exc}")
+                    return result
             problems += compare.compare(base, cand)
-    if problems:
-        for problem in problems:
-            print(f"FAIL: {problem}")
+    result["ok"] = not problems
+    return result
+
+
+def run_check(root: Path, base_ref: str | None, as_json: bool = False) -> int:
+    result = evaluate(root, base_ref)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["ok"] else 1
+    if result.get("describe"):
+        print(f"current-schema: {result['describe']}")
+    for problem in result["problems"]:
+        print(f"FAIL: {problem}")
+    if not result["ok"]:
         return 1
     scope = "against the base" if base_ref else "record only"
-    print(f"current-schema: OK ({len(cand.carriers)} carriers, "
-          f"{len(cand.routes)} legacy routes, {scope})")
+    print(f"current-schema: OK ({result['carriers']} carriers, "
+          f"{result['routes']} legacy routes, {scope})")
     return 0
 
 
@@ -175,13 +194,16 @@ def main() -> int:
     group.add_argument("--base-ref", metavar="REF",
                        help="also compare the candidate with the merge-base "
                             "of REF and HEAD (e.g. origin/master)")
+    parser.add_argument("--json", action="store_true",
+                        help="print the result, resolved SHAs included, "
+                             "as JSON")
     args = parser.parse_args()
     if args.self_test:
         from current_save_schema_selftest import main_self_test
         return main_self_test()
     if args.update_record:
         return run_update(REPO_ROOT)
-    return run_check(REPO_ROOT, args.base_ref)
+    return run_check(REPO_ROOT, args.base_ref, args.json)
 
 
 if __name__ == "__main__":
