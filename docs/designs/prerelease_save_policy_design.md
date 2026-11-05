@@ -1463,14 +1463,16 @@ it while epic #2914 remains open or open issues cite this path. Once the epic is
 closed and no open issue cites it, follow the repository's archival rule with
 `git mv` and `docs-push`; that future disposition is not performed here.
 
-## PSP-2 compiled-code amendment — approved, awaiting application
+## PSP-2 compiled-code amendment — approved and applied
 
 D-9 records the owner-approved compiled approach and subsequent committed-base
 record amendment. Verified reply `qhziga3rpj59z96ugaqfmfgs6i` approves the full
 six-part question beginning `upfj42rmd57qfraqirpb7wias6`, subject to that one
 change. The following is the exact approved tracker payload with the change
-applied throughout. It is being published before tracker application, as the
-manager instructed. The earlier PSP-5 payload remains historical filed text;
+applied throughout. The committed-base decision and approved payload landed
+first with docs-push at `d452db60bde4d2f4bf838d24d11efc871efedb3c`, as the
+manager instructed. All three tracker bodies were then applied and verified
+byte-for-byte against that approved payload. The earlier PSP-5 payload remains historical filed text;
 the exact replacements below update it. Titles, labels, dependencies and child
 checkboxes stay unchanged. The manager re-runs readiness after application;
 this task does not add approval labels or start implementation.
@@ -1683,3 +1685,28 @@ no issue and processes no later slice. The ledger remains six linked entries,
 zero unchecked; that records filing, not implementation. No implementation,
 branches, builds, tests, engines or review runs were performed. The separate
 PSP-4 work and unrelated dirty probe-census files were left untouched.
+
+### Tracker amendment application receipt
+
+Applied under verified owner approval `qhziga3rpj59z96ugaqfmfgs6i` on
+2026-11-05, after incorporating "Approve, committed base record":
+
+- [#2916](https://github.com/coghex/synarchy/issues/2916): complete approved body replaced.
+- [#2919](https://github.com/coghex/synarchy/issues/2919): six approved consistency replacements applied, adjusted for the owner's committed-base amendment.
+- [#2914](https://github.com/coghex/synarchy/issues/2914): two approved consistency replacements applied with the same amendment.
+
+All three bodies read back exactly; immutable issue identities, titles and
+labels were checked unchanged. Child checkboxes and dependency ordering were
+preserved. No approval labels were added or removed by this task. The prior
+readiness approvals do not approve the rewritten specifications; the manager
+owns rerunning readiness before fresh implementation. No code, engine, build,
+test or issue-review run was performed.
+
+The processing ledger remains unchanged, with PSP-2 linked to #2916 and zero
+unchecked entries. This is amendment delivery, not implementation completion.
+
+Verified body SHA-256 values (including their stored trailing newline):
+
+- #2916: `5648eb4ea0d4f63bdf8ca9536236b7a3dfbe82bdef98b2eb5cd4b59c03e429b6`
+- #2919: `70e0df7030ebecc2def42897031b703786bfe3921c41ff5e2a125c621b51d108`
+- #2914: `28a52e3f4cd7986d0e1d140a3aa1c7c8ec361a3ea96c29872d6fffcf6641942a`
