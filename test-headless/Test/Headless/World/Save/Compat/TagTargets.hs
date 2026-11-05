@@ -14,20 +14,20 @@
 --   is how z11–z13 shipped three cells and two occurrence ids that the
 --   seed-42 page never held.
 --
---   'tagTargetsSpec' closes that for every manifest-declared complete-
---   session fixture, whoever seeded it: the fixture goes through the
---   REAL load staging ('stageSession' — chunk generation against the
---   shipped materials and flora, edit replay, flora admission and the
---   reconciliation itself), and the tags the staged page holds must be
---   exactly the tags the fixture decodes to. It also asserts that the
---   chunk owning every target is resident in the staged page.
+--   'admissionProblems' reconstructs owning chunks against shipped
+--   materials and flora using the production staging steps in order:
+--   generate demanded chunks, resolve flora references, replay edits,
+--   clip arena bounds, apply dig/construct slopes, then reconcile tags.
+--   The fixture and current-synthetic groups assert that every tagged
+--   target survives this pipeline and that its owning chunk is generated.
 --   Reconciliation leaves an assignment in an absent chunk untouched
 --   ('Gameplay.Tags.Page.reconcileAdmittedChunks'), so without that a
 --   target in a chunk this staging never builds would pass vacuously.
 --
 --   The codec's ability to seed a dangling target stays: negative probes
 --   (@tools\/gameplay_tag_persistence_probe.py@) use it on live saves.
---   This group is about the TRACKED corpus only.
+--   'tagTargetsSpec' covers the tracked corpus; 'currentTagAdmissionSpec'
+--   covers synthetic current inputs without decoding old DTOs.
 --
 --   'worldEditsDowngradeSpec' pins the one operation regenerating
 --   z11–z13 needs that no save path does: writing a world-edits payload
@@ -39,6 +39,7 @@
 --   --test-options='--match "save migrations"'@.
 module Test.Headless.World.Save.Compat.TagTargets
     ( tagTargetsSpec
+    , currentTagAdmissionSpec
     , withShippedContentEngine
     , worldEditsDowngradeSpec
     ) where
@@ -54,6 +55,7 @@ import qualified Data.List as L
 import qualified Data.Map.Strict as Map
 import qualified Data.Serialize as S
 import qualified Data.Text as T
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (newIORef, readIORef)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension)
@@ -72,11 +74,13 @@ import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..))
+import World.Chunk.Types (columnIndex)
 import World.Construct.Apply (applyConstructSlopes)
 import World.Edit.Apply (replayEdits)
 import World.Edit.Types (WorldEdit(..), appendEdit, canonicalizeWorldEdits)
 import World.Generate.Arena (clipArenaChunk)
 import World.Generate.Types (WorldGenParams(..))
+import World.Arena.Bounds (mkArenaBounds)
 import World.Mine.Apply (applyDigSlopes)
 import Gameplay.Tags.Tag (mkGameplayTag)
 import qualified Data.Set as Set
@@ -99,6 +103,7 @@ import World.Save.Component.PageEdits
 import World.Save.Component.Types (ComponentCodec(..))
 import World.Save.Envelope (decodeSessionEnvelope)
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
+import Test.Headless.World.Save.Components.Fixture (minimalPage)
 
 -- * The shipped content
 
@@ -281,6 +286,84 @@ tagTargetsSpec = describe "tracked fixtures' tag targets survive admission (#289
                     , hasCellOrOccurrenceTags (pgsPageTags page)
                     , line ← admissionProblems registry catalog pid page ]
             problems `shouldBe` []
+
+-- | Current tag admission uses synthetic current snapshots and the same
+--   generation/edit/reconciliation pipeline as fixture admission. It does
+--   not read the historical corpus or decode an old component DTO.
+currentTagAdmissionSpec ∷ SpecWith EngineEnv
+currentTagAdmissionSpec = describe "current tag admission" $ do
+    it "keeps nonempty cell and occurrence assignments through staging" $ \env → do
+        registry ← readIORef (materialRegistryRef env)
+        catalog ← readIORef (floraCatalogRef env)
+        let pid = WorldPageId "current-tag-admission"
+            params = (pgsGenParams (minimalPage pid))
+                { wgpSeed = 0, wgpWorldSize = 100000, wgpArenaBounds = Nothing }
+            base = (minimalPage pid) { pgsGenParams = params }
+            x = 5
+            y = 5
+            chunk = canonicalChunkCoord params (fst (globalToChunk x y))
+            generated = generateDemandedChunks registry catalog pid params [chunk]
+            z = case filter ((≡ chunk) ∘ lcCoord) generated of
+                g : _ → lcTerrainSurfaceMap g VU.! columnIndex 5 5
+                [] → error "current tag staging fixture generated no owning chunk"
+            tag = Set.fromList (maybe [] pure (mkGameplayTag "current"))
+            fid = plantedFloraInstanceId 99
+            tagged = base
+                { pgsPageTags = (pgsPageTags base)
+                    { ptsTiles = Map.singleton (x, y, z) tag
+                    , ptsOccurrences = Map.singleton fid tag
+                    , ptsOccurrenceTiles = Map.singleton fid (6, 3) }
+                , pgsEdits = appendEdit (fst (globalToChunk 6 3))
+                    (WePlaceFloraRef 6 3 (FloraByName "tomato_plant")
+                        0 12 fid) (pgsEdits base)
+                , pgsPlantedFloraCursor = 100
+                }
+        hasCellOrOccurrenceTags (pgsPageTags tagged) `shouldBe` True
+        admissionProblems registry catalog pid tagged `shouldBe` []
+
+    it "detects invalid cells, absent occurrences, and arena plantings out of bounds" $ \env → do
+        registry ← readIORef (materialRegistryRef env)
+        catalog ← readIORef (floraCatalogRef env)
+        let pid = WorldPageId "current-tag-admission-invalid"
+            params = (pgsGenParams (minimalPage pid))
+                { wgpSeed = 0, wgpWorldSize = 100000, wgpArenaBounds = Nothing }
+            base = (minimalPage pid) { pgsGenParams = params }
+            x = 5
+            y = 5
+            chunk = canonicalChunkCoord params (fst (globalToChunk x y))
+            generated = generateDemandedChunks registry catalog pid params [chunk]
+            z = case filter ((≡ chunk) ∘ lcCoord) generated of
+                g : _ → lcTerrainSurfaceMap g VU.! columnIndex 5 5
+                [] → error "current invalid tag fixture generated no owning chunk"
+            tag = Set.fromList (maybe [] pure (mkGameplayTag "current"))
+            absent = plantedFloraInstanceId 98
+            bad = base { pgsPageTags = (pgsPageTags base)
+                { ptsTiles = Map.singleton (x, y, z + 100) tag
+                , ptsOccurrences = Map.singleton absent tag
+                , ptsOccurrenceTiles = Map.singleton absent (6, 3) } }
+            problems = admissionProblems registry catalog pid bad
+            bounds = either (error ∘ show) id (mkArenaBounds 20 10)
+            arenaParams = params
+                { wgpSeed = 0, wgpWorldSize = 100000
+                , wgpArenaBounds = Just bounds }
+            arenaPage = base
+                { pgsGenParams = arenaParams
+                , pgsPageTags = (pgsPageTags base)
+                    { ptsOccurrences = Map.singleton absent tag
+                    , ptsOccurrenceTiles = Map.singleton absent (10, 0) }
+                , pgsEdits = appendEdit (fst (globalToChunk 10 0))
+                    (WePlaceFloraRef 10 0 (FloraByName "tomato_plant")
+                        0 12 absent) (pgsEdits base)
+                , pgsPlantedFloraCursor = 100
+                }
+            arenaPageWithoutBounds = arenaPage
+                { pgsGenParams = arenaParams { wgpArenaBounds = Nothing } }
+            unboundedProblems = admissionProblems registry catalog pid arenaPageWithoutBounds
+            arenaProblems = admissionProblems registry catalog pid arenaPage
+        problems `shouldSatisfy` any (T.isInfixOf "not a stored non-air cell")
+        problems `shouldSatisfy` any (T.isInfixOf "not held by its chunk")
+        unboundedProblems `shouldBe` []
+        arenaProblems `shouldSatisfy` any (T.isInfixOf "not held by its chunk")
 
 -- * The v5 shape
 
