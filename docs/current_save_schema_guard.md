@@ -50,6 +50,26 @@ reach (the frozen DTOs its `csOlderVersions` migrations name, the
 older version is removed; the current version need not move if the current
 shape did not.
 
+## Canonical forms
+
+The guard reads each construct in exactly one form (owner ruling, 2026-11-05,
+"Strict canonical forms"). Any other spelling is not interpreted: the run
+fails with `<file>:<line>: unsupported syntax: rewrite in canonical form`, so
+a mutation can only make the guard fail, never pass.
+
+| Construct | Canonical form |
+|---|---|
+| Haskell version bindings (`currentEnvelopeVersion`, `metadataComponentVersion`, `legacyMetadataComponentVersion`, `luaStateComponentVersion`, `sessionComponentVersion`, `csVersion`) | `name = <integer literal>` alone on its line, defined once |
+| Metadata accepted versions | one `metadataComponentInputVersions = [ <binding or integer>, ... ]` |
+| Older component decoders | `atVersion <int> <name>`, where `<name>` has an explicit signature `<name> ∷ <FooDTOvN> → …` whose first argument is the `*DTO*` wire root (compose in a named, signed function, not inline) |
+| Lua registration | `local <name> = require("scripts.lib.save_modules")` on its own line, then `saveMods.register("<id>", {`; exactly one `version = <int>,`, `required = <bool>,` and `inputVersions = { <ints> },` per table |
+| Framing decoder | every use is `decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion`; `Codec.hs` rejects exactly `version ≢ expectedVersion` |
+| Legacy-route dispatch | `tryLegacyEnvelopeFallbacks` and `tryLegacyMetadataFallbacks` in one of four exact forms (both routes on, either off, both off); a route is disabled only by its explicit form |
+
+Whitespace (including around punctuation and before call parentheses),
+comments outside these constructs and strictness bangs never change a shape.
+String-literal contents always do.
+
 ## The rules
 
 1. A shape change, **including an enum append**, needs a strictly higher
@@ -62,7 +82,10 @@ shape did not.
    disabled. A route is enabled while `tryLegacyEnvelopeFallbacks` or
    `tryLegacyMetadataFallbacks` still names its decoder; a metadata change
    affects both routes, a change to a type the frozen `SessionV90` DTOs reach
-   affects `b1-session`.
+   affects `b1-session`, and `b2-lua-state` also decodes every *required*
+   Haskell component of its era, so a version change in any of them affects
+   it. A dispatcher may only call the decoders `LEGACY_ROUTES` names; any
+   other call leaves the route's state unknown and fails.
 5. A new carrier is covered and accepts only its current version, with no
    bump. A removed carrier must leave the record.
 6. Unchanged carriers owe nothing. Removing registrations does not require
@@ -70,7 +93,10 @@ shape did not.
 
 Anything the guard cannot classify fails and names the boundary: a registered
 codec with no definition, a codec with no resolvable DTO, a duplicate Lua
-module id, a type name declared in two modules (list it in
+module id, a `saveMods.register` site that is not a quoted literal id plus
+a table, a non-literal `inputVersions` entry, a framing decoder that does not
+reject exactly `version ≢ expectedVersion` (or a caller that passes another
+version), a type name declared in two modules (list it in
 `AMBIGUOUS_TYPE_NAMES` with why a union is acceptable), a type that both
 derives and hand-writes `Serialize`, a missing legacy dispatcher.
 
