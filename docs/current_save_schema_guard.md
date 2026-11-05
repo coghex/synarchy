@@ -50,6 +50,26 @@ reach (the frozen DTOs its `csOlderVersions` migrations name, the
 older version is removed; the current version need not move if the current
 shape did not.
 
+## Canonical forms
+
+The guard reads each construct in exactly one form (owner ruling, 2026-11-05,
+"Strict canonical forms"). Any other spelling is not interpreted: the run
+fails with `<file>:<line>: unsupported syntax: rewrite in canonical form`, so
+a mutation can only make the guard fail, never pass.
+
+| Construct | Canonical form |
+|---|---|
+| Haskell version bindings (`currentEnvelopeVersion`, `metadataComponentVersion`, `legacyMetadataComponentVersion`, `luaStateComponentVersion`, `sessionComponentVersion`, `csVersion`) | `name = <integer literal>` alone on its line, defined once |
+| Metadata accepted versions | one `metadataComponentInputVersions = [ <binding or integer>, ... ]` |
+| Older component decoders | `atVersion <int> <name>`, where `<name>` has an explicit signature `<name> ∷ <FooDTOvN> → …` whose first argument is the `*DTO*` wire root (compose in a named, signed function, not inline) |
+| Lua registration | `local <name> = require("scripts.lib.save_modules")` on its own line, then `saveMods.register("<id>", {`; exactly one `version = <int>,`, `required = <bool>,` and `inputVersions = { <ints> },` per table |
+| Framing decoder | every use is `decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion`; `Codec.hs` rejects exactly `version ≢ expectedVersion` |
+| Legacy-route dispatch | `tryLegacyEnvelopeFallbacks` and `tryLegacyMetadataFallbacks` in one of four exact forms (both routes on, either off, both off); a route is disabled only by its explicit form |
+
+Whitespace (including around punctuation and before call parentheses),
+comments outside these constructs and strictness bangs never change a shape.
+String-literal contents always do.
+
 ## The rules
 
 1. A shape change, **including an enum append**, needs a strictly higher
