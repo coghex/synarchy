@@ -91,18 +91,10 @@ AMBIGUOUS_TYPE_NAMES: dict[str, str] = {}
 # body names one of `callees`. `carriers` are the carriers whose shape
 # the route decodes through, so a shape change in any of them shows the
 # route as affected.
+# `carriers` are the carriers whose shape each route decodes through.
 LEGACY_ROUTES = {
-    "b1-session": {
-        "entries": ("tryLegacyEnvelopeFallbacks",
-                    "tryLegacyMetadataFallbacks"),
-        "callees": ("decodeLegacySessionEnvelope",
-                    "decodeLegacySessionMetadata"),
-        "carriers": ("metadata", "session"),
-    },
+    "b1-session": {"carriers": ("metadata", "session")},
     "b2-lua-state": {
-        "entries": ("tryLegacyEnvelopeFallbacks",
-                    "tryLegacyMetadataFallbacks"),
-        "callees": ("decodeB2SessionEnvelope", "decodeB2SessionMetadata"),
         "carriers": ("metadata", "lua-state"),
         # B2 decodes every REQUIRED Haskell component of its era through
         # the shared codecs (`assembleSnapshot`), so a version change in
@@ -111,12 +103,17 @@ LEGACY_ROUTES = {
     },
 }
 
-# Lower-case words a legacy dispatcher body may contain: its own names,
-# the route decoders, its parameters and the Haskell keywords it uses.
-# Anything else is a call this reader cannot attribute to a route, so
-# the route's state is UNKNOWN and the build fails rather than guessing
-# it is disabled.
-DISPATCHER_WORDS = frozenset({"bytes", "other", "case", "of", "_"})
+# The two dispatchers, each with the decoder of route b1-session then of
+# route b2-lua-state. A dispatcher is read ONLY in one of four exact
+# forms (route on/off for each); every other spelling -- a qualified or
+# forwarding call, an alias, a renamed decoder -- is refused, so a
+# mutation can never read as "disabled".
+DISPATCHERS = (
+    ("tryLegacyEnvelopeFallbacks", "decodeLegacySessionEnvelope",
+     "decodeB2SessionEnvelope"),
+    ("tryLegacyMetadataFallbacks", "decodeLegacySessionMetadata",
+     "decodeB2SessionMetadata"),
+)
 
 
 class SchemaError(Exception):
@@ -186,16 +183,33 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-_BANG_RE = re.compile(r"(?<![\w'])[!~](?=[\w(\[])")
-_TOKEN_RE = re.compile(r"[\w'.]+|\S")
+_TOKEN_RE = re.compile(
+    r'"(?:\\.|[^"\\\n])*"|::|->|=>|[\w\'.]+|\S')
+_OPERATORS = {"::": "∷", "->": "→", "=>": "⇒"}
 _WIRE_CLASSES = ("Generic", "Serialize")
+CANONICAL = "unsupported syntax: rewrite in canonical form"
 
 
-def _tokens(text: str) -> str:
-    """Whitespace-free token stream: `a∷b` and `a ∷ b` are the same."""
-    text = _BANG_RE.sub("", text)
-    text = text.replace("::", "∷").replace("->", "→")
-    return " ".join(_TOKEN_RE.findall(text))
+def _tokens(text: str, drop_bangs: bool = False) -> str:
+    """Whitespace-free token stream: `a∷b`, `a ∷ b` and `f (x)` / `f(x)`
+    spell the same thing. String literals are one token and are never
+    altered. `drop_bangs` removes strictness/laziness marks, which are not
+    wire-relevant on a field type."""
+    out = []
+    for tok in _TOKEN_RE.findall(text):
+        tok = _OPERATORS.get(tok, tok)
+        if drop_bangs and tok in ("!", "~"):
+            continue
+        out.append(tok)
+    return " ".join(out)
+
+
+def unsupported(where: str, what: str, expected: str) -> "SchemaError":
+    return SchemaError(f"{where}: {CANONICAL} ({what}; expected {expected})")
+
+
+def _line(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
 
 
 def declaration_digest(decl: Declaration, params: str = "") -> str:
@@ -207,8 +221,9 @@ def declaration_digest(decl: Declaration, params: str = "") -> str:
         f"{strategy or '-'}:{cls}"
         for strategy, names in decl.deriving_classes.items()
         for cls in names if cls in _WIRE_CLASSES)
-    return _sha(f"{decl.kind} {decl.name} [{_tokens(params)}] = "
-                f"{_tokens(decl.body)} | {','.join(deriving)}")
+    return _sha(f"{decl.kind} {decl.name} "
+                f"[{_tokens(params, True)}] = "
+                f"{_tokens(decl.body, True)} | {','.join(deriving)}")
 
 
 def declaration_params(root: Path, scan: Scan) -> dict[str, str]:
@@ -509,18 +524,34 @@ def component_codecs(index: Index) -> dict[str, dict]:
 
             own_sig = signatures.get(spec["codec"], "")
             cur_names = helper_types(current_text + "\n" + own_sig)
-            old_names = helper_types(older_text) - cur_names
             if not cur_names:
                 raise SchemaError(
                     f"unknown coverage: component `{sid}` ({rel}, codec "
                     f"`{spec['codec']}`) names no *DTO* wire type this "
                     f"reader can resolve")
-            if spec["inputVersions"] != [spec["currentVersion"]] \
-                    and not old_names and older_text.strip() not in ("", "[]"):
-                raise SchemaError(
-                    f"unknown coverage: component `{sid}` ({rel}) accepts "
-                    f"older versions but its migrations name no frozen "
-                    f"*DTO* type this reader can resolve")
+            old_names: set[str] = set()
+            for entry in components._split_top_level_fields(
+                    older_text.strip()[1:-1]):
+                em = re.fullmatch(
+                    r"atVersion\s+(\d+)\s+([a-z][\w']*)", entry.strip())
+                where = f"{rel}:{_line(raw, raw.find(entry.strip()))}"
+                if em is None:
+                    raise unsupported(
+                        where, f"component `{sid}` older-version entry "
+                        f"{entry.strip()!r}",
+                        "`atVersion <integer> <named decoder>`")
+                helper = em.group(2)
+                sig = signatures.get(helper)
+                wired = (wire_types(first_argument_types(sig))
+                         if sig else set())
+                if not wired:
+                    raise unsupported(
+                        where, f"component `{sid}` v{em.group(1)} decoder "
+                        f"`{helper}` has no explicit type signature naming "
+                        f"a *DTO* wire root as its first argument",
+                        f"`{helper} ∷ <FooDTOv{em.group(1)}> → ...`")
+                old_names |= wired
+            old_names -= cur_names
 
             def decls(names: set[str]) -> list[Declaration]:
                 return [d for n in sorted(names) for d in roots[n]]
@@ -558,86 +589,163 @@ def component_codecs(index: Index) -> dict[str, dict]:
 # Lua modules
 
 
-def _lua_table_text(text: str, open_index: int) -> tuple[str, str]:
-    """(depth-1 text, depth-<=2 text) of the table opened at
-    `open_index`: comments dropped, string literals kept, and anything
-    nested deeper blanked. The depth-1 text is where `version` and
-    `required` must be declared; the depth-<=2 text additionally shows
-    the `inputVersions = { ... }` list."""
-    flat: list[str] = []
-    wide: list[str] = []
-    depth, i, n = 0, open_index, len(text)
+_LUA_STRING_RE = re.compile(
+    r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+_LUA_LONG_OPEN_RE = re.compile(r"\[(=*)\[")
+
+
+def blank_lua_comments(text: str) -> str:
+    """The text with every comment replaced by spaces (newlines kept), so
+    offsets and line numbers still point at the real file. String
+    literals, including long strings, are left alone."""
+    out: list[str] = []
+    i, n = 0, len(text)
+
+    def blank(chunk: str) -> str:
+        return "".join("\n" if c == "\n" else " " for c in chunk)
+
     while i < n:
-        ch = text[i]
         if text.startswith("--", i):
-            if text.startswith("--[[", i):
-                end = text.find("]]", i)
-                i = n if end < 0 else end + 2
+            long = _LUA_LONG_OPEN_RE.match(text, i + 2)
+            if long:
+                close = "]" + long.group(1) + "]"
+                end = text.find(close, long.end())
+                end = n if end < 0 else end + len(close)
             else:
                 end = text.find("\n", i)
-                i = n if end < 0 else end
+                end = n if end < 0 else end
+            out.append(blank(text[i:end]))
+            i = end
             continue
-        if ch in "\"'":
-            quote, j = ch, i + 1
-            while j < n and text[j] != quote:
-                j += 2 if text[j] == "\\" else 1
-            if depth == 1:
-                flat.append(text[i:j + 1])
-            if depth <= 2:
-                wide.append(text[i:j + 1])
-            i = j + 1
+        m = _LUA_STRING_RE.match(text, i)
+        if m:
+            out.append(m.group(0))
+            i = m.end()
             continue
+        long = _LUA_LONG_OPEN_RE.match(text, i)
+        if long:
+            close = "]" + long.group(1) + "]"
+            end = text.find(close, long.end())
+            end = n if end < 0 else end + len(close)
+            out.append(text[i:end])
+            i = end
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+_LUA_TOKEN_RE = re.compile(
+    r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|\[(=*)\[.*?\]\1\]'
+    r"|[A-Za-z_]\w*|\d+(?:\.\d+)?|\S", re.S)
+
+
+def lua_tokens(text: str) -> str:
+    """Comment- and whitespace-free Lua token stream; string contents are
+    never altered."""
+    return " ".join(m.group(0) for m in
+                    _LUA_TOKEN_RE.finditer(blank_lua_comments(text)))
+
+
+def _lua_table_span(blanked: str, open_index: int) -> tuple[str, str, int]:
+    """(depth-1 text, depth-<=2 text, offset of the closing brace) of the
+    table opened at `open_index` in comment-blanked text; deeper content
+    is blanked."""
+    flat: list[str] = []
+    wide: list[str] = []
+    depth, i, n = 0, open_index, len(blanked)
+    while i < n:
+        m = _LUA_STRING_RE.match(blanked, i)
+        if m:
+            chunk = m.group(0)
+            flat.append(chunk if depth <= 1 else " " * len(chunk))
+            wide.append(chunk if depth <= 2 else " " * len(chunk))
+            i = m.end()
+            continue
+        ch = blanked[i]
         if ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return "".join(flat), "".join(wide)
-        if depth <= 1:
-            flat.append(ch)
-        if depth <= 2:
-            wide.append(ch)
+                return "".join(flat), "".join(wide), i
+        flat.append(ch if depth <= 1 or ch == "\n" else " ")
+        wide.append(ch if depth <= 2 or ch == "\n" else " ")
         i += 1
     raise SchemaError("unterminated saveMods.register table")
 
 
-_SAVE_MODULES_REQUIRE_RE = re.compile(
+_LUA_REQUIRE_RE = re.compile(
     r"""require\s*\(?\s*["']scripts\.lib\.save_modules["']\s*\)?""")
+_LUA_BIND_RE = re.compile(
+    r"^[ \t]*local\s+[A-Za-z_]\w*\s*=\s*require\s*\(\s*"
+    r'"scripts\.lib\.save_modules"\s*\)[ \t]*$', re.M)
 _LUA_ALIAS_RE = re.compile(
-    r"""(?:local\s+)?([A-Za-z_]\w*)\s*=\s*require\s*\(?\s*"""
-    r"""["']scripts\.lib\.save_modules["']\s*\)?""")
-_LUA_ID_RE = re.compile(r"""\s*(["'])([A-Za-z_]\w*)\1\s*,\s*\{""")
+    r"([A-Za-z_]\w*)\s*=\s*require\s*\(\s*[\"']scripts\.lib\.save_modules")
+_LUA_REGISTER_USE_RE = re.compile(
+    r"""(?P<recv>[A-Za-z_][\w.]*|\))\s*"""
+    r"""(?:[.:]\s*register(?![\w])|\[\s*["']register["']\s*\])""")
+_LUA_REGISTER_CANON_RE = re.compile(
+    r'(?<![\w.])saveMods\s*\.\s*register\s*\(\s*"([A-Za-z_]\w*)"\s*,\s*\{')
 
 
 def discover_lua_registrations(root: Path) -> list[tuple[Path, str, int]]:
-    """Every registration call of the Lua save-module registry under
-    scripts/, as (file, id, offset of its table's `{`). Exhaustive by
-    construction: every `<alias>.register(` on the module's require
-    alias, or on the require expression itself, MUST read as a quoted
-    literal id followed by a table, or the build fails -- an unreadable
-    site is never treated as an absent carrier."""
+    """Every registration of the Lua save-module registry under
+    scripts/, as (file, id, offset of its table's `{`).
+
+    The one canonical form is `saveMods.register("<id>", {` (whitespace
+    is layout) after `local <name> = require("scripts.lib.save_modules")`
+    on its own line. Any other use of THAT registry's `register` --
+    called on another alias or on the require expression, single quotes,
+    a comment inside the call head, an alias of the function or of the
+    registry object, an indexed lookup, a dynamic id -- is refused,
+    never interpreted, so a mutation cannot make a carrier vanish. A
+    `register` on some unrelated table is not the registry and is not
+    read."""
     sites: list[tuple[Path, str, int]] = []
     for path in sorted((root / SCRIPTS_REL).rglob("*.lua")):
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
+        text = blank_lua_comments(raw)
         if "save_modules" not in text:
             continue
         rel = path.relative_to(root).as_posix()
+        for m in _LUA_REQUIRE_RE.finditer(text):
+            start = text.rfind("\n", 0, m.start()) + 1
+            end = text.find("\n", m.end())
+            line = text[start:end if end >= 0 else len(text)]
+            if not _LUA_BIND_RE.fullmatch(line):
+                raise unsupported(
+                    f"{rel}:{_line(text, m.start())}",
+                    "the save-module registry is required in another form",
+                    '`local <name> = require("scripts.lib.save_modules")` '
+                    "alone on its line")
         aliases = {m.group(1) for m in _LUA_ALIAS_RE.finditer(text)}
-        names = "|".join(re.escape(a) for a in sorted(aliases))
-        callers = [rf"(?:{names})"] if names else []
-        callers.append(_SAVE_MODULES_REQUIRE_RE.pattern)
-        call_re = re.compile(
-            r"(?<![\w.])(?:" + "|".join(callers) + r")\s*[.:]\s*register"
-            r"\s*\(")
-        for call in call_re.finditer(text):
-            m = _LUA_ID_RE.match(text, call.end())
-            if m is None:
-                raise SchemaError(
-                    f"unknown coverage: {rel} calls the Lua save-module "
-                    f"registry's register(...) with something other than "
-                    f"a quoted literal id and a table literal, so its "
-                    f"carrier cannot be identified")
-            sites.append((path, m.group(2), m.end() - 1))
+        for m in re.finditer(r"(?<![\w.])saveMods(?![\w])(?!\s*\.\s*[A-Za-z_])",
+                             text):
+            line = text[text.rfind("\n", 0, m.start()) + 1:m.end()]
+            if not re.fullmatch(r"\s*local\s+saveMods\s*", line.split("=")[0]
+                                if "=" in line else line):
+                raise unsupported(
+                    f"{rel}:{_line(text, m.start())}",
+                    "the registry object is used other than as "
+                    "`saveMods.<name>`", "`saveMods.<name>(...)` only")
+        for use in _LUA_REGISTER_USE_RE.finditer(text):
+            recv = use.group("recv")
+            if recv != ")" and recv not in aliases:
+                continue
+            where = f"{rel}:{_line(text, use.start())}"
+            m = _LUA_REGISTER_CANON_RE.search(text, use.start())
+            if recv != "saveMods" or m is None or m.start() != use.start() \
+                    or raw[m.start():m.end()] != text[m.start():m.end()]:
+                if recv == ")" and not _LUA_REQUIRE_RE.search(
+                        text[max(0, use.start() - 80):use.start() + 1]):
+                    continue
+                raise unsupported(
+                    where, "a use of the registry's register that is not "
+                    "the canonical registration call",
+                    '`saveMods.register("<id>", {` with no comment inside '
+                    "the call head")
+            sites.append((path, m.group(1), m.end() - 1))
     return sites
 
 
@@ -669,28 +777,40 @@ def lua_modules(root: Path) -> dict[str, dict]:
                 f"ambiguous coverage: {rel} registers {per_file[path]} Lua "
                 f"save modules; one registration per file is required so "
                 f"each module's owning source is unambiguous")
-        table, wide = _lua_table_text(path.read_text(encoding="utf-8"), brace)
+        raw = path.read_text(encoding="utf-8")
+        text = blank_lua_comments(raw)
+        flat, wide, _end = _lua_table_span(text, brace)
+        where = f"{rel}:{_line(text, brace)}"
+        if len(re.findall(r"(?<![\w.])inputVersions(?![\w])", wide)) != 1:
+            raise unsupported(where, f"lua.{lua_id} names inputVersions "
+                              "other than exactly once",
+                              "one `inputVersions = { <integers> },`")
         fields = {}
         for name, pattern in (
                 ("version", r"(?<![\w.])version\s*=\s*(\d+)\s*,"),
-                ("inputVersions",
-                 r"(?<![\w.])inputVersions\s*=\s*\{([^}]*)\}"),
-                ("required", r"(?<![\w.])required\s*=\s*(true|false)")):
-            fm = re.search(pattern, wide if name == "inputVersions"
-                           else table)
-            if fm is None:
-                raise SchemaError(
-                    f"{rel}: lua.{lua_id} declares no literal `{name}` "
-                    f"in its saveMods.register table")
-            fields[name] = fm.group(1)
+                ("inputVersions", r"(?<![\w.])inputVersions\s*=\s*"
+                 r"\{([^{}]*)\}\s*,"),
+                ("required", r"(?<![\w.])required\s*=\s*(true|false)\s*,")):
+            haystack = wide if name == "inputVersions" else flat
+            hits = list(re.finditer(pattern, haystack))
+            loose = re.findall(rf"(?<![\w.]){name}\s*=(?!=)", haystack)
+            if len(hits) != 1 or len(loose) != 1:
+                raise unsupported(
+                    where, f"lua.{lua_id}'s `{name}` is not exactly one "
+                    f"literal field", f"one `{name} = <literal>,`")
+            if name == "inputVersions":
+                start = brace + hits[0].start(1)
+                if raw[start:start + len(hits[0].group(1))] \
+                        != text[start:start + len(hits[0].group(1))]:
+                    raise unsupported(where, "a comment inside inputVersions",
+                                      "a bare `{ 1, 2, 3 }`")
+            fields[name] = hits[0].group(1)
         entries = [e.strip() for e in fields["inputVersions"].split(",")
                    if e.strip()]
-        bad = [e for e in entries if not re.fullmatch(r"\d+", e)]
-        if bad or not entries:
-            raise SchemaError(
-                f"{rel}: lua.{lua_id}'s inputVersions must be integer "
-                f"literals, found {bad or 'none'} -- a non-literal entry "
-                f"hides which versions it accepts")
+        if not entries or any(not re.fullmatch(r"\d+", e) for e in entries):
+            raise unsupported(
+                where, f"lua.{lua_id}'s inputVersions entries {entries}",
+                "integer literals only")
         modules[lua_id] = {
             "version": int(fields["version"]),
             "accepted": sorted(int(e) for e in entries),
@@ -698,72 +818,187 @@ def lua_modules(root: Path) -> dict[str, dict]:
     return modules
 
 
-def _lua_normalized(path: Path) -> str:
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(r"--\[\[.*?\]\]", "", text, flags=re.S)
-    text = re.sub(r"--[^\n]*", "", text)
-    return " ".join(text.split())
-
-
 # ---------------------------------------------------------------------------
 # Model assembly
 
 
 def _binding_int(text: str, name: str, where: str) -> int:
-    m = re.search(rf"^{name}\s*=\s*(\d+)\s*$", text, re.M)
-    if m is None:
+    """A version binding is ONE definition `name = <integer literal>`;
+    an expression, a second definition or a trailing operator is not
+    parsed, it is refused."""
+    clean = strip_haskell_comments(text)
+    defs = []
+    for m in re.finditer(rf"^{re.escape(name)}(?![\w'])(.*)$", clean, re.M):
+        rest = m.group(1)
+        if re.match(r"\s*(?:∷|::)", rest) or not rest.strip():
+            continue
+        defs.append((_line(clean, m.start()), rest))
+    if not defs:
         raise SchemaError(
-            f"unknown coverage: could not read `{name}` in {where}")
+            f"unknown coverage: could not find `{name}` in {where}")
+    if len(defs) > 1:
+        raise unsupported(f"{where}:{defs[1][0]}",
+                          f"`{name}` is defined more than once",
+                          f"a single `{name} = <integer>`")
+    line, rest = defs[0]
+    m = re.fullmatch(r"\s*=\s*(\d+)\s*", rest)
+    if m is None:
+        raise unsupported(f"{where}:{line}", f"`{name}`{rest.rstrip()}",
+                          f"`{name} = <integer literal>` alone on its line")
     return int(m.group(1))
 
 
-def _dispatcher_body(text: str, name: str) -> str:
-    blocks = [b for b in top_level_blocks(strip_haskell_comments(text))
-              if re.match(rf"{re.escape(name)}(?![\w'])", b)]
-    if not blocks:
-        raise SchemaError(
-            f"unknown coverage: legacy-route dispatcher `{name}` not found "
-            f"in {ENVELOPE_REL}")
-    return "\n".join(blocks)
+def _check_metadata_input_list(text: str, where: str) -> None:
+    blocks = [_tokens(b) for b in top_level_blocks(strip_haskell_comments(text))
+              if re.match(r"metadataComponentInputVersions(?![\w'])", b)]
+    defs = [b for b in blocks if "∷" not in b]
+    if len(defs) != 1 or not re.fullmatch(
+            r"metadataComponentInputVersions = \[ [\w']+(?: , [\w']+)* \]",
+            defs[0]):
+        raise unsupported(
+            where, f"metadataComponentInputVersions is {defs or 'missing'}",
+            "one definition: `metadataComponentInputVersions = "
+            "[ <binding or integer>, ... ]`")
+
+
+def dispatcher_forms(entry: str, b1: str, b2: str
+                     ) -> dict[str, tuple[bool, bool]]:
+    """The exact token streams a dispatcher may take, mapped to
+    (b1-session enabled, b2-lua-state enabled)."""
+    forms = {}
+    for b1_on in (True, False):
+        for b2_on in (True, False):
+            tail = f"{b2} bytes" if b2_on else "NotLegacyShaped"
+            rhs = (f"case {b1} bytes of NotLegacyShaped → {tail} other → other"
+                   if b1_on else tail)
+            param = "bytes" if (b1_on or b2_on) else "_"
+            forms[f"{entry} {param} = {rhs}"] = (b1_on, b2_on)
+    return forms
+
+
+def route_states(text: str) -> tuple[bool, bool]:
+    clean = strip_haskell_comments(text)
+    states = set()
+    for entry, b1, b2 in DISPATCHERS:
+        blocks = [(_tokens(b), b) for b in top_level_blocks(clean)
+                  if re.match(rf"{re.escape(entry)}(?![\w'])", b)]
+        defs = [t for t, _ in blocks if "∷" not in t]
+        if not blocks:
+            raise SchemaError(
+                f"unknown coverage: legacy-route dispatcher `{entry}` not "
+                f"found in {ENVELOPE_REL}")
+        forms = dispatcher_forms(entry, b1, b2)
+        if len(defs) != 1 or defs[0] not in forms:
+            at = _line(clean, clean.find(entry + " "))
+            raise unsupported(
+                f"{ENVELOPE_REL}:{at}",
+                f"dispatcher `{entry}` is {defs[0] if defs else 'missing'!r}",
+                "one of: " + " | ".join(sorted(forms)))
+        states.add(forms[defs[0]])
+    if len(states) != 1:
+        raise unsupported(
+            ENVELOPE_REL, "the envelope and metadata dispatchers disagree "
+            "on which legacy routes are enabled",
+            "both dispatchers in the same on/off form")
+    return next(iter(states))
 
 
 _FRAMING_GUARD = ("when ( version ≢ expectedVersion ) "
                   "( Left ( UnsupportedEnvelopeVersion version ) )")
-_DECODE_ENVELOPE_CALL_RE = re.compile(
-    r"(?<![\w'.])decodeEnvelope\s+([\w']+)\s+([\w']+)")
+_DECODE_ENVELOPE_RE = re.compile(
+    r"(?<![\w'])(?:[A-Z][\w']*\.)*decodeEnvelope(?![\w'])")
+_IMPORT_RE = re.compile(r"^import\b.*(?:\n[ \t]+.*)*", re.M)
+_MODULE_HEAD_RE = re.compile(r"^module\b.*?\bwhere\b", re.M | re.S)
+CANONICAL_DECODE = "decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion"
 
 
 def _check_framing_dispatch(root: Path, scan: Scan) -> None:
     """The framing carrier accepts exactly `currentEnvelopeVersion` only
     if (1) the decoder rejects every version but the one it is handed,
-    with no other disjunct, and (2) every caller hands it
-    `currentEnvelopeVersion`. Anything else cannot be established from
-    source, so it fails instead of assuming current-only acceptance."""
+    with no other disjunct, and (2) every use of the decoder is the one
+    canonical call `decodeEnvelope defaultEnvelopeLimits
+    currentEnvelopeVersion`. Parenthesised, qualified, renamed or
+    partially applied uses are not interpreted; they are refused."""
     codec = _tokens(strip_haskell_comments(
         (root / ENVELOPE_CODEC_REL).read_text(encoding="utf-8")))
     if codec.count(_FRAMING_GUARD) != 1 \
             or codec.count("UnsupportedEnvelopeVersion") != 1:
-        raise SchemaError(
-            f"unknown coverage: {ENVELOPE_CODEC_REL} must reject exactly "
-            f"`version ≢ expectedVersion` with UnsupportedEnvelopeVersion "
-            f"and nothing else; the framing carrier's accepted set cannot "
-            f"be established")
+        raise unsupported(
+            ENVELOPE_CODEC_REL, "the decoder's version rejection",
+            f"exactly one `{_FRAMING_GUARD}` and no other "
+            f"UnsupportedEnvelopeVersion")
     calls = 0
     for module, rel in sorted(scan.module_paths.items()):
         if rel == ENVELOPE_CODEC_REL:
             continue
         text = strip_haskell_comments((root / rel).read_text(encoding="utf-8"))
-        for _limits, version in _DECODE_ENVELOPE_CALL_RE.findall(text):
+        for imp in _IMPORT_RE.finditer(text):
+            if "decodeEnvelope" in imp.group(0) and re.search(
+                    r"\b(?:as|qualified|hiding)\b", imp.group(0)):
+                raise unsupported(
+                    f"{rel}:{_line(text, imp.start())}",
+                    "decodeEnvelope is imported renamed, qualified or "
+                    "hidden", "a plain unqualified import")
+        body = _MODULE_HEAD_RE.sub(lambda m: re.sub(r"\S", " ", m.group(0))
+                                   if "decodeEnvelope" not in m.group(0)
+                                   else m.group(0), text)
+        body = _IMPORT_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)),
+                              body)
+        for use in _DECODE_ENVELOPE_RE.finditer(body):
+            line = _line(body, use.start())
+            following = _tokens(body[use.start():use.start() + 400])
+            if not following.startswith(CANONICAL_DECODE) \
+                    or use.group(0) != "decodeEnvelope":
+                raise unsupported(
+                    f"{rel}:{line}", f"use of decodeEnvelope "
+                    f"{following[:90]!r}", f"`{CANONICAL_DECODE}`")
             calls += 1
-            if version != "currentEnvelopeVersion":
-                raise SchemaError(
-                    f"unknown coverage: {rel} decodes an envelope against "
-                    f"`{version}`, not currentEnvelopeVersion; the framing "
-                    f"carrier would accept more than its current version")
     if not calls:
         raise SchemaError(
             "unknown coverage: no decodeEnvelope call site found, so the "
             "framing carrier's accepted version cannot be established")
+
+
+def _strip_block_comments_keep_pragmas(text: str) -> str:
+    out, i, depth = [], 0, 0
+    while i < len(text):
+        if text.startswith("{-#", i) and depth == 0:
+            end = text.find("#-}", i)
+            end = len(text) if end < 0 else end + 3
+            out.append(text[i:end])
+            i = end
+        elif text.startswith("{-", i):
+            depth += 1
+            i += 2
+        elif depth and text.startswith("-}", i):
+            depth -= 1
+            i += 2
+        elif depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def framing_digest(root: Path) -> str:
+    """The framing sources -- the wire bindings of Envelope/Types.hs and
+    the whole of Codec.hs -- as a comment- and whitespace-insensitive
+    token stream. The inherited-LANGUAGE rule is reused from
+    `envelope_framing_fingerprint` (whose own value is left alone: the
+    manifest records it)."""
+    types_text = (root / ENVELOPE_TYPES_REL).read_text(encoding="utf-8")
+    blocks = [fingerprint._extract_toplevel_block(types_text, name)
+              for name in fingerprint.ENVELOPE_FRAMING_WIRE_BINDINGS]
+    codec = fingerprint._drop_redundant_language_pragmas(
+        fingerprint._strip_line_comments(
+            (root / ENVELOPE_CODEC_REL).read_text(encoding="utf-8")),
+        fingerprint.inherited_default_extensions(root / CABAL_REL))
+    parts = [_tokens(_strip_block_comments_keep_pragmas(
+        fingerprint._strip_line_comments(b))) for b in blocks]
+    parts.append(_tokens(_strip_block_comments_keep_pragmas(codec)))
+    return _sha("\n---\n".join(parts))
 
 
 def build_model(root: Path) -> Model:
@@ -771,7 +1006,7 @@ def build_model(root: Path) -> Model:
     try:
         return _build_model(root)
     except (AuditError, ValueError) as exc:
-        raise SchemaError(f"unclassifiable source: {exc}") from exc
+        raise SchemaError(f"{CANONICAL}: {exc}") from exc
 
 
 def _build_model(root: Path) -> Model:
@@ -796,6 +1031,9 @@ def _build_model(root: Path) -> Model:
     envelope_text = (root / ENVELOPE_REL).read_text(encoding="utf-8")
     meta_current = _binding_int(
         envelope_text, "metadataComponentVersion", ENVELOPE_REL)
+    _check_metadata_input_list(envelope_text, ENVELOPE_REL)
+    _binding_int(envelope_text, "legacyMetadataComponentVersion",
+                 ENVELOPE_REL)
     meta_accepted = fingerprint.metadata_input_versions(
         envelope_text, meta_current)
     meta_root = index.by_qualified.get(METADATA_ROOT)
@@ -820,7 +1058,8 @@ def _build_model(root: Path) -> Model:
     # custom-serializer carriers owned by their registering file's
     # registration plus the shared data codec.
     lua_infos = lua_modules(root)
-    codec_digest = _sha(_lua_normalized(root / DATA_CODEC_REL))
+    codec_digest = _sha(lua_tokens(
+        (root / DATA_CODEC_REL).read_text(encoding="utf-8")))
     for lua_id, info in sorted(lua_infos.items()):
         carriers[f"lua.{lua_id}"] = Carrier(
             id=f"lua.{lua_id}", kind="lua", current_version=info["version"],
@@ -831,11 +1070,9 @@ def _build_model(root: Path) -> Model:
             required=info["required"])
 
     # Framing.
-    framing = fingerprint.envelope_framing_fingerprint(
-        root / ENVELOPE_TYPES_REL, root / ENVELOPE_CODEC_REL,
-        root / CABAL_REL)
-    framing_version = fingerprint.current_envelope_version(
-        root / ENVELOPE_REL)
+    framing = framing_digest(root)
+    framing_version = _binding_int(
+        envelope_text, "currentEnvelopeVersion", ENVELOPE_REL)
     _check_framing_dispatch(root, scan)
     carriers["framing"] = Carrier(
         id="framing", kind="framing", current_version=framing_version,
@@ -871,30 +1108,14 @@ def _build_model(root: Path) -> Model:
         owners=[], legacy_owners=[], custom_owners=[],
         owner_sources=[ENVELOPE_REL])
 
-    # Legacy routes. A dispatcher may only speak the route vocabulary:
-    # a call this reader cannot attribute (a renamed decoder, a
-    # forwarding helper) leaves the route's state unknown, and unknown
-    # fails rather than reading as "disabled".
-    known = set(DISPATCHER_WORDS)
-    for spec in LEGACY_ROUTES.values():
-        known |= set(spec["entries"]) | set(spec["callees"])
+    # Legacy routes, read from the dispatchers' exact forms.
+    b1_on, b2_on = route_states(envelope_text)
+    states = {"b1-session": b1_on, "b2-lua-state": b2_on}
     routes: dict[str, Route] = {}
     for rid, spec in sorted(LEGACY_ROUTES.items()):
-        bodies = "\n".join(_dispatcher_body(envelope_text, e)
-                           for e in spec["entries"])
-        unknown = sorted({w for w in re.findall(
-            r"(?<![\w'.])[a-z_][\w']*", bodies) if w not in known})
-        if unknown:
-            raise SchemaError(
-                f"unknown coverage: legacy-route dispatcher(s) "
-                f"{', '.join(spec['entries'])} call {', '.join(unknown)}, "
-                f"which LEGACY_ROUTES does not attribute to any route; "
-                f"route `{rid}` cannot be classified as enabled or disabled")
-        enabled = any(re.search(rf"(?<![\w']){c}(?![\w'])", bodies)
-                      for c in spec["callees"])
         carrier_ids = list(spec["carriers"])
         if spec.get("required_components"):
             carrier_ids += sorted(c.id for c in carriers.values()
                                   if c.kind == "component" and c.required)
-        routes[rid] = Route(rid, enabled, carrier_ids)
+        routes[rid] = Route(rid, states[rid], carrier_ids)
     return Model(carriers, routes)

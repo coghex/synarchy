@@ -36,18 +36,45 @@ REGISTRY = "src/World/Save/Component.hs"
 Edit = tuple[str, str, str]
 
 GAMMA = "src/World/Save/Component/Gamma.hs"
+ENV_ENVELOPE = ("tryLegacyEnvelopeFallbacks bytes = case "
+                "decodeLegacySessionEnvelope bytes of\n"
+                "    NotLegacyShaped → decodeB2SessionEnvelope bytes\n"
+                "    other           → other\n")
+ENV_METADATA = ("tryLegacyMetadataFallbacks bytes = case "
+                "decodeLegacySessionMetadata bytes of\n"
+                "    NotLegacyShaped → decodeB2SessionMetadata bytes\n"
+                "    other           → other\n")
+
+
+def routes(entry: str, b1_on: bool, b2_on: bool) -> str:
+    """The exact dispatcher text for one on/off state."""
+    kind = "Envelope" if entry == "Envelope" else "Metadata"
+    first, second = f"decodeLegacySession{kind}", f"decodeB2Session{kind}"
+    tail = f"{second} bytes" if b2_on else "NotLegacyShaped"
+    if not (b1_on or b2_on):
+        return f"tryLegacy{kind}Fallbacks _ = NotLegacyShaped\n"
+    if not b1_on:
+        return f"tryLegacy{kind}Fallbacks bytes = {tail}\n"
+    return (f"tryLegacy{kind}Fallbacks bytes = case {first} bytes of\n"
+            f"    NotLegacyShaped → {tail}\n"
+            f"    other           → other\n")
+
+
+def route_edits(b1_on: bool, b2_on: bool) -> list[Edit]:
+    return [(ENVELOPE, ENV_ENVELOPE, routes("Envelope", b1_on, b2_on)),
+            (ENVELOPE, ENV_METADATA, routes("Metadata", b1_on, b2_on))]
+
+
+B1_OFF = route_edits(False, True)
+B2_OFF = route_edits(True, False)
+BOTH_OFF = route_edits(False, False)
 # alpha is REQUIRED, and the B2 route decodes every required component,
 # so bumping it also switches that route off.
-B2_OFF: list[Edit] = [
-    (ENVELOPE, "decodeB2SessionEnvelope bytes", "NotLegacyShaped"),
-    (ENVELOPE, "decodeB2SessionMetadata bytes", "NotLegacyShaped")]
-B1_OFF: list[Edit] = [
-    (ENVELOPE, "decodeLegacySessionEnvelope bytes", "NotLegacyShaped"),
-    (ENVELOPE, "decodeLegacySessionMetadata bytes", "NotLegacyShaped")]
-ALPHA_BUMP: list[Edit] = [
+ALPHA_BUMP_CORE: list[Edit] = [
     (ALPHA, "csVersion       = 2", "csVersion       = 3"),
     (ALPHA, "csOlderVersions = [ atVersion 1 migrateAlphaDTOv1 ]",
-     "csOlderVersions = []")] + B2_OFF
+     "csOlderVersions = []")]
+ALPHA_BUMP: list[Edit] = ALPHA_BUMP_CORE + B2_OFF
 BETA_BUMP: list[Edit] = [(BETA, "csVersion       = 1", "csVersion       = 2")]
 ALPHA_FIELD: Edit = (ALPHA, "    , adShared ∷ !SharedDTO\n",
                      "    , adShared ∷ !SharedDTO\n    , adExtra  ∷ !Int\n")
@@ -133,6 +160,7 @@ class Suite:
 
 def run_cases(s: Suite) -> None:
     c = s.compare_case
+    canon = "!unsupported syntax: rewrite in canonical form"
     # --- unchanged / non-shape edits pass
     c("unchanged", [], None)
     c("comment, layout and bang edits are ignored", [
@@ -226,8 +254,8 @@ def run_cases(s: Suite) -> None:
     # --- shared shapes and partial bumps
     c("shared shape, partial bump", [SHARED_FIELD] + ALPHA_BUMP,
       "carrier `beta`: same-version drift")
-    c("shared shape, full bump", [SHARED_FIELD] + ALPHA_BUMP + BETA_BUMP
-      + B1_OFF, None)
+    c("shared shape, full bump", [SHARED_FIELD] + ALPHA_BUMP_CORE + BETA_BUMP
+      + BOTH_OFF, None)
     c("shared shape reaches the frozen session route", [SHARED_FIELD]
       + ALPHA_BUMP + BETA_BUMP, "legacy route `b1-session` is still enabled")
     # --- legacy-only declarations
@@ -259,7 +287,7 @@ def run_cases(s: Suite) -> None:
       META_BUMP + [META_FIELD, META_CURRENT_ONLY] + B1_OFF,
       "legacy route `b2-lua-state` is still enabled")
     c("metadata bump, current only, routes off",
-      META_BUMP + [META_FIELD, META_CURRENT_ONLY] + B1_OFF + B2_OFF, None)
+      META_BUMP + [META_FIELD, META_CURRENT_ONLY] + BOTH_OFF, None)
     c("frozen session shape edit, route on", [
         (SESSION, "s90Name   ∷ !Text", "s90Name   ∷ !Int")],
       "legacy route `b1-session` is still enabled")
@@ -289,7 +317,7 @@ def run_cases(s: Suite) -> None:
       "!ambiguous coverage: Lua save module `one`")
     c("Lua version not literal", [
         (LUA_ONE, "version       = 2,", "version       = someConst,")],
-      "!declares no literal `version`")
+      canon)
     c("ambiguous type name", [
         (QUIRK, "data OffWire = OffA | OffB",
          "data AlphaKindDTO = Other\n\ndata OffWire = OffA | OffB")],
@@ -300,43 +328,100 @@ def run_cases(s: Suite) -> None:
       "!custom-serializer ambiguity")
     c("renamed route decoder", [
         (ENVELOPE, "decodeB2SessionEnvelope bytes", "decodeB2Renamed bytes")],
-      "!which LEGACY_ROUTES does not attribute")
+      canon)
     c("forwarding helper in a dispatcher", [
-        (ENVELOPE, "decodeB2SessionMetadata bytes", "forwardB2 bytes")],
-      "!cannot be classified as enabled or disabled")
+        (ENVELOPE, "decodeB2SessionMetadata bytes", "forwardB2 bytes")], canon)
+    c("qualified forwarding call in a dispatcher", [
+        (ENVELOPE, "decodeB2SessionEnvelope bytes",
+         "Compat.readB2Envelope bytes")], canon)
+    c("dispatchers disagree", [
+        (ENVELOPE, ENV_METADATA, routes("Metadata", False, True))],
+      "!disagree")
+    c("whitespace in a dispatcher is layout", [
+        (ENVELOPE, "NotLegacyShaped → decodeB2SessionEnvelope bytes",
+         "NotLegacyShaped→decodeB2SessionEnvelope  bytes")], None)
     c("required component bump leaves the B2 route on", [
         (ALPHA, "csVersion       = 2", "csVersion       = 3"),
         (ALPHA, "csOlderVersions = [ atVersion 1 migrateAlphaDTOv1 ]",
          "csOlderVersions = []")],
       "legacy route `b2-lua-state` is still enabled")
     c("optional component bump leaves B2 alone", BETA_BUMP, None)
-    c("single-quoted Lua registration is still discovered", [
-        (LUA_TWO, 'register("two"', "register('two'")], None)
+    c("single-quoted Lua registration is refused", [
+        (LUA_TWO, 'register("two"', "register('two'")], canon)
     c("spaced Lua registration is still discovered", [
         (LUA_TWO, 'register("two"', 'register ("two"')], None)
     c("unreadable Lua registration fails closed", [
-        (LUA_TWO, 'register("two"', "register(twoId")],
-      "!other than a quoted literal id")
-    c("aliased save-module require is followed", [
+        (LUA_TWO, 'register("two"', "register(twoId")], canon)
+    c("aliased save-module require is refused", [
         (LUA_TWO, 'local saveMods = require("scripts.lib.save_modules")\n'
          'saveMods.register("two"',
          'local reg = require("scripts.lib.save_modules")\n'
-         'reg.register("two"')], None)
+         'reg.register("two"')], canon)
+    c("comment inside the registration call head", [
+        (LUA_TWO, 'register("two"', 'register --[[c]] ("two"')], canon)
+    c("registration function aliased", [
+        (LUA_TWO, 'saveMods.register("two"',
+         'local r = saveMods.register\nsaveMods.register("two"')], canon)
+    c("registry object aliased", [
+        (LUA_TWO, 'saveMods.register("two"',
+         'local reg = saveMods\nsaveMods.register("two"')], canon)
+    c("indexed registry lookup", [
+        (LUA_TWO, 'saveMods.register("two"',
+         'saveMods["register"]("two"')], canon)
+    c("register on an unrelated table is not the registry", [
+        (LUA_TWO, 'saveMods.register("two"',
+         'other.register("x", {})\nsaveMods.register("two"')], None)
     c("non-literal inputVersions entry", [
         (LUA_ONE, "version       = 2,", "version       = 3,"),
         (LUA_ONE, "inputVersions = { 1, 2 }",
          "inputVersions = { 3, oldVersion }")],
-      "!inputVersions must be integer literals")
+      canon)
+    c("trailing expression after inputVersions", [
+        (LUA_ONE, "version       = 2,", "version       = 3,"),
+        (LUA_ONE, "inputVersions = { 1, 2 }",
+         "inputVersions = { 3 } and { 1, 3 }")], canon)
+    c("Lua whitespace is layout", [
+        (DATA_CODEC, "function M.encode(v)", "function M.encode (v)")], None)
+    c("Lua comment edit is ignored", [
+        (DATA_CODEC, "-- shared wire encoding", "--[[ reworded ]]")], None)
     c("framing decoder keeps accepting the old version", [
         (CODEC, "when (version ≢ expectedVersion)",
          "when (version ≢ expectedVersion ∧ version ≢ 1)"),
         (ENVELOPE, "currentEnvelopeVersion = 1",
          "currentEnvelopeVersion = 2")],
-      "!must reject exactly")
+      canon)
     c("framing caller passes another version", [
         (ENVELOPE, "defaultEnvelopeLimits currentEnvelopeVersion 0",
          "defaultEnvelopeLimits legacyEnvelopeVersion 0")],
-      "!not currentEnvelopeVersion")
+      canon)
+    c("framing caller is parenthesised", [
+        (ENVELOPE, "decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion 0",
+         "decodeEnvelope (defaultEnvelopeLimits) 1 0")], canon)
+    c("framing caller is qualified", [
+        (ENVELOPE, "= decodeEnvelope defaultEnvelopeLimits",
+         "= Codec.decodeEnvelope defaultEnvelopeLimits")], canon)
+    c("framing version is an expression", [
+        (ENVELOPE, "currentEnvelopeVersion = 1", "currentEnvelopeVersion = 2 - 1"),
+        (CODEC, "encodeEnvelope n = n", "encodeEnvelope n = n + 1")], canon)
+    c("framing whitespace around punctuation is layout", [
+        ("src/World/Save/Envelope/Types.hs",
+         "{ cdId ∷ !ComponentId, cdVersion ∷ !Word32 }",
+         "{ cdId∷!ComponentId,cdVersion∷!Word32 }")], None)
+    c("framing string literal content is not layout", [
+        ("src/World/Save/Envelope/Types.hs", '"SYNA"', '"SY NA"')],
+      "carrier `framing`: same-version drift")
+    c("metadata input list with a trailing expression", META_BUMP + [
+        META_FIELD,
+        (ENVELOPE, "    [ legacyMetadataComponentVersion\n"
+         "    , metadataComponentVersion ]",
+         "    [ metadataComponentVersion ] ⧺ [ legacyMetadataComponentVersion ]")]
+      + BOTH_OFF, canon)
+    c("older decoder without a signature", [
+        (GAMMA, "migrateGammaDTOv2 ∷ GammaDTOv2 → GammaDTO\n", "")],
+      "!`migrateGammaDTOv2` has no explicit type signature")
+    c("composed older decoder", [
+        (GAMMA, "atVersion 1 migrateGammaDTOv1",
+         "atVersion 1 (migrateGammaDTOv1 ∘ id)")], canon)
     c("missing route dispatcher", [
         (ENVELOPE, "tryLegacyMetadataFallbacks", "tryOtherFallbacks")],
       "!legacy-route dispatcher `tryLegacyMetadataFallbacks`")

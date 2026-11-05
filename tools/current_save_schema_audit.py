@@ -51,6 +51,43 @@ reach (frozen DTOs named by `csOlderVersions` migrations). Editing one
 while it is still reachable fails until the older version is removed;
 no bump is needed if the current shape is unchanged.
 
+=== Canonical forms
+
+Anything the guard reads must be in ONE canonical form (owner ruling,
+2026-11-05, "Strict canonical forms"). Any other spelling -- an alias, a
+qualified or forwarding call, a comment inside the construct, an
+expression, a trailing operator -- is not parsed: the build fails with
+`<file>:<line>: unsupported syntax: rewrite in canonical form`, so a
+mutation makes the guard fail instead of pass.
+
+  Haskell version bindings   `name = <integer literal>` alone on its line,
+                             defined once: currentEnvelopeVersion,
+                             metadataComponentVersion,
+                             legacyMetadataComponentVersion,
+                             luaStateComponentVersion,
+                             sessionComponentVersion; `csVersion = <int>`
+  metadata accepted versions one `metadataComponentInputVersions =
+                             [ <binding or integer>, ... ]`
+  older component decoders   `atVersion <int> <name>` where `<name>` has an
+                             explicit signature `<name> ∷ <FooDTOvN> → ...`
+                             whose first argument is the *DTO* wire root
+  Lua registration           `local <name> = require("scripts.lib.
+                             save_modules")` on its own line, then
+                             `saveMods.register("<id>", {`; exactly one
+                             `version = <int>,`, `required = <bool>,` and
+                             `inputVersions = { <ints> },` per table
+  framing decoder            every use is `decodeEnvelope
+                             defaultEnvelopeLimits currentEnvelopeVersion`;
+                             Codec.hs rejects exactly `version ≢
+                             expectedVersion`
+  legacy-route dispatch      `tryLegacyEnvelopeFallbacks` and
+                             `tryLegacyMetadataFallbacks` in one of four
+                             exact forms (see `dispatcher_forms`); a route
+                             is disabled only by its explicit form
+
+Whitespace, comments outside those constructs and strictness bangs never
+change a shape; string-literal contents always do.
+
 === Limits of source inspection (read before trusting a green run)
 
   - Arbitrary custom serializers: a hand-written `put`/`get` is hashed as

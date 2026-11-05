@@ -750,6 +750,16 @@ newtype UnitsDTOv3 = UnitsDTOv3 { ud3Pages ∷ [PageUnitsDTOv3] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- | v1 → current, through the frozen v3. Named, with a signature, so the
+--   current-schema guard (@tools\/current_save_schema_audit.py@) can name
+--   the wire root each @atVersion@ entry decodes.
+migrateUnitsDTOv1ToCurrent ∷ UnitsDTOv1 → UnitsDTO
+migrateUnitsDTOv1ToCurrent = migrateUnitsDTOv3 ∘ migrateUnitsDTOv1
+
+-- | v2 → current, through the frozen v3; see 'migrateUnitsDTOv1ToCurrent'.
+migrateUnitsDTOv2ToCurrent ∷ UnitsDTOv2 → UnitsDTO
+migrateUnitsDTOv2ToCurrent = migrateUnitsDTOv3 ∘ migrateUnitsDTOv2
+
 migrateUnitsDTOv3 ∷ UnitsDTOv3 → UnitsDTO
 migrateUnitsDTOv3 (UnitsDTOv3 slices) = UnitsDTO
     [ PageUnitsDTO (pu3PageId s)
@@ -1094,8 +1104,8 @@ unitsCodec = componentCodec ComponentSpec
               (Map.toAscList (usnScenarioRefs (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv1)
-                        , atVersion 2 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv2)
+    , csOlderVersions = [ atVersion 1 migrateUnitsDTOv1ToCurrent
+                        , atVersion 2 migrateUnitsDTOv2ToCurrent
                         , atVersion 3 migrateUnitsDTOv3
                         , atVersion 4 migrateUnitsDTOv4
                         , atVersion 5 migrateUnitsDTOv5 ]
