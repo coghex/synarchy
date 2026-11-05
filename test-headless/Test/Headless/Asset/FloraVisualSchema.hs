@@ -381,7 +381,10 @@ spec = do
                 , "unknown" ]
             successorVocabulary `shouldBe` ["reseed", "absent"]
             map contextText [minBound .. maxBound] `shouldBe` contextVocabulary
-            map conditionText [minBound .. maxBound]
+            -- FloraCondition also carries lifecycle markers (reseeded and
+            -- absent); they are not visual selector tokens. Keep this
+            -- vocabulary pinned to the contract's two renderable states.
+            map conditionText [ConditionAlive, ConditionDead]
                 `shouldBe` conditionVocabulary
             map deathCauseText [minBound .. maxBound]
                 `shouldBe` deathCauseVocabulary
