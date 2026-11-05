@@ -173,11 +173,18 @@ def run_wild_retention(port, rep):
     page = "flora_condition_wild"
     admitted = send(port, f"world.init('{page}',42,64,3); return 'ok'")
     rep.check("ok" in admitted, f"the wild fixture world is admitted: {admitted}")
-    send(port, "return world.waitForInit(300)", timeout=310)
+    # waitForInit follows the ACTIVE page. Waiting here can therefore return
+    # immediately on the already-loaded arena while the generated page is
+    # still building; on a slow runner, the later world.show then waits behind
+    # that build and the fixture scan accidentally reads the arena. Show the
+    # target first, wait until it is active, then wait for that page's init.
     send(port, f"world.show('{page}'); return 'ok'")
     active = wait_for(lambda: send(port, "return world.getActiveWorldId()")
-                      .strip().strip('"') == page)
+                      .strip().strip('"') == page, seconds=330)
     rep.check(bool(active), f"the wild fixture world is active: {page}")
+    if not active:
+        return None
+    send(port, "return world.waitForInit(300)", timeout=310)
     send(port, "return world.loadChunksInRegion(-4,-4,4,4)", timeout=30)
     send(port, "return world.waitForChunks(120)", timeout=125)
 
