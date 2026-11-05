@@ -5,7 +5,7 @@ an obligation to migrate disposable development saves. This arc removes the
 mandatory historical compatibility work while preserving versioned refusal,
 current-session persistence, and the save/load transaction.
 
-Design state: `exploring`
+Design state: `ready for issue processing`
 
 Owner: `coghex/synarchy`; publication branch: `master`.
 Request: `user-syn-save-policy-20261105`, owner via the Synarchy manager,
@@ -13,11 +13,13 @@ Request: `user-syn-save-policy-20261105`, owner via the Synarchy manager,
 `~/.local/state/project-manager/synarchy/tasks/save-policy-design.md`.
 
 The policy decisions below are settled, including the owner's answers to
-Q-1 and Q-2. The implementation details and slice boundaries still need
-readiness signoff. This
-document is published for review and resumption, not authorization to file
-issues or change the runtime. No engine, probe, build, or test was run while
-writing it.
+Q-1 and Q-2. The owner approved the whole design and its five delivery slices
+at revision `faa7f3803d` with "Ready, process it" on 2026-11-05. Verified
+`syn-manager` message `f9dh8cp6n3ub4yqain6cx2uzhw` in `#syn-save-policy`
+(15:09:22 UTC), replying to `e85gc2qkbhkyzidqtk6iq9cjv6`, relays that
+readiness signoff and directs publication of this state change. The manager
+launches `process-design-doc` separately; this task creates no issues or
+runtime changes. No engine, probe, build, or test was run while writing it.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -164,12 +166,15 @@ old version range is a separate promise that must become optional.
   any runner/lab selection changes. This design does not redraft it.
   Registry edits there require the existing runner/sweep and Quruntul gates.
 
-Tracker check: no open pre-release-save-policy epic was found. CI epic
+Tracker rechecked at readiness on 2026-11-05: no open
+pre-release-save-policy epic was found. The separately managed opt-in issue
+is #2912, "[tools] Make save_compat_migration an opt-in probe that runs only
+on request"; do not duplicate it. CI epic
 #2742 overlaps gate wiring, not this policy decision; coordinate changes to
 its gate-selection surfaces. Open #2564 concerns legacy faction-enum
 retirement; it is not blanket authorization to delete save migration code.
-Recheck these overlaps and obtain the manager's opt-in issue number at
-readiness. No tracker artifact was created or modified for this design.
+Recheck these overlaps during issue processing. No tracker artifact was
+created or modified for this design.
 
 ## Decisions
 
@@ -189,7 +194,7 @@ below. D-6 settles the baseline as the first public-release save format.
 
 ### D-3. Migration-probe opt-in is a separate existing work item
 
-Owner decision in the task brief; the manager is filing that small issue.
+Owner decision in the task brief; the manager has filed that small issue as #2912.
 The probe must run only when explicitly wanted before release. Do not create
 a duplicate child or use that change as proof that the rest of the regime is
 retired.
@@ -228,8 +233,9 @@ pre-release corpus as a release requirement was not selected.
 replies directly to question `3sx3nmsq853m5tupnjda739vzi` and relays both
 owner answers under `user-syn-save-policy-20261105`. The owner also directly
 instructed this session to read that reply and act on it. This authorizes
-recording and applying both choices to this design; it neither authorizes
-issue creation nor supplies whole-design readiness signoff.
+recording and applying both choices to this design. The later whole-design
+readiness signoff is recorded at the top of this document; issue creation
+belongs to the manager's separate processing workflow.
 
 ## Desired behavior and scope
 
@@ -251,7 +257,7 @@ restoring deterministic replay, relaxing content/reference integrity, changing
 optional-component default semantics, and changing unrelated worldgen gates.
 No new runtime state or serialized policy flag is needed for this design.
 
-## Design proposals
+## Design
 
 ### P-1. Keep exact version dispatch; make refusal the normal escape hatch
 
@@ -297,7 +303,7 @@ prove arbitrary serializer semantics or see swapping two indistinguishable
 positional values. Such encoding/meaning changes still require a bump, explicit
 review evidence, and a targeted distinguishing test.
 
-The implementation proposal gives the enum audit a pre-release, version-aware update
+The enum audit gains a pre-release, version-aware update
 path instead of a blanket non-append veto. Its historical append-only mode
 remains available. A changed off-wire enum does not create a fictional save
 component version, but newly reachable types cannot escape coverage. Keep
@@ -355,7 +361,7 @@ verify that dependency without expanding this design into its issue body.
 
 No unresolved policy questions remain. The resolved IDs are retained below
 so the original question, accepted answers, and affected decisions remain
-traceable. Whole-design readiness signoff is still outstanding.
+traceable. Whole-design readiness signoff is recorded above.
 
 ### Q-1. Automated current-schema guard or review enforcement?
 
@@ -372,9 +378,9 @@ checklist use this boundary.
 Both questions were posted together to `#syn-save-policy` as
 `syn-designer-1`, verified message `3sx3nmsq853m5tupnjda739vzi`, under this
 request. Both owner answers are recorded in D-5/D-6 with the verified reply's
-provenance. The five slice boundaries remain unchanged. No whole-design
-readiness signoff has been recorded; keep this document `exploring` until
-that signoff, without reopening either settled answer.
+provenance. The five slice boundaries remain unchanged and have whole-design
+readiness signoff in verified message `f9dh8cp6n3ub4yqain6cx2uzhw`. Neither
+settled answer needs reopening.
 
 ## Verification strategy
 
@@ -401,8 +407,9 @@ tests alone did not expose the #2557 camera-ring admission problem.
 
 ## Delivery plan
 
-These are proposed one-PR slices, listed in valid dependency order. No issue
-numbers are reserved. All slices require design readiness before tracker
+These are the five approved one-PR slice boundaries, listed in valid
+dependency order. No child issue numbers are reserved. Design readiness is
+signed off; each tracker artifact still receives its own approval during
 processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 
 ### PSP-1. Prove safe unsupported-version refusal at the load boundary
@@ -527,10 +534,9 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
   is useful. Check `.quruntul/adapter.py` registration impact without changing
   the lab's authority or blindly editing measured corpus records.
 - **Phase / ordering:** 4, critical path. **Depends on:** PSP-1, PSP-2,
-  PSP-3, PSP-4; confirm the manager's separate probe opt-in item has landed.
-- **Relevant decisions:** D-1–D-6. **Open questions:** None. Design readiness
-  remains the tracker-processing prerequisite; implementation depends on
-  PSP-1–PSP-4 and the separate probe opt-in item as stated above.
+  PSP-3, PSP-4; confirm the manager's separate probe opt-in issue #2912 has landed.
+- **Relevant decisions:** D-1–D-6. **Open questions:** None. Implementation
+  depends on PSP-1–PSP-4 and #2912 as stated above.
 - **Acceptance signals:** Default invocations require the current guard/tests
   and never historical corpus success; explicit historical invocation works.
   Save/Cabal/fixture changes and master pushes cannot implicitly restore old
@@ -586,15 +592,16 @@ not a new child issue to file during this design task.
 ## Handoff
 
 This design now has six settled decision records, no unresolved policy
-questions, and five proposed delivery slices. There is no divergence from the
+questions, and five approved delivery slices. There is no divergence from the
 manager's requested retention, refusal, fixture or fresh-process
 recommendations. D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
 reporting its commit in `#syn-save-policy`, not issue creation.
 
-After explicit readiness signoff, `process-design-doc` processes
-EPIC first and then exactly one dependency-ready child per invocation, with
-separate owner approval for every tracker artifact. Recheck the tracker and
-the separately managed opt-in issue then; do not infer readiness from this
-document's successful publication.
+Readiness is explicitly signed off at `faa7f3803d` and recorded in this
+revision. The designer's task ends after publishing this revision and reporting
+its commit. The manager launches `process-design-doc` separately: EPIC first,
+then exactly one dependency-ready child per invocation, with separate owner
+approval for every tracker artifact. Recheck the tracker and #2912 during
+processing; this publication does not itself create or approve issue bodies.
