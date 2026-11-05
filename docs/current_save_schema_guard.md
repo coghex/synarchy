@@ -62,7 +62,10 @@ shape did not.
    disabled. A route is enabled while `tryLegacyEnvelopeFallbacks` or
    `tryLegacyMetadataFallbacks` still names its decoder; a metadata change
    affects both routes, a change to a type the frozen `SessionV90` DTOs reach
-   affects `b1-session`.
+   affects `b1-session`, and `b2-lua-state` also decodes every *required*
+   Haskell component of its era, so a version change in any of them affects
+   it. A dispatcher may only call the decoders `LEGACY_ROUTES` names; any
+   other call leaves the route's state unknown and fails.
 5. A new carrier is covered and accepts only its current version, with no
    bump. A removed carrier must leave the record.
 6. Unchanged carriers owe nothing. Removing registrations does not require
@@ -70,7 +73,10 @@ shape did not.
 
 Anything the guard cannot classify fails and names the boundary: a registered
 codec with no definition, a codec with no resolvable DTO, a duplicate Lua
-module id, a type name declared in two modules (list it in
+module id, a `saveMods.register` site that is not a quoted literal id plus
+a table, a non-literal `inputVersions` entry, a framing decoder that does not
+reject exactly `version ≢ expectedVersion` (or a caller that passes another
+version), a type name declared in two modules (list it in
 `AMBIGUOUS_TYPE_NAMES` with why a union is acceptable), a type that both
 derives and hand-writes `Serialize`, a missing legacy dispatcher.
 
