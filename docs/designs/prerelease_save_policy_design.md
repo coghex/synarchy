@@ -29,7 +29,7 @@ concrete precondition
 
 - [x] EPIC. Retire mandatory pre-release legacy-save compatibility — [#2914]
 - [x] PSP-1. Prove safe unsupported-version refusal at the load boundary — [#2915]
-- [ ] PSP-2. Enforce current-schema version changes without requiring migrations
+- [x] PSP-2. Enforce current-schema version changes without requiring migrations — [#2916]
 - [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
 - [ ] PSP-4. Separate historical test obligations from current persistence coverage
 - [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
@@ -316,14 +316,16 @@ serializers and indistinguishable positional values. Undetected encoding or
 meaning changes still require version advancement, current-only acceptance,
 explicit review evidence and a distinguishing test.
 
-**Implementation placement proposed for revised PSP-2 signoff:** enum changes
+**Implementation placement approved with PSP-2 revision 2:** enum changes
 use the same new guard; do not add a separate enum-audit pre-release mode or
 updater. Keep the existing strict enum command/default gates unchanged during
 preparation. PSP-5 switches mandatory selection to the new guard and retains
 the old audit for explicit historical use. Off-wire enum changes need no
 fictional component bump, while newly persisted types must enter coverage.
-This replaces the previous draft's separate enum mode. The owner asked for
-this assessment; the revised issue presents it for signoff.
+This replaces the previous draft's separate enum mode. Verified syn-manager
+reply `f3jc64fgxzn9q58ky9bjn3m5s2` to question
+`dc4x2bdhwdpx5dizc95psm85g6` relayed the owner: "Approve as drafted".
+The revised issue is #2916.
 
 ### P-3. Split current correctness from optional historical evidence
 
@@ -462,7 +464,7 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
   No separate enum pre-release mode/updater is proposed; PSP-5 owns selection.
 - **Phase / ordering:** 2, critical path. **Depends on:** PSP-1 (#2915).
 - **Relevant decisions:** D-1, amended D-4/D-5. **Open questions:** None.
-  The revised issue and enum placement proposal still need artifact signoff.
+  The revised issue and enum placement were approved and filed as #2916.
 - **Acceptance signals:** Synthetic base/candidate cases cover record field
   add/remove/reorder/retype, enums including append, aliases/newtypes, shared
   shapes with partial bumps, baseline rewrite/deletion, unknown/ambiguous
@@ -608,7 +610,7 @@ not a new child issue to file during this design task.
 
 This design has six settled decision records and five delivery slices. The
 owner amended D-5 during PSP-2 processing to require current-only acceptance
-after a shape change; the revised PSP-2 artifact still needs signoff.
+after a shape change; the revised PSP-2 artifact is approved and filed as #2916.
 D-5 selects automated enforcement; D-6 starts the future
 promise at the first public-release save format. The task's authorized
 endpoint is publication of this document and
@@ -624,8 +626,8 @@ processing; this publication does not itself create or approve issue bodies.
 ## EPIC processing record
 
 The body below records the original approved issue. Amended D-5 supersedes
-its retained-decoder wording; the revised PSP-2 signoff includes exact epic
-wording edits, which have not yet been applied to GitHub.
+its retained-decoder wording; the approved PSP-2 revision 2 included exact
+epic wording edits, now applied to GitHub alongside its #2916 checklist link.
 
 Created [#2914](https://github.com/coghex/synarchy/issues/2914) on 2026-11-05.
 Verified syn-manager reply `ge89pkamx45zn8svwv3dxxk4g6` to question
@@ -791,12 +793,15 @@ rendering, Lua prepareLoad ordering, storage progress/no-fallback tests and
 the transaction probe; the latter has no unsupported-version case.
 No later slice was evaluated. No engine, test or probe was run while drafting.
 
-## Pending PSP-2 tracker proposal (revision 2)
+## PSP-2 processing record (revision 2)
 
-The owner requested "Simplify first" in verified reply
-`k8nvcbvvekhi9gqddjdbn86vcs`; the previous proposal at `564e65e228` is
-superseded and was never approved or filed. The current-only rule is recorded
-above. The complete revised artifact below awaits separate signoff.
+Created [#2916](https://github.com/coghex/synarchy/issues/2916), linked it in
+epic #2914 and applied the three exact approved epic replacements below.
+Verified syn-manager reply `f3jc64fgxzn9q58ky9bjn3m5s2` to question
+`dc4x2bdhwdpx5dizc95psm85g6` relayed the owner: "Approve as drafted".
+The prior proposal at `564e65e228` was superseded by the owner's
+"Simplify first" reply `k8nvcbvvekhi9gqddjdbn86vcs` and was never filed.
+The complete approved revision 2 and its side effects are retained below.
 
 Title: [save-policy PSP-2] Enforce current-schema version changes without requiring migrations
 
