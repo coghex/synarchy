@@ -30,7 +30,7 @@ concrete precondition
 - [x] EPIC. Retire mandatory pre-release legacy-save compatibility — [#2914]
 - [x] PSP-1. Prove safe unsupported-version refusal at the load boundary — [#2915]
 - [x] PSP-2. Enforce current-schema version changes without requiring migrations — [#2916]
-- [ ] PSP-3. Separate current-save auditing from historical compatibility auditing
+- [x] PSP-3. Separate current-save auditing from historical compatibility auditing — [#2917]
 - [ ] PSP-4. Separate historical test obligations from current persistence coverage
 - [ ] PSP-5. Activate the pre-release gate set and publish the operating policy
 
@@ -658,7 +658,7 @@ processing; this publication does not itself create or approve issue bodies.
 D-7 supersedes historical-mode wording in the original approved bodies below.
 The manager reconciled #2916 requirement 4 (verified message
 `2j49dp577uskvcfc24t956ayen`); readback confirmed it. The original bodies remain
-here as approval evidence. Exact #2914 amendments await PSP-3 revision 2 signoff.
+here as approval evidence. The three #2914 amendments were approved and applied with PSP-3 revision 2.
 
 The body below records the original approved issue. Amended D-5 supersedes
 its retained-decoder wording; the approved PSP-2 revision 2 included exact
@@ -943,12 +943,17 @@ strict audit, baseline update and self-test modes; the new guard can own
 pre-release enum enforcement while PSP-5 owns selection. No later slice was
 evaluated. No builds, tests, engines or probes were run for this redraft.
 
-## Pending PSP-3 tracker proposal
+## PSP-3 processing record
 
 Revision 2, current mode only. Supersedes the draft published at `3f1283bdac`
 and question `p9ne2z4dqarw4v29qbc3rgtpu2` (continuation
 `ubqxpa2w2fzrq4xdxfewkcc3qw`). Owner revision instruction and provenance are
-recorded in D-7. This draft is not approved and no issue has been created.
+recorded in D-7. Created [#2917](https://github.com/coghex/synarchy/issues/2917)
+from the exact revision 2 payload. Verified syn-manager reply
+`xz3vwn2fudv6gyj9fkm392qzae` to question `5e6yv366iegec62duuxiw37z7e`
+(continuation `w4wgam5ukctrr4hw3f9sxuhuga`) relayed the owner: "Approve as drafted".
+All three exact #2914 amendments below were applied and verified by readback.
+No later child is approved by this record.
 
 Title: [save-policy PSP-3] Separate current-save auditing from historical compatibility auditing
 
@@ -997,11 +1002,11 @@ Default/CI activation and historical deletion (PSP-5), Hspec preparation (PSP-4)
 <!-- issue-origin:codex -->
 ````
 
-### Exact proposed tracker side effects
+### Approved and applied tracker side effects
 
-After separate signoff and creation, apply only these three exact replacements
-to #2914, keeping its checkbox unchecked. N is the newly created issue number.
-Link that same number in the design PSP-3 ledger. No sibling issue edits.
+The three replacements below were applied to #2914 with N bound to 2917.
+Its implementation checkbox remains unchecked; the design ledger links #2917.
+No sibling issue was edited by this creation step.
 
 1. Replace:
 
@@ -1049,4 +1054,4 @@ manifest still contains 51 active baselines/57 fixtures. Current selection
 cannot be inferred from migrationTarget=current. The production codec facade
 serves persistence_snapshot.py and the current persistence_contract probe.
 No duplicate current-only audit issue found. No code, build, test, engine,
-probe or review was run for this authoring step. Three children remain unchecked.
+probe or review was run for this authoring step. Two children remain unchecked.
