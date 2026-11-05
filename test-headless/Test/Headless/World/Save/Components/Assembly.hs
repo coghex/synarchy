@@ -902,7 +902,7 @@ countedDecode ref ver bytes = unsafePerformIO $ do
     modifyIORef' ref (+ 1)
     pure $ if ver ≢ 1
         then Left (ComponentError decodeProbeComponentId ver DecodePhase
-                     "unsupported schema version (reader supports v1)")
+                     "unsupported save version: component \"decode-probe\" found v2 (reader supports v1)")
         else case S.decode bytes of
             Left err → Left (ComponentError decodeProbeComponentId ver DecodePhase
                                ("malformed payload: " <> T.pack err))

@@ -78,9 +78,11 @@ Exit 0 = every check passed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import glob
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -341,9 +343,10 @@ def _run(args, root: str) -> int:
     run_id = uuid.uuid4().hex[:12]
     slot_valid = f"{SAVE_PREFIX}valid_{run_id}"
     slot_corrupt = f"{SAVE_PREFIX}corrupt_{run_id}"
+    slot_unsupported = f"{SAVE_PREFIX}unsupported_{run_id}"
     slot_valid2 = f"{SAVE_PREFIX}valid2_{run_id}"
     save_dirs = [os.path.join(root, "saves", s)
-                 for s in (slot_valid, slot_corrupt, slot_valid2)]
+                 for s in (slot_valid, slot_corrupt, slot_unsupported, slot_valid2)]
     for d in save_dirs:
         if os.path.exists(d):
             sys.exit(f"refusing to run: {d} already exists")
@@ -378,6 +381,24 @@ def _run(args, root: str) -> int:
         # WAS in the save" half of the replacement-vs-merge check.
         do_save(args.port, "alpha", slot_valid, root)
         print(f"saved valid session -> {slot_valid} (alpha + beta)")
+
+        # Build an incompatible framing generation from a real current
+        # save in this probe's isolated resource root. The framing version
+        # lives outside the manifest checksum, so every payload and
+        # checksum remains byte-for-byte current and structurally valid.
+        valid_path = os.path.join(root, "saves", slot_valid, "world.synworld")
+        with open(valid_path, "rb") as f:
+            current_save = f.read()
+        unsupported_save = (current_save[:4]
+                            + struct.pack(">I", 2)
+                            + current_save[8:])
+        unsupported_dir = os.path.join(root, "saves", slot_unsupported)
+        os.makedirs(unsupported_dir, exist_ok=True)
+        unsupported_path = os.path.join(unsupported_dir, "world.synworld")
+        with open(unsupported_path, "wb") as f:
+            f.write(unsupported_save)
+        current_digest = hashlib.sha256(current_save).hexdigest()
+        unsupported_digest = hashlib.sha256(unsupported_save).hexdigest()
 
         # "gamma" is created AFTER the save above, so it is live at load
         # time but was never captured by ANY save file — the "does NOT
@@ -433,6 +454,34 @@ def _run(args, root: str) -> int:
         chk.ok(isinstance(status, dict) and status.get("phase") == "LoadFailed",
                f"corrupt save: getLoadStatus reports LoadFailed ({status})")
         assert_untouched("corrupt save")
+        send(args.port, "require('scripts.pause').set(false); return 'ok'", expect_result=False)
+
+        loaded = send(args.port, f"return engine.loadSave('{slot_unsupported}')")
+        chk.ok(loaded.strip() == "false",
+               "unsupported-version save: engine.loadSave rejects before publication")
+        status = load_status(args.port)
+        outcome = str(status.get("outcome", "")) if isinstance(status, dict) else ""
+        failed_phase = status.get("failedAtPhase") if isinstance(status, dict) else None
+        chk.ok(isinstance(status, dict)
+               and status.get("phase") == "LoadFailed"
+               and failed_phase is not None
+               and "unsupported save version" in outcome
+               and "envelope framing" in outcome
+               and "found v2" in outcome
+               and "supports v1" in outcome,
+               f"unsupported-version load is terminal pre-publication with "
+               f"framing diagnostics ({status})")
+        assert_untouched("unsupported-version load")
+        with open(unsupported_path, "rb") as f:
+            after = f.read()
+        chk.ok(hashlib.sha256(after).hexdigest() == unsupported_digest,
+               "unsupported-version load leaves the incompatible file unchanged")
+        chk.ok(after == unsupported_save,
+               "unsupported-version load does not rewrite the input bytes")
+        with open(valid_path, "rb") as f:
+            current_after = f.read()
+        chk.ok(hashlib.sha256(current_after).hexdigest() == current_digest,
+               "unsupported-version load leaves the source current save unchanged")
         send(args.port, "require('scripts.pause').set(false); return 'ok'", expect_result=False)
 
         # ── 2. Mutual exclusion: save/load never overlap ────────────────
