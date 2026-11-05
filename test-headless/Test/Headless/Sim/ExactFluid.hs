@@ -635,11 +635,7 @@ saveSpec = describe "world-edits: exact fluid surfaces and identity removal (#25
                 [ WeSetFluidSnapshotDv3 3 4 Ocean 6 ])
                 firstPlantedFloraCursor ])
 
-    it "is at its current version and still accepts every older one" $ do
-        -- #2705: v5 appended the page's tile, occurrence and plot tags.
-        -- #2711 appended WeSetFloraStateD in v6; #2557 appends the
-        -- identity-specific removal in v7.
-        ccVersion worldEditsCodec `shouldBe` 7
+    it "still accepts every historical input version" $
         ccInputVers worldEditsCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7]
 
     it "migrates the complete v6 shape and round-trips identity removal" $ do
@@ -703,6 +699,8 @@ saveSpec = describe "world-edits: exact fluid surfaces and identity removal (#25
 currentSaveSpec ∷ Spec
 currentSaveSpec = describe "world-edits current persistence" $
     it "round-trips exact fluid remainders and identity-specific flora removal" $ do
+        ccVersion worldEditsCodec `shouldBe` 7
+        ccVersion worldEditsCodec `shouldSatisfy` (`elem` ccInputVers worldEditsCodec)
         let pageId = page1
             coord = ChunkCoord 0 0
             iid = plantedFloraInstanceId 19

@@ -435,7 +435,22 @@ spec = describe "unit location knowledge" $ do
             runsOk $ lns
                 [ registered
                 , "assert(captured.version == 11)"
-                , "assert(type(captured.inputVersions) == 'table')"
+                , "local accepted = {}"
+                , "for _, v in ipairs(captured.inputVersions) do"
+                , "  accepted[v] = true end"
+                , "assert(accepted[11], 'current version 11 must be accepted')"
+                ]
+
+        it "keeps accepting every historical input version until PSP-5" $
+            runsOk $ lns
+                [ registered
+                , "local accepted = {}"
+                , "for _, v in ipairs(captured.inputVersions) do"
+                , "  accepted[v] = true end"
+                -- #915's location memory and the later unit_ai fields are
+                -- still accepted until the coordinated PSP-5 retirement.
+                , "for v = 1, 11 do assert(accepted[v], 'v' .. v"
+                , "  .. ' must still decode') end"
                 ]
 
         it "depends on world-pages, which owns the instance table its \

@@ -560,6 +560,34 @@ spec = do
             , "  .. 'the v2->v3 __owner-only migration')"
             ]
 
+        it "keeps historical building_spawn v1 and v2 migrations until PSP-5" $
+            runsOk $ lns
+            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
+            , "local buildingSpawn = require('scripts.building_spawn')"
+            , "buildingSpawn.init('test')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "-- v1 has no lastUid: migration still synthesizes __owner."
+            , "local v1 = { [12] = { lastSpawnedAt = 1.0 } }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 1, payload = codec.encode(v1) },"
+            , "})"
+            , "assert(prep.ok, 'v1 without lastUid must migrate: ' .. table.concat(prep.errors or {}, '; '))"
+            , "saveModules.applyAll()"
+            , "local snap = saveModules.registry.building_spawn.snapshot()"
+            , "assert(snap[12].__owner.__ref == 'building' and snap[12].__owner.id == 12)"
+            , "-- v2 already wraps lastUid; migration adds only __owner."
+            , "local v2 = { [12] = { lastUid = { __ref = 'unit', id = 4 } } }"
+            , "local prep2 = saveModules.prepareLoad({"
+            , "  { id = 'building_spawn', version = 2, payload = codec.encode(v2) },"
+            , "})"
+            , "assert(prep2.ok, 'v2 must migrate to v3: ' .. table.concat(prep2.errors or {}, '; '))"
+            , "saveModules.applyAll()"
+            , "local snap2 = saveModules.registry.building_spawn.snapshot()"
+            , "assert(snap2[12].__owner.__ref == 'building' and snap2[12].__owner.id == 12)"
+            , "assert(snap2[12].lastUid.__ref == 'unit' and snap2[12].lastUid.id == 4)"
+            ]
+
         describe "current Lua reference validation" $ do
             it "current unit_ai payload validation rejects missing or mismatched __owner \
                \whose __owner id does not match its own outer key (round-6 \

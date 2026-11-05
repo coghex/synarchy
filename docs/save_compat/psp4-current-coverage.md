@@ -14,7 +14,7 @@ PSP-4 prepares current behavior tests for PSP-5's coordinated retirement. It doe
 | Lua location-memory current payload and current declaration | `Test.Headless.Lua.UnitAiLocations` schema-evolution group using v4 literals and an uninterrupted historical acceptance loop | Current declaration and payload assertions use v11; historical decode/migration examples remain separately described |
 | Position hold current round trip and transient harvest approach reset | `Test.Headless.Lua.UnitAiHold`, `UnitAiYieldProximity`, and `UnitAiHarvest` owner groups | Existing owner tests pin current v11 payload/version and meaningful values; old-version acceptance stays in migration examples |
 | Current registry, assembly, integrity, required/optional component behavior, recursive item physical values, non-default simulation/crafting/power/climate, diagnostics, and references | `Test.Headless.World.Save.Components`, its component owners, and `Test.Headless.World.Save.Integrity` | Retained current synthetic groups; old DTO decode cases remain in the migration family |
-| Current flora authored names and current container knowledge | `Test.Headless.World.Save.Compat.Baselines` read tracked compatibility payloads | `Test.Headless.World.Save.Contract` round-trips authored flora names in edit/crop/designation references; `Test.Headless.Building.Knowledge` covers populated current knowledge through the real codec. Fixture-backed current-version baseline examples were removed from the historical family. |
+| Current river names, movement hazard, flora authored names, and container knowledge | `Test.Headless.World.Save.Compat.Baselines` read tracked compatibility payloads | `Test.Headless.World.Save.Contract` round-trips `richRiverNames` with gloss and etymology, the `FallProhibited` movement hazard, and authored flora names at edit/crop/designation references; `Test.Headless.Building.Knowledge` covers populated current knowledge through the real codec. Fixture-backed current-version baseline examples were removed from the historical family. |
 
 ## Validation record
 
@@ -27,14 +27,14 @@ All commands ran from the issue worktree. Each selected Hspec group was nonempty
 | `cabal test synarchy-test-headless --test-options='--match "save components"'` | 179 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "persistence contract"'` | 9 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "persistence reference integrity"'` | 77 examples passed |
-| `cabal test synarchy-test-headless --test-options='--match "Lua persistence components"'` | 105 examples passed |
+| `cabal test synarchy-test-headless --test-options='--match "Lua persistence components"'` | 106 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "save migrations"'` | 112 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "current page-core persistence"'` | 7 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "world-edits current persistence"'` | 1 example passed |
 | `cabal test synarchy-test-headless --test-options='--match "current tag admission"'` | 2 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "current Lua reference validation"'` | 7 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "the hold rides the lua.unit_ai component"'` | 2 examples passed |
-| `cabal test synarchy-test-headless --test-options='--match "lua.unit_ai current schema and historical migration"'` | 4 examples passed |
+| `cabal test synarchy-test-headless --test-options='--match "lua.unit_ai current schema and historical migration"'` | 5 examples passed |
 | `cabal test synarchy-test-headless --test-options='--match "classifies the approach records transient"'` | 1 example passed |
 | `cabal test synarchy-test-headless --test-options='--match "lua.unit_ai payload shape"'` | 1 example passed |
 | `python3 tools/test_save_compat_audit.py --mode current` | 7 members / 28 assertions passed |
@@ -49,7 +49,7 @@ At gate activation, PSP-5 may remove the historical-only obligations below as on
 
 - Historical DTO and legacy-envelope migration examples in `Test.Headless.World.Save.Compat.Historical` and `Compat.Legacy`.
 - Manifest-driven fixture decoding, old-version defaults, and fixture registrations/consumers under `Test.Headless.World.Save.Compat.Baselines` and `Compat.TagTargets`, plus the historical corpus files and audit registration. Current-version baseline assertions were removed from these fixture-reading families; their distinguishing current expectations now live in the current owners above.
-- Lua historical accepted-version and migration cases, including tracked v1 Lua fixtures; keep current-version schema, reference, payload and reset assertions.
+- Lua historical accepted-version and migration cases, including tracked v1 Lua fixtures and `building_spawn` v1/v2 migrations; keep current-version schema, reference, payload and reset assertions.
 - Exact-fluid old-version migrations in `Test.Headless.Sim.ExactFluid.saveSpec`; keep `world-edits current persistence`.
 
 PSP-5 owns the default/gate switch and deletion. This preparation does not add a historical mode, optional suite, retirement manifest, or claim that retirement has started.

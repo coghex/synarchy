@@ -356,9 +356,13 @@ currentTagAdmissionSpec = describe "current tag admission" $ do
                         0 12 absent) (pgsEdits base)
                 , pgsPlantedFloraCursor = 100
                 }
+            arenaPageWithoutBounds = arenaPage
+                { pgsGenParams = arenaParams { wgpArenaBounds = Nothing } }
+            unboundedProblems = admissionProblems registry catalog pid arenaPageWithoutBounds
             arenaProblems = admissionProblems registry catalog pid arenaPage
         problems `shouldSatisfy` any (T.isInfixOf "not a stored non-air cell")
         problems `shouldSatisfy` any (T.isInfixOf "not held by its chunk")
+        unboundedProblems `shouldBe` []
         arenaProblems `shouldSatisfy` any (T.isInfixOf "not held by its chunk")
 
 -- * The v5 shape
