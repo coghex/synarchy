@@ -101,7 +101,10 @@ spawn-roster countdown), units (stats/modifiers/skills/inventory/sim
 state), Lua AI memory, pause state. **Not preserved by design:**
 selection, build-tool placement mode, active toolbar tool (HUD resets
 via the `onSaveLoaded` broadcast), time scale (always 1), blood decals.
-Older schema versions are rejected with "expected vN, got vM".
+Unsupported versions are rejected at their owning boundary with an
+"unsupported save version" diagnostic naming the boundary, found version,
+and supported versions. A malformed payload at an accepted version remains
+a distinct payload error.
 
 ## Gates
 
