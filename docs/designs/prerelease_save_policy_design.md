@@ -771,3 +771,95 @@ open issue found. Checked actual refusal/decoder tests, metadata and framing
 rendering, Lua prepareLoad ordering, storage progress/no-fallback tests and
 the transaction probe; the latter has no unsupported-version case.
 No later slice was evaluated. No engine, test or probe was run while drafting.
+
+## Pending PSP-2 tracker proposal
+
+Drafted 2026-11-05 under verified syn-manager reply
+`sbadzax42c9hcdh92f8ayv87c6`; awaiting separate owner approval.
+PSP-1 is linked as #2915 and remains open, so this issue may be filed now
+but implementation depends on that prerequisite landing.
+
+Title: [save-policy PSP-2] Enforce current-schema version changes without requiring migrations
+
+Labels: `enhancement`, `save-load`, `tooling` (existing).
+
+````markdown
+## Background
+
+PSP-2 of #2914, Phase 2, critical path, depends on #2915 (PSP-1). Implement after that refusal boundary lands. The owner selected an automated guard: a changed persisted shape advances every affected real on-disk version, while unsupported old versions may be refused without new migrations or historical fixtures. Refreshing a golden file must not hide a same-version break.
+
+Verified against master code ad35e6f7c on 2026-11-05:
+- `tools/enum_append_only_audit_scan.py` guards Generic/Serialize sums with at least two constructors. Its contract explicitly excludes single-constructor field drift, hand-written serializers and changes hidden behind referenced instances/synonyms. `run_update_baseline` refuses non-appends even after a component bump.
+- `enum_append_only_audit_carrier.py` combines current and historical DTO seeds and deliberately over-approximates bare type names for diagnostic attribution. It is useful evidence, not a complete per-version schema map.
+- `save_compat_audit_components.py:real_component_registry` discovers real Haskell, metadata and Lua registrations. `save_compat_audit_fingerprint.py:frozen_dto_fingerprint` starts at B1's SessionV90 and resolves DTO-named leaves; it is not a current-component guard. The separate framing fingerprint already accounts for effective Cabal extensions.
+- Historical `UnitSimStateDTOv1` still embeds live Pose, UnitActivity and Direction. Bumping only the newest unit-sim version cannot make those older accepted decoders safe after a shared shape changes.
+
+## Requirements
+
+1. Add a focused current-save schema/version guard with a small generated current schema record, not a binary corpus or growing history. Cover every current Haskell component, metadata, registered Lua module and envelope framing boundary. Record the real version authority and transitive wire-shape/serialization owners, including single-constructor records, constructor order and payload slots, nested DTOs/enums, newtypes, aliases and explicitly identified custom serializers. Missing, newly reachable, unresolved or ambiguous coverage fails with the affected boundary/path named. Explicit declarations may cover owners the source parser cannot infer; they must be inspectable and checked against real registrations, not silent exclusions.
+2. Compare candidate source and its generated record against a caller-selected base revision's source/schema record. A changed shape requires a strictly increased version for every affected carrier, including enum appends; currentSaveVersion's bridge marker is not protection. Regenerating, deleting or editing the candidate baseline cannot bless unchanged-version drift. Missing/unusable comparison evidence must fail clearly; the first baseline introduction must have a checked, non-vacuous bootstrap path. Give the guard an explicit base-ref interface so PSP-5 can wire the correct CI/local comparison base without guessing it here.
+3. Check retained accepted historical dispatches and exact-shape B1/B2 routes that depend on changed transitive types. A retained decoder must still represent its original shape; otherwise the candidate must refuse that version/route before it decodes. A latest-version bump alone cannot pass. Keep working migration/DTO source; neither authoring a migration nor adding a historical fixture is a condition for the new guard to accept a correctly versioned change with safe refusal.
+4. Add an explicit pre-release, version-aware enum audit/update path using this enforcement. Keep the current strict historical append-only mode and existing default invocations active until PSP-5. Off-wire enum changes require no invented save-component bump; a newly persisted type cannot escape coverage. Reuse parsing, discovery and fingerprint owners where sound, preserving their module boundaries and fail-closed behavior.
+5. Ignore pure comment/layout changes and unchanged wire-shape refactors without hiding actual encoding changes. Retain framing sensitivity to effective extensions and serialization code. Document the guard's limits: source inspection cannot prove arbitrary custom serializer semantics or distinguish every equal-width positional-value swap. Encoding/meaning changes beyond mechanical detection still require version advancement, explicit review evidence and a targeted distinguishing test; a current-code self-round-trip is insufficient.
+6. Prove the behavior with synthetic base/candidate trees or repositories: record field add/remove/reorder/retype; enum insert/reorder/remove/append; nested shared shapes and partial carrier bumps; aliases/newtypes; custom-codec ownership; candidate-baseline rewrite/deletion; unknown/ambiguous coverage; retained unsafe old dispatch and legacy fallback. Negative cases must fail. Corresponding complete version bumps plus safe refusal pass without new migration/fixture inputs; unchanged/comment/layout-only cases and correctly handled off-wire changes pass. Verify both initial baseline introduction and subsequent comparisons.
+
+## Acceptance
+
+Provide these new public commands (supporting owner modules may be split as needed):
+
+```bash
+python3 tools/current_save_schema_audit.py --self-test
+python3 tools/current_save_schema_audit.py --base-ref origin/master
+python3 tools/enum_append_only_audit.py --self-test
+python3 tools/enum_append_only_audit.py
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "save components"'
+python3 tools/test_save_compat_audit.py --without-reproducibility
+```
+
+Run the base-ref check before the implementation merges, against a freshly fetched master prerequisite; record that resolved base SHA and candidate SHA. Self-tests must exercise differing base/candidate sources, not merely compare the candidate to itself. The unchanged real schemas pass, synthetic violations exit nonzero with useful component/version/path diagnostics, all selected existing tests pass, and the old default enum audit remains strict. Exercise and document the exact new enum pre-release check/update commands and the guarded schema-record regeneration command; prove that neither update path bypasses the base comparison.
+
+The compatibility self-test facade includes the discovery and frozen/framing fingerprint owner tests; preserve those regressions when reusing their helpers. No engine/probe run, full headless suite or `make ci` is required for this tooling slice. Apply any relevant static/budget gates to changed files.
+
+Scope: `tools/enum_append_only_audit*.py`, its generated baseline/self-tests, reusable `save_compat_audit_{components,fingerprint}.py` helpers and tests, the new focused guard/current record, explicit ownership declarations, and retained-decoder policy comments in `Component/Types.hs`. Generated records consumed by tools/tests belong in the code PR. Human-facing contract/evidence documentation lands with `docs-push` and is linked from the PR.
+
+## Out of scope
+
+Activating pre-release defaults or CI/local gate selection (PSP-5); historical audit/test partitioning (PSP-3/4); historical corpus expansion; whole-serializer formal proof; gameplay/schema changes just to exercise the guard; migration deletion; weakening existing checks before activation.
+
+## Related
+
+- #2914: umbrella epic. Depends on #2915; PSP-5 depends on this guard.
+- #2912: separate probe opt-in dependency of policy activation, not a prerequisite to this preparatory tool.
+- #1145 and #1416: delivered enum enforcement and framing normalization; retain their strict-mode protections.
+- Supporting design: `docs/designs/prerelease_save_policy_design.md`, PSP-2, P-2, D-1/D-4/D-5.
+
+<!-- issue-origin:codex -->
+````
+
+Approval also authorizes the following exact replacement in epic #2914,
+where N is the created issue number, and the matching PSP-2 ledger link:
+
+```markdown
+- [ ] PSP-2. Enforce current-schema version changes without requiring migrations
+```
+
+becomes:
+
+```markdown
+- [ ] PSP-2. #N — Enforce current-schema version changes without requiring migrations
+```
+
+The epic implementation checkbox stays unchecked. No other tracker mutation
+is proposed. Evidence/dedup: all 68 open titles, three broad open/closed
+searches (schema guard, enum version, fingerprint save), and focused title
+searches rechecked. Read #1145/#1416 and the current #2914/#2915 bodies;
+no duplicate current-schema guard issue found. #2564 is faction retirement,
+not this guard. Reconciled the epic checklist with the document ledger.
+Verified the enum scanner/update veto, approximate carrier attribution,
+real component discovery, B1 fingerprint root, framing normalization,
+and live enum leaves in UnitSimStateDTOv1. The compatibility self-test
+facade owns discovery and fingerprint tests; its owner files are not
+standalone test runners. No later slice was evaluated; no tests, builds,
+engines or probes were run for drafting.
