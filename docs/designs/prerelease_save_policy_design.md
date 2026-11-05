@@ -679,3 +679,93 @@ persistence policy and current fresh-process probe match the epic premise
 at `ad35e6f7c`. Six unique ledger entries match the five delivery headings;
 dependencies exist and are acyclic. No child body was drafted or evaluated.
 No builds, tests, engines or probes were run for this tracker-only step.
+
+## Pending PSP-1 tracker proposal
+
+Drafted 2026-11-05 under the continuation in verified syn-manager reply
+`ge89pkamx45zn8svwv3dxxk4g6`. Awaiting separate owner approval.
+The EPIC is #2914; PSP-1 remains unchecked until approved filing and linking.
+
+Title: [save-policy PSP-1] Prove safe unsupported-version refusal at the load boundary
+
+Labels: `enhancement`, `save-load` (both existing).
+
+````markdown
+## Background
+
+PSP-1 of #2914, Phase 1, can land first; no prerequisite child. Before release, format changes may refuse older saves, but refusal must be explicit and leave the current session intact. This slice establishes that boundary before later policy/gate changes.
+
+Verified against master code ad35e6f7c on 2026-11-05:
+- `src/World/Save/Component/Types.hs:componentCodec` dispatches exact versions before decoding. `Components/Registry.hs` already tests older/future rejection, malformed payloads and genuine old DTO dispatch; reuse this coverage.
+- Metadata refusal in `Envelope.hs:decodeMetadataComponent` says "Save format incompatible"; component/Lua refusal says "unsupported schema version"; `renderEnvelopeError = tshow` exposes the framing constructor. These do not yet give the agreed consistent user-facing diagnostic.
+- `atomic save storage` covers incompatible framing with a valid `.prev` and unsupported-component progress separately. `tools/transactional_load_probe.py` checks missing/corrupt save preservation, but has no unsupported-version load case. Its existing queued-command checks concern successful publication.
+
+## Requirements
+
+1. Unsupported Haskell component, metadata, Lua module and envelope framing versions report `unsupported save version`, identify the component/module or framing boundary, and show the found version and supported versions. Preserve structured failure classification, progress, error aggregation and ordering; do not derive phases from diagnostic text.
+2. Add or strengthen focused tests for unsupported older and future versions at each boundary, including required and optional-present Haskell/Lua components. Version refusal precedes that payload's decoding and all application; deliberately malformed bytes under an unsupported version must still report version refusal. At an accepted version malformed bytes remain a distinct payload error. Optional absence keeps its existing default semantics; optional-present errors cannot default away.
+3. Preserve exact registered old-decoder dispatch and current nonempty round trips. Use distinguishing values where a wrong decoder could accept the same-width bytes with changed meaning; a current-code self-round-trip alone is insufficient evidence. Keep working migrations, accepted version sets, wire bytes and version numbers unchanged: no format bump merely for this policy slice.
+4. Prove that an incompatible authoritative generation with a verified usable `.prev` refuses without fallback or rewriting either file. Cover unsupported component/metadata/framing paths in storage tests and Lua preparation refusal at its real boundary; preserve separate corrupt-generation recovery.
+5. Extend the existing transactional-load probe with an unsupported-version case built from a current save in isolated resources. Verify a terminal pre-publication failure with useful diagnostics, unchanged prior session and queued work, paused state, no successful publication and unchanged files. Cover queue preservation with a deterministic targeted transaction test if that exact queue boundary cannot be observed reliably through TCP; do not substitute successful-load discard coverage. Preserve post-publication reconciliation-failure semantics and the existing current-version fresh-process probe.
+
+## Acceptance
+
+Run the production builds and these existing, nonempty targeted groups:
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "save components"'
+cabal test synarchy-test-headless --test-options='--match "save envelope"'
+cabal test synarchy-test-headless --test-options='--match "atomic save storage"'
+cabal test synarchy-test-headless --test-options='--match "Lua persistence components"'
+cabal test synarchy-test-headless --test-options='--match "persistence contract"'
+cabal test synarchy-test-headless --test-options='--match "Load.Status"'
+cabal test synarchy-test-headless --test-options='--match "Load.Terminalize"'
+python3 tools/run_probes.py --only transactional_load --exact
+python3 tools/run_probes.py --only persistence_contract --exact
+```
+
+Expected: every selected group executes assertions and passes; the transaction probe proves unsupported-version preservation, and the persistence probe retains its three real fresh-process load/resave cycles with nonempty current state. Record the new cases and outcomes in the PR. Run probes serially with isolated resources and owned processes, using the documented headless/non-8008 rules and terminal status waits. Run applicable changed-path audits; no full suite or `make ci` is required by this issue.
+
+Scope: component/metadata/framing diagnostic owners, `scripts/lib/save_modules.lua`, their existing headless tests, targeted load tests, and `tools/transactional_load_probe.py`. Any accompanying contract/evidence documentation lands with `docs-push` and is linked in the PR body.
+
+## Out of scope
+
+Changing accepted-version sets globally; deleting migrations/DTOs or retiring fixtures; the automated schema guard (PSP-2); audit/test partitions (PSP-3/4); gate activation and operating policy (PSP-5); broad transaction refactoring; new persistent state.
+
+## Related
+
+- #2914: umbrella epic; PSP-2 and PSP-3 depend on this slice.
+- #2912: separate migration-probe opt-in dependency of policy activation; it does not block PSP-1 and is not duplicated here.
+- #1093, #1275, #1919: delivered codec/dispatch/structured-progress foundations; retain their behavior except the diagnostic wording explicitly changed above.
+- Supporting design: `docs/designs/prerelease_save_policy_design.md`, PSP-1, D-1 and D-4.
+
+<!-- issue-origin:codex -->
+````
+
+Approval also authorizes this exact replacement in epic #2914, with `N`
+bound to the newly created issue number, and the matching PSP-1 ledger link:
+
+```markdown
+- [ ] PSP-1. Prove safe unsupported-version refusal at the load boundary
+```
+
+becomes:
+
+```markdown
+- [ ] PSP-1. #N — Prove safe unsupported-version refusal at the load boundary
+```
+
+The epic checkbox remains unchecked until implementation completes.
+No other epic line, label, decision or child is changed by this proposal.
+
+Evidence/dedup: all 67 open issue titles and three open/closed searches
+(unsupported version save, incompatible load, refusal save) rechecked.
+#2914 has this planned, unfiled child and matches the ledger. Read the
+closed #1919 and #1275; their delivered structured-progress and version-table
+work does not cover the new diagnostic/preservation matrix. No duplicate
+open issue found. Checked actual refusal/decoder tests, metadata and framing
+rendering, Lua prepareLoad ordering, storage progress/no-fallback tests and
+the transaction probe; the latter has no unsupported-version case.
+No later slice was evaluated. No engine, test or probe was run while drafting.
