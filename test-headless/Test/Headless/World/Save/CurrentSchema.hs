@@ -164,6 +164,15 @@ spec = do
             it ("library boundary layout: " <> T.unpack detail) $
                 actual `shouldBe` expected
 
+    describe "extraction fails closed" $ do
+        let failing = [ c | c ← cases, caseBase c ≡ Right Null ]
+        it "has a failing-extraction case for each classification gap" $
+            length failing `shouldSatisfy` (>= 5)
+        forM_ failing $ \c →
+            it (T.unpack (caseName c)) $ case (caseCand c, caseVerdict c) of
+                (Left ps, Fails m) → ps `shouldSatisfy` any (m `T.isInfixOf`)
+                _ → expectationFailure "expected extraction to fail with the declared reason"
+
     describe "acceptance agrees with the real decode entry points" $ do
         it "every carrier's advertised versions equal the versions its decoder accepts" $ do
             Right (_, ev) ← extractLive

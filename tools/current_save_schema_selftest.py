@@ -52,7 +52,7 @@ def mini(version=1, accepted=None, leaf_fields=(("n", "Int"),),
          route_on=True, lua_version=1, codec="aa", framing="ff"):
     acc = [version] if accepted is None else accepted
     fdetail = {"layout": framing, "advertised": [1], "currentEnvelopeVersion": 1,
-               "entryPoints": ["decodeSaveEnvelopeMetadata"],
+               "entryPoints": list(cmp.ENTRY_POINTS),
                "envelopeMagic": 1397178945, "fnv1a64Probe": "9", "headerSize": 16,
                "layoutProbeHex": "00"}
     flags = {k: route_on for k in cmp.ENTRY_KEYS}
@@ -71,7 +71,7 @@ def mini(version=1, accepted=None, leaf_fields=(("n", "Int"),),
             "metadata": carrier("metadata", 3, [1, 2, 3], "M.Meta",
                                 ["M.Meta", "Int"],
                                 detail={"advertised": [1, 2, 3],
-                                        "entryPoints": ["decodeSaveEnvelopeMetadata"]}),
+                                        "entryPoints": list(cmp.ENTRY_POINTS)}),
             "framing": carrier("framing", 1, None, "M.Frame",
                                ["M.Frame", "Int"], detail=fdetail),
             "lua:m": carrier("lua-module", lua_version, None, None, [],
@@ -133,6 +133,13 @@ class RecordValidation(unittest.TestCase):
             "entry points cleared": lambda r: (r["carriers"]["framing"]["detail"].update(entryPoints=[]), r["carriers"]["metadata"]["detail"].update(entryPoints=[])),
             "lua without shared codec": lambda r: r["carriers"]["lua:m"].update(owners=["scripts/m.lua"]),
             "malformed field object": lambda r: r["types"]["M.Leaf"]["shape"]["constructors"][0]["fields"].append("oops"),
+            "unknown entry point": lambda r: r["carriers"]["framing"]["detail"].update(entryPoints=["notARealDecoder"]),
+            "partial entry points": lambda r: r["carriers"]["metadata"]["detail"].update(entryPoints=["decodeSessionEnvelope"]),
+            "empty lua owner": lambda r: r["carriers"]["lua:m"].update(owners=["", "scripts/lib/data_codec.lua"]),
+            "duplicate lua owner": lambda r: r["carriers"]["lua:m"].update(owners=["scripts/lib/data_codec.lua", "scripts/lib/data_codec.lua"]),
+            "root is a list": lambda r: r["carriers"]["haskell:a"].update(root=[]),
+            "args not strings": lambda r: r["types"]["M.Leaf"]["shape"].update(args=[{}]),
+            "reaches not strings": lambda r: r["carriers"]["haskell:a"].update(reaches=[{}]),
             "malformed constructor": lambda r: r["types"]["M.Leaf"]["shape"]["constructors"].append(7),
             "no lua": lambda r: r["carriers"].pop("lua:m"),
             "no framing": lambda r: r["carriers"].pop("framing"),
@@ -148,6 +155,35 @@ class RecordValidation(unittest.TestCase):
         r["types"]["Weird"] = {"shape": []}
         r["types"]["Weird2"] = {"shape": {"kind": "generic"}}
         self.assertTrue(cmp.validate_record(r))
+
+    def test_validation_never_raises_on_mutated_leaves(self):
+        """Replace every leaf (and every container) of a valid record with
+        values of the wrong type, one at a time: validation must return
+        errors, never raise."""
+        base = mini()
+        paths = []
+
+        def walk(node, path):
+            paths.append(path)
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    walk(v, path + (k,))
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    walk(v, path + (i,))
+        walk(base, ())
+        wrong = (None, [], {}, "x", 7, True, [{}], -1)
+        for path in paths[1:]:
+            for val in wrong:
+                rec = copy.deepcopy(base)
+                cur = rec
+                for k in path[:-1]:
+                    cur = cur[k]
+                cur[path[-1]] = val
+                try:
+                    cmp.validate_record(rec)
+                except Exception as exc:  # noqa: BLE001
+                    self.fail(f"validate_record raised {exc!r} for {path} = {val!r}")
 
     def test_parse_rejects_garbage(self):
         for text in ("", "{", "[]", '{"format": 1}'):

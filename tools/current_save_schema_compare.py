@@ -41,6 +41,9 @@ CARRIER_KEYS = ("class", "version", "accepted", "required", "root",
 CLASSES = ("component", "metadata", "framing", "lua-module", "legacy")
 ENTRY_KEYS = ("directFullSession", "directMetadataOnly",
               "publicFullSession", "publicMetadataOnly")
+ENTRY_POINTS = ("decodeSaveEnvelopeMetadata",
+                "decodeSaveEnvelopeMetadataClassified",
+                "decodeSessionEnvelope", "decodeSessionEnvelopeClassified")
 FRAMING_KEYS = ("advertised", "currentEnvelopeVersion", "envelopeMagic",
                 "fnv1a64Probe", "headerSize", "layoutProbeHex")
 SHAPE_KEYS = ("kind", "detail", "dataType", "newtype", "constructors", "args")
@@ -79,7 +82,20 @@ def _edges(node: dict) -> list[str]:
 
 def validate_record(rec) -> list[str]:
     """Structural validation: format, complete coverage, consistent
-    versions, acceptance and ownership, required fields."""
+    versions, acceptance and ownership, required fields. Never raises:
+    a record the checks below cannot even traverse is reported as
+    malformed."""
+    try:
+        return _validate_record(rec)
+    except (TypeError, KeyError, AttributeError, ValueError, IndexError) as exc:
+        return [f"record is malformed ({type(exc).__name__}: {exc})"]
+
+
+def _is_strs(x) -> bool:
+    return isinstance(x, list) and all(isinstance(e, str) for e in x)
+
+
+def _validate_record(rec) -> list[str]:
     if not isinstance(rec, dict):
         return ["record is not an object"]
     problems: list[str] = []
@@ -140,7 +156,9 @@ def _validate_node(key, node, types) -> list[str]:
         out.append(f"type `{key}` has unknown kind {shape['kind']!r}")
     if not isinstance(shape["newtype"], bool) \
             or not isinstance(shape["constructors"], list) \
-            or not isinstance(shape["args"], list):
+            or not _is_strs(shape["args"]) \
+            or not isinstance(shape["detail"], str) \
+            or not isinstance(shape["dataType"], str):
         return out + [f"type `{key}` shape has mistyped fields"]
     for con in shape["constructors"]:
         if not (isinstance(con, dict) and isinstance(con.get("name"), str)
@@ -208,16 +226,18 @@ def _validate_carrier(cid, c, types, nodes_ok) -> list[str]:
                    f"current {c['version']}")
     if c["class"] in ("component", "metadata", "framing", "lua-module"):
         detail = c["detail"] if isinstance(c["detail"], dict) else {}
-        if detail.get("advertised") != acc:
-            out.append(f"carrier `{cid}` advertises "
-                       f"{detail.get('advertised')} but its decoder "
-                       f"accepts {acc}")
+        adv = detail.get("advertised")
+        if not (isinstance(adv, list) and all(
+                isinstance(v, int) and not isinstance(v, bool) for v in adv)) \
+                or adv != acc:
+            out.append(f"carrier `{cid}` advertises {adv} but its "
+                       f"decoder accepts {acc}")
     if c["class"] in ("metadata", "framing"):
         detail = c["detail"] if isinstance(c["detail"], dict) else {}
         eps = detail.get("entryPoints")
-        if not (isinstance(eps, list) and eps
-                and all(isinstance(e, str) and e for e in eps)):
-            out.append(f"carrier `{cid}` records no probed entry points")
+        if not (_is_strs(eps) and sorted(eps) == sorted(ENTRY_POINTS)):
+            out.append(f"carrier `{cid}` must record exactly the probed entry "
+                       f"points {', '.join(ENTRY_POINTS)}")
     if c["class"] == "framing":
         detail = c["detail"] if isinstance(c["detail"], dict) else {}
         for k in ("currentEnvelopeVersion", "envelopeMagic", "headerSize"):
@@ -231,8 +251,9 @@ def _validate_carrier(cid, c, types, nodes_ok) -> list[str]:
         if detail.get("currentEnvelopeVersion") != c["version"]:
             out.append("framing currentEnvelopeVersion disagrees with the "
                        "carrier version")
-    if not isinstance(c["reaches"], list) or not isinstance(c["owners"], list):
-        return out + [f"carrier `{cid}` reaches/owners are mistyped"]
+    if not _is_strs(c["reaches"]) or not _is_strs(c["owners"]) \
+            or not (c["root"] is None or isinstance(c["root"], str)):
+        return out + [f"carrier `{cid}` root/reaches/owners are mistyped"]
     if c["root"] is None:
         if c["class"] in ("component", "metadata", "framing"):
             out.append(f"carrier `{cid}` ({c['class']}) has no wire root")
@@ -246,11 +267,16 @@ def _validate_carrier(cid, c, types, nodes_ok) -> list[str]:
         if want is not None and sorted(c["reaches"]) != want:
             out.append(f"carrier `{cid}` reaches {len(c['reaches'])} type(s) "
                        f"but its root's transitive closure is {len(want)}")
-    if c["class"] == "lua-module" and (
-            len(c["owners"]) < 2
-            or "scripts/lib/data_codec.lua" not in c["owners"]):
-        out.append(f"carrier `{cid}` must name its owning script and the "
-                   f"shared scripts/lib/data_codec.lua")
+    if c["class"] == "lua-module":
+        owners = c["owners"]
+        own = [o for o in owners if o != "scripts/lib/data_codec.lua"]
+        if len(set(owners)) != len(owners) or not all(owners) \
+                or len(own) != 1 or not own[0].endswith(".lua") \
+                or "scripts/lib/data_codec.lua" not in owners:
+            out.append(f"carrier `{cid}` must name exactly one owning "
+                       f".lua script plus the shared "
+                       f"scripts/lib/data_codec.lua, all distinct and "
+                       f"non-empty")
     return out
 
 

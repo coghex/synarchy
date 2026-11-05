@@ -256,28 +256,49 @@ instance (Selector s, WireSchema c) ⇒ GFields (S1 s (K1 i c)) where
 
 -- Generic samples ----------------------------------------------------
 
--- | Sample values of a representation. Variant @k@ picks the @k@-th
---   sample of the first field and the @(k+1)@-th of the next (wrapping),
---   so adjacent equal-typed fields get DIFFERENT values and a swapped
---   write order is visible in the bytes.
+-- | Sample values of a representation. Variant @k@ gives field @o@ its
+--   second sample iff bit @k@ of @o@ is set, so for any two fields of one
+--   constructor some variant gives them different values (up to
+--   'variantCount' bits, 128 fields) and a swapped write order is visible
+--   in the bytes. A field type with only one sample cannot be told from
+--   its equal-typed neighbours: a stated limit.
 class GSample (f ∷ Type → Type) where
-    gsample ∷ Int → Int → [f p]
+    -- | @gsample depth variant offset@: @offset@ is the index of the
+    --   first field of this fragment within its constructor.
+    gsample ∷ Int → Int → Int → [f p]
+    -- | How many fields this fragment holds.
+    gcount ∷ Proxy f → Int
+    gcount _ = 0
 
-instance GSample V1 where gsample _ _ = []
-instance GSample U1 where gsample _ _ = [U1]
+instance GSample V1 where gsample _ _ _ = []
+instance GSample U1 where gsample _ _ _ = [U1]
 instance (GSample f, GSample g) ⇒ GSample (f :+: g) where
-    gsample d k = map L1 (gsample d k) ⧺ map R1 (gsample d k)
-instance GSample f ⇒ GSample (M1 i c f) where
-    gsample d k = map M1 (gsample d k)
+    gsample d k o = map L1 (gsample d k o) ⧺ map R1 (gsample d k o)
+instance GSample f ⇒ GSample (D1 c f) where
+    gsample d k o = map M1 (gsample d k o)
+-- A constructor restarts the field numbering.
+instance GSample f ⇒ GSample (C1 c f) where
+    gsample d k _ = map M1 (gsample d k 0)
+    gcount _ = gcount (Proxy ∷ Proxy f)
+instance GSample f ⇒ GSample (S1 c f) where
+    gsample d k o = map M1 (gsample d k o)
+    gcount _ = gcount (Proxy ∷ Proxy f)
 instance (GSample f, GSample g) ⇒ GSample (f :*: g) where
-    gsample d k = [ a :*: b | a ← take 1 (gsample d k), b ← take 1 (gsample d (k + 1)) ]
+    gsample d k o =
+        [ a :*: b
+        | a ← take 1 (gsample d k o)
+        , b ← take 1 (gsample d k (o + gcount (Proxy ∷ Proxy f))) ]
+    gcount _ = gcount (Proxy ∷ Proxy f) + gcount (Proxy ∷ Proxy g)
 instance WireSchema c ⇒ GSample (K1 i c) where
     -- Only the first two samples are ever forced, so the cost stays
     -- linear in depth however many constructors a field type has.
-    gsample d k = case take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy c)) of
+    -- Field @o@ takes its second sample exactly in the variants whose
+    -- bit @k@ is set in @o@, so any two fields differ in some variant.
+    gsample d k o = case take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy c)) of
         []      → []
         [x]     → [K1 x]
-        (x : y : _) → [K1 (if even k then x else y)]
+        (x : y : _) → [K1 (if testBit o k then y else x)]
+    gcount _ = 1
 
 -- | The first constructible value of a representation, constructors in
 --   order, fields minimal. @path@ holds the type keys being built, so a
@@ -300,6 +321,10 @@ instance WireSchema c ⇒ GMin (K1 i c) where
 sampleDepth ∷ Int
 sampleDepth = 5
 
+-- | How many field-index bits the samples distinguish.
+variantCount ∷ Int
+variantCount = 7
+
 -- The default instance -----------------------------------------------
 
 -- | Every 'Generic' type is walked by default; its 'S.Serialize'
@@ -313,10 +338,10 @@ instance {-# OVERLAPPABLE #-}
     wireNode p = (genericNode p)
         { wnKind = WKGeneric
         , wnChecks = [ check ("variant " <> tshow k) x
-                     | k ← [0, 1 ∷ Int], x ← variant k ] }
+                     | k ← [0 .. variantCount - 1], x ← variant k ] }
       where
         variant ∷ Int → [a]
-        variant k = map to (gsample sampleDepth k ∷ [Rep a ()])
+        variant k = map to (gsample sampleDepth k 0 ∷ [Rep a ()])
         check lbl x =
             let real = S.encode x
             in WireCheck
@@ -329,7 +354,7 @@ instance {-# OVERLAPPABLE #-}
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d p
         | d ≤ 0     = maybeToList (wireMinimalD [] p)
-        | otherwise = concat [ map to (gsample d k ∷ [Rep a ()]) | k ← [0, 1 ∷ Int] ]
+        | otherwise = concat [ map to (gsample d k 0 ∷ [Rep a ()]) | k ← [0 .. variantCount - 1] ]
     wireMinimalD path p
         | typeKey p `elem` path = Nothing
         | otherwise = listToMaybe

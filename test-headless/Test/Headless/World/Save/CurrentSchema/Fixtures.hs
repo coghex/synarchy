@@ -100,6 +100,16 @@ instance S.Serialize FxHandUndeclared__A where
     put (FxHandUndeclared__A a b) = S.put b >> S.put a
     get = do b ← S.get; a ← S.get; pure (FxHandUndeclared__A a b)
 
+-- | Four equal-typed fields whose hand-written serializer swaps the
+--   MIDDLE two on both write and read: it round-trips, and only a sample
+--   that gives those two fields different values exposes it.
+data FxSwapMid__A = FxSwapMid__A !Int !Int !Int !Int
+    deriving (Show, Generic)
+instance S.Serialize FxSwapMid__A where
+    put (FxSwapMid__A a b c d) = S.put a >> S.put c >> S.put b >> S.put d
+    get = do a ← S.get; c ← S.get; b ← S.get; d ← S.get
+             pure (FxSwapMid__A a b c d)
+
 -- | Seven nested single-field wrappers; the OUTER one writes a prefix
 --   byte yet round-trips. Sampling must still reach it however deep the
 --   wrapping goes.
@@ -228,6 +238,9 @@ catalogue =
         (Fails "transparent newtype")
     , Case "deeply wrapped type with a round-tripping prefix serializer fails extraction"
         (Right Null) (record' [car "deep" 1 [1] (Proxy ∷ Proxy FxD7__A)] [])
+        (Fails "unclassified encoder")
+    , Case "middle-field swapping serializer fails extraction"
+        (Right Null) (record' [car "swap" 1 [1] (Proxy ∷ Proxy FxSwapMid__A)] [])
         (Fails "unclassified encoder")
     , Case "type with no constructible sample fails extraction"
         (Right Null) (record' [car "loop" 1 [1] (Proxy ∷ Proxy FxLoop__A)] [])
