@@ -47,7 +47,8 @@ generic encoding. Every reachable type is one of:
   must round-trip. A hand-written encoder that disagrees fails extraction
   with `unclassified encoder`. Samples give any two fields of one constructor
   different values in some variant (field `i` takes its second sample in the
-  variants whose bit is set in `i`), so a serializer that swaps two equal-typed
+  variants whose bit is set in `i + 1`, so even the only field of a constructor
+  gets one), so a serializer that swaps two equal-typed
   fields on write and read is caught; a field type with only one constructible
   sample cannot be told from an equal-typed neighbour. This is evidence on
   samples, not a proof. A
