@@ -49,6 +49,7 @@ data WorldContent = WorldContent
       -- ^ the owned edits, per chunk, in apply order
     , wcCropPlots      ∷ ![((Int, Int), CropPlot)]
     , wcHarvests       ∷ ![(FloraInstanceId, Float)]
+    , wcFloraGrowthAnchors ∷ !(HM.HashMap FloraInstanceId Int)
     , wcCursor         ∷ !Word64
     , wcTileTags       ∷ ![((Int, Int, Int), Set.Set GameplayTag)]
     , wcOccurrenceTags ∷ ![(FloraInstanceId, (Int, Int), Set.Set GameplayTag)]
@@ -84,6 +85,8 @@ buildWorldContent env terrain fluids flora =
         { wcEdits = groupEditsByChunk (tbEdits tb ⧺ fbEdits fb ⧺ flbEdits lb)
         , wcCropPlots = [ (bpTile p, bpPlot p) | p ← flbPlots lb ]
         , wcHarvests = flbHarvests lb
+        , wcFloraGrowthAnchors = HM.fromList
+            [ (boInstance o, wbeAbsDay env) | o ← flbOccurrences lb ]
         , wcCursor = flbCursor lb
         , wcTileTags = tileTags
         , wcOccurrenceTags = occTags
@@ -125,3 +128,4 @@ editTile e = case e of
     WePlaceFloraWithId gx gy _ _ _ _ → (gx, gy)
     WePlaceFloraRef gx gy _ _ _ _   → (gx, gy)
     WeSetFloraState gx gy _ _ _ _ _ _ _ → (gx, gy)
+    WeRemoveFlora gx gy _               → (gx, gy)

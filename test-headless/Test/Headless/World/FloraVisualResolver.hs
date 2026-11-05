@@ -8,6 +8,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Flora.Condition
+    (ConditionRetention(..), FloraConditionRecordOf(..), GrowthCondition(..),
+     RetentionSuccessor(..))
 import World.Flora.Types
 import World.Flora.Visual
 import World.Flora.Growth
@@ -169,6 +172,46 @@ spec = do
             (patternFor Nothing (Just CycleFlowering) Nothing)
         ftrTexture (resolveFloraVisual (seasonal { fsCycleOverrides = HM.empty }) dead)
             `shouldBe` TextureHandle 3
+
+    it "keeps successor markers out of visual requests: reseeded is alive and absent is suppressed" $ do
+        let record condition successor = FloraConditionRecord
+                { fcrSpecies = FloraId 1
+                , fcrTile = (0, 0)
+                , fcrCondition = condition
+                , fcrCause = CauseNatural
+                , fcrBeganDay = 0
+                , fcrContext = ContextWild
+                , fcrPhase = Just PhaseSprout
+                , fcrStage = Just CycleDormant
+                , fcrRetention = RetentionTransient 60 successor
+                , fcrReseedMarker = Nothing
+                }
+            aliveVariant = wildcardVariantSelector
+                { fvsCondition = Just ConditionAlive }
+            deadVariant = wildcardVariantSelector
+                { fvsCondition = Just ConditionDead }
+            sp = seasonal { fsTextureVariants = HM.fromList
+                [(aliveVariant, TextureHandle 80), (deadVariant, TextureHandle 81)] }
+            catalog' = catalog sp
+            reseeded = record ConditionReseeded RetainReseed
+            reseededSelector = snd $ floraVisualSelectorFor sp 360 61
+                (Just (GrowthCondition reseeded 0)) inst
+            reseededStore = HM.singleton (fiInstanceId inst) reseeded
+            absent = record ConditionAbsent RetainAbsent
+            absentStore = HM.singleton (fiInstanceId inst) absent
+
+        -- The internal successor condition is consumed by growth; the
+        -- renderer sees only its resulting alive/dead visual condition.
+        visualCondition reseededSelector `shouldBe` ConditionAlive
+        resolveFloraTexture catalog' 360 61 reseededStore inst
+            `shouldBe` TextureHandle 80
+
+        -- An absent identity has no visual request at all, including via
+        -- the higher-level occurrence appearance adapter.
+        resolveFloraTexture catalog' 360 61 absentStore inst
+            `shouldBe` TextureHandle 0
+        occurrenceAppearance catalog' 360 61 absentStore HM.empty inst
+            `shouldBe` Nothing
 
     it "keeps phase-order semantics even when phase ages are not monotonic" $ do
         let sp = seasonal { fsLifecycle = Evergreen, fsAnnualCycle = []

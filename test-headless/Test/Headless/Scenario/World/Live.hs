@@ -182,6 +182,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
         length os `shouldBe` 2
         let oakI = sole [ o | o ← os, fiSpecies o ≡ oakId ]
         (fiOffU oakI, fiVariant oakI, fiHealth oakI, fiZ oakI) `shouldBe` (-0.25, 2, 0.5, 3)
+        growthAnchors ← readIORef (wsFloraGrowthAnchorsRef ws)
+        HM.lookup (fiInstanceId oakI) growthAnchors `shouldBe` Just 0
         plots ← readIORef (wsCropPlotsRef ws)
         map fst (HM.toList (cpsPlots plots)) `shouldBe` [(9, 9)]
         -- regrowth timer, planted cursor, tags
@@ -225,6 +227,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
         os ← liveOccurrences ws
         map fiSpecies os `shouldBe` [FloraId 2]
         map fiChopDesignated os `shouldBe` [False]
+        anchors ← readIORef (wsFloraGrowthAnchorsRef ws)
+        HM.toList anchors `shouldBe` [(fiInstanceId (sole os), 0)]
         plots ← readIORef (wsCropPlotsRef ws)
         HM.null (cpsPlots plots) `shouldBe` True
         readIORef (wsFloraHarvestsRef ws) ≫= (`shouldBe` HM.empty)
@@ -373,12 +377,14 @@ spec = describe "on a live arena page (through the world thread)" $ do
         edits ← readIORef (wsEditsRef ws)
         plots ← readIORef (wsCropPlotsRef ws)
         harvests ← readIORef (wsFloraHarvestsRef ws)
+        growthAnchors ← readIORef (wsFloraGrowthAnchorsRef ws)
         tags ← readIORef (wsPageTagsRef ws)
         cursor ← readIORef (wsPlantedFloraCursorRef ws)
         (namedEdits, namedCrops, _, _) ← either (const (error "unnamed species")) pure
             (nameFloraReferences catalog pid edits (cpsPlots plots) HM.empty HM.empty)
         let page = (blankPageSnapshot pid params)
                 { pgsEdits = namedEdits, pgsCropPlots = namedCrops, pgsFloraHarvests = harvests
+                , pgsFloraGrowthAnchors = growthAnchors
                 , pgsPlantedFloraCursor = cursor, pgsPageTags = capturePageTags tags plots
                 , pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid) }
             snap = SessionSnapshot
@@ -408,6 +414,7 @@ spec = describe "on a live arena page (through the world thread)" $ do
         cursor' ← readIORef (wsPlantedFloraCursorRef sws)
         cursor' `shouldBe` cursor
         readIORef (wsFloraHarvestsRef sws) ≫= (`shouldBe` harvests)
+        readIORef (wsFloraGrowthAnchorsRef sws) ≫= (`shouldBe` growthAnchors)
         -- ...and a scenario capture of it is the live page's, including the
         -- content of the chunk that was never resident
         stagedCapture ← captureWorldContent Set.empty ⊚ liveSnapshot env sws b 0

@@ -198,6 +198,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsUnitSimStates = pgsUnitSimStates page
     , wpsFloraHarvests = pgsFloraHarvests page
     , wpsFloraConditions = pgsFloraConditions page
+    , wpsFloraGrowthAnchors = pgsFloraGrowthAnchors page
     , wpsChopDesignations = pgsChopDesignations page
     , wpsPendingChopMigration = pgsPendingChopMigration page
     , wpsPendingFloraHarvests = pgsPendingFloraHarvests page

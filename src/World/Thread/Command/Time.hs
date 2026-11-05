@@ -12,6 +12,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Pause (setPauseResumeScale)
 import World.Types
+import World.Thread.Command.Flora.Condition (reconcileFloraDays)
 
 handleWorldSetTimeCommand ∷ WorldSimCapability → LoggerState → WorldPageId → Int → Int → IO ()
 handleWorldSetTimeCommand wsc logger pageId hour minute = do
@@ -76,6 +77,9 @@ handleWorldSetDateCommand wsc logger pageId year month day = do
                     (setDateClampWarning pageId rawDate newDate)
             oldDate ← atomicModifyIORef' (wsDateRef worldState) $ \old →
                 (newDate, old)
+            let oldDay = worldAbsoluteDay calendar oldDate
+                newDay = worldAbsoluteDay calendar newDate
+            void $ reconcileFloraDays wsc pageId worldState oldDay newDay
             -- Flora textures derive from the date (#332: annual stage +
             -- derived age), so a date poke must invalidate cached quads
             -- the same way the midnight rollover in tickWorldTime does —

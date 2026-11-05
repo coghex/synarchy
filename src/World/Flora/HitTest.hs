@@ -72,7 +72,7 @@ import World.Chunk.Types (LoadedChunk(..))
 import World.Flora.Condition (FloraConditions)
 import World.Flora.Growth
     (floraDayOfYear, floraGrowth, floraHarvestAdmits
-    , instanceGrowthCondition)
+    , instanceGrowthCondition, floraOccurrencePresent)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.Identity (FloraInstanceId)
 import World.Flora.Types
@@ -282,10 +282,14 @@ eligible view (SelectChoppable tag) inst = fromMaybe False $ do
     let doy = floraDayOfYear (fhvDaysPerYear view) (fhvAbsDay view)
         g   = floraGrowth (instanceGrowthCondition (fhvConditions view) inst)
                   sp (fhvAbsDay view) inst
-    pure $ floraHarvestAdmits sp (Just tag) doy g
+    pure $ floraOccurrencePresent
+         (instanceGrowthCondition (fhvConditions view) inst)
+         ∧ floraHarvestAdmits sp (Just tag) doy g
          ∧ HM.lookupDefault 0 (fiInstanceId inst) (fhvHarvests view) ≤ 0
 eligible view SelectDesignated inst =
-    HM.member (fiInstanceId inst) (fhvDesignated view)
+    floraOccurrencePresent
+        (instanceGrowthCondition (fhvConditions view) inst)
+      ∧ HM.member (fiInstanceId inst) (fhvDesignated view)
 
 -- | The topmost eligible tree under a pointer, in WINDOW pixels.
 --

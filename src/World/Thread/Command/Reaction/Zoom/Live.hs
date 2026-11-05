@@ -111,6 +111,7 @@ zoomVisibleEditTile e = case e of
     WePlaceFloraWithId{}           → Nothing
     WePlaceFloraRef{}              → Nothing
     WeSetFloraState{}              → Nothing
+    WeRemoveFlora{}                → Nothing
 
 -- | What the LIVE chunk holds at each of the given local cells, as zoom
 --   tile overrides.

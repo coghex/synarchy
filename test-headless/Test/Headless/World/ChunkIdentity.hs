@@ -150,6 +150,7 @@ editCoords edit = case edit of
     WePlaceFloraWithId gx gy _ _ _ _ → (gx, gy)
     WePlaceFloraRef gx gy _ _ _ _ → (gx, gy)
     WeSetFloraState gx gy _ _ _ _ _ _ _ → (gx, gy)
+    WeRemoveFlora gx gy _              → (gx, gy)
     WeSetFluidSnapshot gx gy _ _ → (gx, gy)
     WeClearFluidSnapshot gx gy   → (gx, gy)
 

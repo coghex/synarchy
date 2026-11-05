@@ -87,7 +87,8 @@
           "capacityWh": 5000.0,
           "storedWh": 1234.5
         }
-      ]
+      ],
+      "floraConditions": []
     },
     {
       "pageId": "page2",
@@ -107,7 +108,8 @@
       "units": [],
       "unitSimStates": [],
       "craftBills": [],
-      "powerNodes": []
+      "powerNodes": [],
+      "floraConditions": []
     }
   ],
   "luaComponentCount": 2,

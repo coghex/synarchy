@@ -129,6 +129,7 @@ fixture.
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import io
 import json
@@ -479,6 +480,11 @@ def declared_complete_session_fixtures() -> list[dict]:
                           f"'{fixture.get('id')}' has no "
                           f"expectedCanonicalSummary")
             summary = json.loads((REPO / summary_path).read_text(encoding="utf-8"))
+            reconciliation_delta = fixture.get(
+                "expectedPostLoadReconciliationDelta", {})
+            if not isinstance(reconciliation_delta, dict):
+                sys.exit(f"FAIL: fixture '{fixture.get('id')}' has a non-object "
+                         "expectedPostLoadReconciliationDelta")
             out.append({
                 "baseline_id": baseline["id"],
                 "fixture_id": fixture["id"],
@@ -487,6 +493,12 @@ def declared_complete_session_fixtures() -> list[dict]:
                 # Round-6 review: the FULL declared canonical summary,
                 # for dump_and_compare -- not just activePage.
                 "expected_summary": summary,
+                # A fixture may declare exact post-load reconciliation
+                # values for paths whose live state is legitimately
+                # materialized while its chunks are admitted. The saved
+                # canonical summary remains codec-derived; this overlay
+                # changes only the state expected from the live load.
+                "post_load_reconciliation_delta": reconciliation_delta,
                 # Round-4 review: aggregate page/pause/time-scale checks
                 # alone never prove a fixture's ACTUAL persistent state
                 # (in particular a migrated Lua module's real, unwrapped
@@ -687,8 +699,46 @@ def _first_diff(actual, expected, path: str = "") -> str:
     return ""
 
 
+def _expected_post_load_summary(expected_summary: dict,
+                                reconciliation_delta: dict) -> tuple[dict, str]:
+    """Apply fixture-declared live reconciliation values to a copy of its
+    codec-derived summary. Every path must already exist: an undeclared or
+    unrelated live change therefore remains a mismatch.
+
+    Paths use JSON Pointer syntax. Each value is the exact value expected
+    after load-time reconciliation, not an instruction to ignore a field.
+    """
+    if not isinstance(reconciliation_delta, dict):
+        return {}, "expectedPostLoadReconciliationDelta must be an object"
+    adjusted = copy.deepcopy(expected_summary)
+    for pointer, value in reconciliation_delta.items():
+        if not isinstance(pointer, str) or not pointer.startswith("/"):
+            return {}, f"invalid post-load reconciliation JSON Pointer: {pointer!r}"
+        parts = [part.replace("~1", "/").replace("~0", "~")
+                 for part in pointer[1:].split("/")]
+        parent = adjusted
+        for part in parts[:-1]:
+            if isinstance(parent, dict) and part in parent:
+                parent = parent[part]
+            elif isinstance(parent, list) and part.isdecimal() \
+                    and int(part) < len(parent):
+                parent = parent[int(part)]
+            else:
+                return {}, f"post-load reconciliation path does not exist: {pointer}"
+        leaf = parts[-1]
+        if isinstance(parent, dict) and leaf in parent:
+            parent[leaf] = value
+        elif isinstance(parent, list) and leaf.isdecimal() \
+                and int(leaf) < len(parent):
+            parent[int(leaf)] = value
+        else:
+            return {}, f"post-load reconciliation path does not exist: {pointer}"
+    return adjusted, ""
+
+
 def dump_and_compare(chk: Checks, tmp_dir: str, file_path: str,
-                      expected_summary: dict, when: str) -> None:
+                      expected_summary: dict, when: str,
+                      reconciliation_delta: dict | None = None) -> None:
     """Derive `file_path`'s REAL canonical summary via the SAME Haskell
     decode-and-dump logic tools/save_compat_audit.py's --generate-session
     uses (World.Save.Envelope.decodeSessionEnvelope, reached since #2273
@@ -706,8 +756,11 @@ def dump_and_compare(chk: Checks, tmp_dir: str, file_path: str,
         chk.ok(False, f"{when}: dump_canonical_summary failed: {tail}")
         return
     dumped = json.loads(Path(out_path).read_text(encoding="utf-8"))
-    diff = _first_diff(_canonicalize_for_compare(dumped),
-                        _canonicalize_for_compare(expected_summary))
+    adjusted_expected, delta_error = _expected_post_load_summary(
+        expected_summary, reconciliation_delta or {})
+    diff = delta_error or _first_diff(
+        _canonicalize_for_compare(dumped),
+        _canonicalize_for_compare(adjusted_expected))
     chk.ok(diff == "",
            f"{when}: real dumped Haskell state matches the fixture's "
            f"declared canonical summary"
@@ -972,7 +1025,8 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                    "a copy of the input fixture's bytes")
             dump_and_compare(chk, tmpdir, resaved_path,
                               fixture["expected_summary"],
-                              "after the initial migration-load")
+                              "after the initial migration-load",
+                              fixture["post_load_reconciliation_delta"])
 
         quit_engine(port, procA)
         procA = None
@@ -1035,7 +1089,8 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         if os.path.isfile(resaved_path_b):
             dump_and_compare(chk, tmpdir, resaved_path_b,
                               fixture["expected_summary"],
-                              "after the resave/restart/reload round trip")
+                              "after the resave/restart/reload round trip",
+                              fixture["post_load_reconciliation_delta"])
 
         # Unpause. Historically this was ONLY to confirm the default
         # time scale; since #2055 it is also the one moment this probe
@@ -1211,6 +1266,26 @@ def self_test() -> int:
           f"LUA_UPDATE_ERROR_MARKER ({LUA_UPDATE_ERROR_MARKER!r}) is still "
           f"assembled from wording that exists in the engine sources"
           + ("" if not marker_problems else ": " + "; ".join(marker_problems)))
+
+    print("\n=== fixture-declared post-load reconciliation delta ===")
+    expected = {"pages": [{"floraConditions": [], "units": []}]}
+    actual = {"pages": [{"floraConditions": ["natural corpse"],
+                         "units": []}]}
+    exact_expected, delta_error = _expected_post_load_summary(expected, {})
+    check(not delta_error and _first_diff(actual, exact_expected) != "",
+          "an undeclared post-load condition still fails exact comparison")
+    reconciled_expected, delta_error = _expected_post_load_summary(
+        expected, {"/pages/0/floraConditions": ["natural corpse"]})
+    check(not delta_error and _first_diff(actual, reconciled_expected) == "",
+          "a fixture-declared exact reconciliation value is accepted")
+    unexpected = copy.deepcopy(actual)
+    unexpected["pages"][0]["units"].append("unrelated state")
+    check(not delta_error and _first_diff(unexpected, reconciled_expected) != "",
+          "a declared delta does not excuse unrelated state changes")
+    _, missing_path_error = _expected_post_load_summary(
+        expected, {"/pages/0/notAField": []})
+    check(bool(missing_path_error),
+          "a reconciliation delta cannot introduce an undeclared summary path")
 
     print("\n=== the load-prerequisite stop (#1486) ===")
 

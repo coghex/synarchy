@@ -51,11 +51,21 @@ import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
     ( SaveRequestMeta(..), snapshotSaveMetadata )
 import World.Save.Types
-    ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..) )
+    ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
+    , resolveFloraReferences )
 import World.Page.Types (WorldPageId(..))
 import Structure.Palette (emptyTexPalette, TexPalette(..))
+import Engine.Asset.Handle (TextureHandle(..))
 import Item.Ground (emptyGroundItems)
 import World.Flora.Harvest (emptyFloraHarvests)
+import World.Flora.Condition
+    (FloraConditionRecordOf(..), ConditionRetention(..), RetentionSuccessor(..))
+import World.Flora.Types
+    (FloraCondition(..), FloraDeathCause(..), FloraContext(..), LifePhaseTag(..)
+    , FloraId(..), newFloraSpecies)
+import World.Flora.Identity (generatedFloraInstanceId)
+import World.Flora.Reference (FloraRef(..))
+import World.Flora.Types (emptyFloraCatalog, insertSpecies)
 import World.Edit.Types (WorldEdit(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Construct.Attempt (firstConstructAttemptId)
@@ -83,6 +93,68 @@ spec = do
                 Right (m, snap, _luaComponents, _isMigrated) → do
                     m    `shouldBe` meta
                     snap `shouldBe` fullSnapshot
+
+        it "round-trips reseeded and absent flora through decode and \
+           \load staging" $ do
+            let absentId = generatedFloraInstanceId
+                    "page1" 17 18 "probe_oak" 1
+                reseededId = generatedFloraInstanceId
+                    "page1" 19 20 "probe_oak" 1
+                absentRecord = FloraConditionRecord
+                    { fcrSpecies = FloraByName "probe_oak"
+                    , fcrTile = (17, 18), fcrCondition = ConditionAbsent
+                    , fcrCause = CauseFire, fcrBeganDay = 42
+                    , fcrContext = ContextWild
+                    , fcrPhase = Just PhaseMatured, fcrStage = Nothing
+                    , fcrRetention = RetentionTransient 42 RetainAbsent
+                    , fcrReseedMarker = Nothing }
+                reseededRecord = absentRecord
+                    { fcrTile = (19, 20), fcrCondition = ConditionReseeded
+                    , fcrCause = CauseDisease
+                    , fcrRetention = RetentionTransient 60 RetainReseed }
+                absentSnapshot = fullSnapshot
+                    { snapPages = HM.adjust
+                        (\page → page
+                            { pgsFloraConditions = HM.insert
+                                reseededId reseededRecord $ HM.insert absentId
+                                absentRecord (pgsFloraConditions page)
+                            , pgsFloraGrowthAnchors = HM.insert reseededId 20
+                                (pgsFloraGrowthAnchors page) })
+                        page1 (snapPages fullSnapshot) }
+                meta = snapshotSaveMetadata
+                    (SaveRequestMeta "absent" "ts" False) absentSnapshot
+                bytes = encodeSessionSnapshot meta absentSnapshot []
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Left err → expectationFailure (T.unpack err)
+                Right (_, staged, _, _) → do
+                    case HM.lookup page1 (snapPages staged) of
+                        Nothing → expectationFailure "decoded page1 missing"
+                        Just page → do
+                            let conditions = pgsFloraConditions page
+                                catalog = insertSpecies (FloraId 1)
+                                    (newFloraSpecies "probe_oak"
+                                        (TextureHandle 99)) $
+                                    insertSpecies (FloraId 2)
+                                        (newFloraSpecies "wheat"
+                                            (TextureHandle 98))
+                                        emptyFloraCatalog
+                            pgsFloraGrowthAnchors page
+                                `shouldBe` HM.singleton reseededId 20
+                            map fcrCondition (HM.elems conditions)
+                                `shouldContain` [ConditionReseeded]
+                            map fcrCondition (HM.elems conditions)
+                                `shouldContain` [ConditionAbsent]
+                            case resolveFloraReferences catalog page1
+                                    (pgsEdits page) (pgsCropPlots page)
+                                    (pgsPlantDesignations page) conditions of
+                                Left errs → expectationFailure (show errs)
+                                Right (_, _, _, stagedConditions) → do
+                                    fmap fcrCondition
+                                        (HM.lookup absentId stagedConditions)
+                                        `shouldBe` Just ConditionAbsent
+                                    fmap fcrCondition
+                                        (HM.lookup reseededId stagedConditions)
+                                        `shouldBe` Just ConditionReseeded
 
         it "the registry's ids ARE the reader's known component set (no \
            \registered component is unknown to the reader, and vice versa)" $
@@ -768,7 +840,7 @@ emptyPageActivity ∷ WorldPageId → PageActivityDTO
 emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty emptyFloraHarvests HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
-    firstConstructAttemptId HM.empty
+    firstConstructAttemptId HM.empty HM.empty
 
 -- | #1667: one well-formed bill, so a floor test can pair an invalid
 --   allocator with a live id and see BOTH findings reported.

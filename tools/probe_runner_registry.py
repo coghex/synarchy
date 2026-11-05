@@ -125,8 +125,9 @@ PROBES = [
      "co-tenants killed through the Lua verb and the world thread with its "
      "siblings alive and harvestable, a dead tree still fellable, a row crop "
      "and a groundcover plot killed, the fallback trace naming its winner for "
-     "generic-dead and base-only art, named refusals, clear, and every "
-     "condition surviving a save and load (#2555)"),
+     "generic-dead and base-only art, named refusals, clear, reseed/absence/"
+     "persistent/row/plot expiry, deliberate replanting, and fresh-process "
+     "save/load of every durable outcome (#2555, #2557)"),
     ("flora_growth", "flora_growth_probe.py",
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",

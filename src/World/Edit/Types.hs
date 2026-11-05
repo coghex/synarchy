@@ -208,6 +208,11 @@ data WorldEdit
                                            --   the END; carries no species, so unlike the
                                            --   planting edits it needs no catalog translation
                                            --   at the save boundary.
+    | WeRemoveFlora !Int !Int !FloraInstanceId
+                                           -- ^ EFM-10: remove exactly the planted occurrence
+                                           --   at this canonical tile. Identity is part of the
+                                           --   edit so replay cannot remove a same-tile
+                                           --   replacement or co-tenant.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.
@@ -249,6 +254,7 @@ shiftWorldEdit dgx dgy edit = case edit of
         WePlaceFloraRef (gx + dgx) (gy + dgy) ref d w i
     WeSetFloraState gx gy i z u v var h g →
         WeSetFloraState (gx + dgx) (gy + dgy) i z u v var h g
+    WeRemoveFlora gx gy i → WeRemoveFlora (gx + dgx) (gy + dgy) i
     WeSetFluidSnapshot gx gy ft z →
         WeSetFluidSnapshot (gx + dgx) (gy + dgy) ft z
     WeClearFluidSnapshot gx gy    → WeClearFluidSnapshot (gx + dgx) (gy + dgy)

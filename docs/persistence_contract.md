@@ -430,18 +430,22 @@ dropping the in-progress stamp.
   immunity key would make removing one infection definition reject every
   save in which any surviving unit still holds un-decayed immunity to
   it, while the wound case needs a unit that is infected right now.
-- A saved **flora condition record** (#2549, `world-activity` v7; carried unchanged by v8) names
+- A saved **flora condition record** (#2549, first carried by
+  `world-activity` v7 and unchanged in v8) names
   its species by authored name, so a record for a species the loading
   build lacks fails the load exactly like any other flora reference
   (`missingFloraReferences`) — including a record for a wild occurrence
   whose chunk is not resident, which is why the record carries the name
-  at all. A record whose occurrence is merely absent (its planting is not
-  in the page's log, or its chunk is not resident) is the tolerated
-  dangling case, not a failure; a record that contradicts its own page's
-  planting, names a tile outside the page's canonical frame, or is
+  at all. A record whose occurrence cannot currently be resolved (its
+  planting is not in the page's log, or its chunk is not resident) is the
+  tolerated dangling case, not a failure; a record that contradicts its
+  own page's planting, names a tile outside the page's canonical frame, or is
   malformed (reserved key, a tag outside its vocabulary, an expiry before
   its begin day, a successor that contradicts its render context) is a
   hard error naming the page and key.
+  The appended occurrence markers `reseeded` and `absent` are valid only
+  with their matching wild transient successor; cultivated expiry removes
+  its row or plot instead of persisting a successor marker.
 - A groundcover plot's **embedded condition** (#2552, `world-activity` v8)
   rides inside the plot value, so its species is converted by the same
   `traverseCropPlotSpecies` step as the plot's own and a condition naming a
@@ -453,6 +457,17 @@ dropping the in-progress stamp.
   in the payload key. v6 and v7 keep the frozen three-field crop shape and
   every earlier retained layout its original legacy species form; every
   older plot migrates with no condition.
+- Flora retention (#2557) is page-calendar state. Death records snapshot
+  their selected policy and absolute whole-day expiry; transient windows,
+  including the legacy 60-day default, count calendar days independently
+  of plant health. Stored outcomes are not retimed by content changes.
+  Wild reseeds retain an age anchor, wild absence retains a tombstone, row
+  removal replays through an identity-specific `world-edits` entry, and an
+  expired groundcover plot is deleted. The removal constructor is appended
+  in `world-edits` v7 with frozen v6 migration; the condition record's
+  field layout and `world-activity` version do not change. Compact a marker
+  only when its removal preserves current and future presence, age,
+  phase/stage, generation, and death boundaries.
 - Producing placeholder textures and changing renderer fallback
   behavior are tracked separately (out of scope here); this contract
   only defines their effect on load *validity*, which is: none, for

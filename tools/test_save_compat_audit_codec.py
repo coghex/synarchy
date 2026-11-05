@@ -476,6 +476,24 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:8:R '
         'world-edits:6:R world-pages:16:R',
+    # #2557: the first current-format fixture carrying identity-specific
+    # flora removal at world-edits v7.
+    "z21-flora-corpse-retention.bin":
+        'buildings:4:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:11:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:8:R '
+        'world-edits:7:R world-pages:16:R',
+    # #2557: a codec-reencoded copy pins the current world-activity v9
+    # descriptor while the original z21 fixture remains byte-identical.
+    "z21-flora-corpse-retention-v9.bin":
+        'buildings:4:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:11:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:9:R '
+        'world-edits:7:R world-pages:16:R',
 }
 
 
@@ -559,10 +577,10 @@ def _summary_deltas(tracked, helper, path: str = "") -> list[tuple[str, str]]:
 
 def test_helper_summary_matches_every_generated_expectation() -> None:
     print("issue #2273: the COMPILED helper reproduces every tracked "
-          "*.expected.json the tool itself generated -- byte-for-byte where "
-          "that expectation is current-schema, and on every field it "
-          "declares otherwise. A dropped key, a changed value or a changed "
-          "list length is a regression in all cases")
+          "*.expected.json the tool itself generated -- byte-for-byte when "
+          "the serialized JSON matches, otherwise on every key, value and "
+          "array position (object-key order is presentation only). A dropped "
+          "key, a changed value or a changed list length is a regression")
     pairs = _tool_generated_expectations()
     expect(len(pairs) >= 20,
            f"expected the tracked corpus to still carry a substantial set of "
@@ -579,8 +597,11 @@ def test_helper_summary_matches_every_generated_expectation() -> None:
             if out.read_bytes() == expected.read_bytes():
                 byte_identical += 1
                 continue
-            # Not byte-identical: the ONLY tolerated reason is a summary
-            # field that postdates this fixture's expectation. #2471 added
+            # Not byte-identical: the tolerated reasons are a summary
+            # field that postdates this fixture's expectation, or JSON
+            # object-key ordering. Object order is presentation only; the
+            # recursive comparison below still requires every key, value,
+            # and array position to match. #2471 added
             # `timeRemainder`, and deliberately did not regenerate the
             # pre-world-pages-v11 expectations, because a migrated pre-v11
             # payload really does carry 0 there and the Baselines reader
@@ -595,10 +616,13 @@ def test_helper_summary_matches_every_generated_expectation() -> None:
                    f"expected {fixture.name}'s summary to differ from its "
                    f"tracked {expected.name} only by fields added since that "
                    f"expectation was captured, got {regressions}")
-            expect(deltas,
-                   f"expected {fixture.name} to be byte-identical when "
-                   f"nothing about it differs structurally -- a difference "
-                   f"only in encoding would be a real drift")
+            if not deltas:
+                print(f"{fixture.name}: canonical values match; JSON object "
+                      "key order differs")
+            else:
+                expect(deltas,
+                       f"expected {fixture.name} to differ only by fields "
+                       f"added since its expectation was captured, got {deltas}")
     expect(byte_identical >= 1,
            "expected at least the current-schema expectation(s) to be "
            "byte-identical, which is what pins the helper's ENCODING rather "

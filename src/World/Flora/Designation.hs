@@ -320,6 +320,8 @@ forgetFloraInstances _ [] = pure ()
 forgetFloraInstances ws iids = do
     atomicModifyIORef' (wsFloraHarvestsRef ws) $ \m →
         (foldl' (flip HM.delete) m iids, ())
+    atomicModifyIORef' (wsFloraGrowthAnchorsRef ws) $ \m →
+        (foldl' (flip HM.delete) m iids, ())
     -- #2705: the plant's general gameplay tags are identity-keyed state
     -- too, and leave at exactly this boundary — never on eviction.
     atomicModifyIORef' (wsPageTagsRef ws) $ \pt → (forgetOccurrences iids pt, ())

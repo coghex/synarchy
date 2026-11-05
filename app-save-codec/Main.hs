@@ -344,6 +344,10 @@ scenarioFloraLines page =
       | ((x, y), cp) ← L.sortOn fst (HM.toList (pgsCropPlots page)) ]
     ⧺ [ T.unwords [ "harvest", tshowI (fromIntegral (floraInstanceIdToLua i)), T.pack (show secs) ]
       | (i, secs) ← L.sortOn (floraInstanceIdToLua ∘ fst) (HM.toList (pgsFloraHarvests page)) ]
+    ⧺ [ T.unwords [ "remove", tshowI x, tshowI y
+                  , tshowI (fromIntegral (floraInstanceIdToLua i)) ]
+      | (x, y, i) ← L.sortOn (floraInstanceIdToLua ∘ third)
+          [ (x, y, i) | es ← HM.elems (pgsEdits page), WeRemoveFlora x y i ← es ] ]
     ⧺ [ T.unwords ["cursor", tshowI (fromIntegral (pgsPlantedFloraCursor page))] ]
   where
     tshowI ∷ Int → T.Text
@@ -351,6 +355,21 @@ scenarioFloraLines page =
     refName ref = case ref of
         FloraByName n     → n
         FloraByLegacyId k → "legacy:" <> T.pack (show k)
+    third (_, _, value) = value
+
+floraConditionLines ∷ PageSnapshot → [T.Text]
+floraConditionLines page =
+    [ "occurrence " <> tshowI (fromIntegral (floraInstanceIdToLua iid))
+        <> " " <> T.pack (show record)
+    | (iid, record) ← L.sortOn (floraInstanceIdToLua ∘ fst)
+        (HM.toList (pgsFloraConditions page)) ]
+    ⧺ [ "plot " <> tshowI x <> " " <> tshowI y <> " "
+        <> T.pack (show record)
+      | ((x, y), plot) ← L.sortOn fst (HM.toList (pgsCropPlots page))
+      , Just record ← [cpCondition plot] ]
+  where
+    tshowI ∷ Int → T.Text
+    tshowI = T.pack ∘ show
 
 -- | One remembered PORTABLE container (#2512). Both observations are
 --   independently optional and are emitted as such — a @null@ weight or
@@ -511,6 +530,7 @@ dumpPage (WorldPageId pid, page) = Aeson.object
       -- canonical lines. Absent before world-edits v6, which the
       -- Baselines reader reads as "this fixture pins nothing here".
     , "scenarioFlora" .= scenarioFloraLines page
+    , "floraConditions" .= floraConditionLines page
     , "gameplayTags" .= Aeson.object
         [ "units" .= dumpTagged unUnitId (usnTags (pgsUnits page))
         , "buildings" .= dumpTagged unBuildingId (bsnTags (pgsBuildings page))

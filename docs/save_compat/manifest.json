@@ -992,7 +992,12 @@
           "sha256": "1e7ff276a9b93b8c8e103465b9d54ae0fa63affba5c27034105666bc38559773",
           "sizeBytes": 908937,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Vashenkoro' named in the generated language seeded 12345678901234567890), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/j1-river-language-names.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/j1-river-language-names.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1079,7 +1084,12 @@
           "sha256": "076785420b1f19472cb6ec947cd4f61637351ff64c2f02d5a5cb465ad7209e02",
           "sizeBytes": 909488,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Janehba-fbahfahiv' named in the generated language seeded 12594706351022957199), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-name-etymology.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-name-etymology.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1166,7 +1176,12 @@
           "sha256": "1e548fa1ab4917f4e710c9138482517055b858092c0f92ff666ab4ad6184d892",
           "sizeBytes": 908588,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then world.setMineAnchor('generated_page', 2, 2); world.designateMine('generated_page', 2, 2, 4, 3); till.designate('generated_page', -4, -4, -3, -3) and held until `world.getMineDesignationCount('generated_page') > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-canonical-designation-frame.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/k1-canonical-designation-frame.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1253,7 +1268,12 @@
           "sha256": "696afcdfc06316345bcb275bee32893017904f416563e1f2434770b579ecc6d7",
           "sizeBytes": 909320,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return require('scripts.unit_ai').commandMove({uid}, 20, 20), settled 6.0s and held until `(function() local s = require('scripts.unit_ai').getState(1); return s and s.commandedTask and s.commandedTask.stalledFor ~= nil and s.commandedTask.stallSeenAt ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/l1-order-stall-budget.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/l1-order-stall-budget.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1345,7 +1365,12 @@
           "sha256": "7c71c69d59cf9af55d70138b5c5c18055642de370b27eb7485ce5bf6d0bd88bc",
           "sizeBytes": 908799,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.addItem({uid}, 'steel_bar'); return unit.addItem({uid}, 'rations'); return unit.depositToCargo({uid}, {bid}, 'steel_bar'); return item.spawnGround('wood_log', 1.5, 1.5) >= 0, settled 6.0s and held until `building.getContainerKnowledge(1).state == 'known' and #item.listGround() > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/m1-item-bulk-storage.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/m1-item-bulk-storage.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1432,7 +1457,12 @@
           "sha256": "3f90088657fcccf1ae26e171504a2ffc4a9b67598f7e9e862a96507321cde00f",
           "sizeBytes": 908436,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), settled 6.0s and held until `(function() local ls = world.listPlacedLocations(); if #ls == 0 then return false end; local l = ls[1]; return l.discovery_margin == nil and l.bounds ~= nil and l.lifecycle ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/n1-location-sight-reveal.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/n1-location-sight-reveal.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1519,7 +1549,12 @@
           "sha256": "e47c729fbb513af9d32a40329489aa4b8e30040cc93cda6c30c8fdcbb579cbeb",
           "sizeBytes": 908646,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then unit.moveTo({uid}, 20, 20, 0.05, 'avoid_falls'), settled 6.0s and held until `(function() local i = unit.getInfo(1); return i ~= nil and i.moveHazard == 'avoid_falls' end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/o1-wander-hazard-policy.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/o1-wander-hazard-policy.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1606,7 +1641,12 @@
           "sha256": "0ce034db7e0c85a639beb5c840610b29c263e239f77eaf0633728b6ad29dd491",
           "sizeBytes": 908665,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return require('scripts.unit_ai').commandMove({uid}, 0, 0), settled 10.0s and held until `(function() local h = require('scripts.unit_ai').getHold(1); return h ~= nil and h.x == 0 and h.y == 0 end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/p1-position-hold.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/p1-position-hold.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1693,7 +1733,12 @@
           "sha256": "3743e3bf7b1b7d9425440fc88f7bd8cef08df941343b94aac35711e23a843d35",
           "sizeBytes": 909586,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('furnace', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then for i=1,6 do unit.addItem({uid},'granite_chunk'); unit.transferItemToBuilding({uid},{bid},'granite_chunk') end; for i=1,2 do unit.addItem({uid},'steel_bar'); unit.transferItemToBuilding({uid},{bid},'steel_bar') end; return building.areMaterialsSatisfied({bid}); building.addBuildProgress({bid}, 100000); return building.getActivity({bid}); local ai = require('scripts.unit_ai'); local s = ai.getState({uid}); if not s then return false end; ai.markGoalAccomplished(s, 'find_water'); return true; return tostring(item.spawnGround('axe_steel', 12, 0, { condition = 5 })), settled 8.0s and held until `(function() local s = require('scripts.unit_ai_core').aiState[1]; local j = s and s.repairJob; return j ~= nil and j.fromGround == true and j.groundGid ~= nil and s.repairPhase == 'fetch_ground' end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/q1-repair-ground-target.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/q1-repair-ground-target.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -1984,7 +2029,12 @@
           "sha256": "e9bb14b49b7d665921611abac5c8511abb6a89e55a807d26c2cc61b0c0f0f122",
           "sizeBytes": 908840,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then require('scripts.structures').registerPackArt(); return true; construction.designate('generated_page', 2, 2, 2, 2, 'structure', 'dungeon_1', 'floor'); return true, settled 20.0s and held until `(function() local p='generated_page'; local j=construction.getDesignationAt(p,2,2); if not j then return false end; if not j.paid then unit.addItem(1,'steel_plate'); construction.payMaterials(p,2,2,j.attempt,1); return false end; local ai=require('scripts.unit_ai'); ai.aiState[1]=ai.aiState[1] or {}; ai.aiState[1].constructJob={x=2,y=2,attempt=j.attempt,category='structure',pack='dungeon_1',kind='floor',phase='building',progress=0.5,consumed=true,need={},work=3.0}; return true end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/t1-construct-attempt-receipt.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/t1-construct-attempt-receipt.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2086,7 +2136,12 @@
           "sha256": "7c380361c15e320dc48f7794740f5e08e7a8a64b14f651455484e4045ed2895c",
           "sizeBytes": 908781,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Aldermoor Deep'), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/u1-generated-world-identity.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/u1-generated-world-identity.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2260,7 +2315,12 @@
           "sha256": "237e7e45295aa12c003a8ab0dbe88ba6ac6696f517dba0a0fa76635e02d83270",
           "sizeBytes": 909186,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 120,120, 0, 'player'), then construction.designate('generated_page', 5, 5, 5, 5, 'building', 'cargo_hold_S'); return true, settled 4.0s and held until `(function()   local p='generated_page'   local j=construction.getDesignationAt(p,5,5)   if not j then return false end   local info=building.getInfo(1)   if not info or info.defName~='cargo_hold_S' then return false end   local ai=require('scripts.unit_ai')   ai.aiState[1]=ai.aiState[1] or {}   ai.aiState[1].constructJob={x=5,y=5,attempt=j.attempt,category='building',     building='cargo_hold_S',stakedBid=1,staking=1e9}   return ai.aiState[1].constructJob.stakedBid==1 end)() `, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/w1-construct-stake-reference.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/w1-construct-stake-reference.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2347,7 +2407,12 @@
           "sha256": "e0539b6c15679873adbe160b279825a92765c8f261043bd03d165c20335d69f0",
           "sizeBytes": 905451,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml') if not fs then return false end local ps={} for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end table.sort(ps) for _,p in ipairs(ps) do engine.loadFloraYaml(p) end return flora.exists('tomato_plant') and flora.exists('wheat') end)(), settled 2.0s and held until `(function() local p='generated_page' local sites={} for gy=-32,32 do for gx=-32,32 do if #sites<3 then local s=world.getSlopeAt(gx,gy) local f=world.getFluidAt(gx,gy) if s==0 and (f==nil or f=='') then sites[#sites+1]={gx,gy} end end end end if #sites<3 then return false end for _,t in ipairs(sites) do if not world.isPlantable(t[1],t[2]) then local z=world.getSurfaceAt(t[1],t[2]) world.setVegAt(p,t[1],t[2],z,77) end end local a,b,c=sites[1],sites[2],sites[3] if world.isPlantable(a[1],a[2]) and world.getFloraAt(a[1],a[2])==nil then world.plantRowCropAt(p,a[1],a[2],'tomato_plant') end if world.isPlantable(b[1],b[2]) and world.getCropPlotAt(b[1],b[2])==nil then world.plantCropAt(b[1],b[2],'wheat') end if world.isPlantable(c[1],c[2]) and plant.getDesignationAt(p,c[1],c[2])==nil then plant.designate(p,c[1],c[2],'wheat') end return (world.getFloraAt(a[1],a[2])~=nil) and (world.getCropPlotAt(b[1],b[2])~=nil) and (plant.getDesignationAt(p,c[1],c[2])~=nil) end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-flora-species-names.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-flora-species-names.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2434,7 +2499,12 @@
           "sha256": "0e371eb812d8bc9b8a1e43424e01bd82dc95ecf9074a1a4444935ef90898fa7f",
           "sizeBytes": 905235,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), settled 3.0s, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/y1-subminute-clock-remainder.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/y1-subminute-clock-remainder.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2526,7 +2596,12 @@
           "sha256": "c11f08e347c13af2357774b5bc8218666d3672aee523b49dcc019525615763c4",
           "sizeBytes": 912196,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return item.spawnGround('first_aid_kit', 4, 4) ~= nil; return (function() local id = (function() local g = item.listGround() or {}; for _,e in ipairs(g) do if e.defName == 'first_aid_kit' then return e.instanceId end end return nil end)(); if not id then return false end; return item.observeContainerContents(id) end)(), settled 6.0s and held until `(function() local id = (function() local g = item.listGround() or {}; for _,e in ipairs(g) do if e.defName == 'first_aid_kit' then return e.instanceId end end return nil end)(); if not id then return false end; item.observeContainerWeight(id); local k = item.getContainerKnowledge(id); return k ~= nil and k.state == 'known' and #k.items > 0 and k.weighedAt ~= nil and k.revealedAt ~= nil and k.weighedAt > k.revealedAt end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z1-portable-container-knowledge.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z1-portable-container-knowledge.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2613,7 +2688,12 @@
           "sha256": "968bbc0fd68b171929d45674f2cb9cd19042c9fd7943a7ab6757233e4d83ccae",
           "sizeBytes": 908583,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), settled 3.0s and held until `#world.listPlacedLocations('generated_page') > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z2-pending-container-shells.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z2-pending-container-shells.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2700,7 +2780,12 @@
           "sha256": "9298f9429a941d33abf619eff9ead157c358e640078554c8a9a8b22a02b45470",
           "sizeBytes": 909962,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then local kinds={'ocean','river','water'} for dx=-4,4 do for dy=-4,4 do world.setFluidTile('generated_page', dx, dy, kinds[math.floor((dy+4)/3)+1]) end end return 'ok', settled 15.0s and held until `world.getFluidAt(0, 0) ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z3-exact-fluid-units.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z3-exact-fluid-units.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2787,7 +2872,12 @@
           "sha256": "9ffe55566d08b6251f2a076d079193a8b77557ebf018f5998273450dfe757160",
           "sizeBytes": 912055,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 6, 0, 0, 'player') >= 0, settled 3.0s and held until `(function() local ws = unit.getWounds(2); if not ws or #ws == 0 then unit.setKnowledge(1,'bleed_control',90); unit.setKnowledge(2,'bleed_control',0); unit.injure(2,'l_thigh','stab',0.25,1.0); unit.injure(2,'r_thigh','stab',0.25,1.0); unit.injure(2,'l_shin','stab',0.25,1.0); return false end; local c=require('scripts.unit_ai_core'); for _,s in pairs(c.aiState) do if s.treatClaim and (tonumber(s.treatClaim.serial) or 0) >= 1 then return true end end; return false end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z4-medic-claim-order.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z4-medic-claim-order.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2961,7 +3051,12 @@
           "sha256": "80dc96a063847c7a7884a8a09fce631a8c10f32eac6ea9f48fd426922f19e3e8",
           "sizeBytes": 924538,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then unit.spawn('acolyte', 3, 2, 0, 'hostile'); unit.spawn('acolyte', 2, 3, 0, 'debug'); unit.spawn('acolyte', 3, 3, 0, 'neutral'); unit.spawn('bear_brown', 4, 2); unit.spawn('tiller', 2, 4); unit.spawn('acolyte', 4, 4), settled 6.0s and held until `unit.getFaction(1) == 'player' and unit.getFaction(2) == 'hostile' and unit.getFaction(3) == 'debug' and unit.getFaction(4) == 'neutral' and unit.getFaction(5) == 'wildlife' and unit.getFaction(6) == 'wildlife' and unit.getFaction(7) == 'neutral'`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z6-unit-faction-profile.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z6-unit-faction-profile.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -2972,7 +3067,7 @@
       "declaredByIssue": 2829,
       "supportStatus": "supported",
       "migrationTarget": "current",
-      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv3 (v3 \u2192 v4: empty physiology overrides)",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv3 (v3 → v4: empty physiology overrides)",
       "components": [
         {
           "id": "metadata",
@@ -3048,7 +3143,12 @@
           "sha256": "387b9864357f930196ac747ccd8ea9b77700ff6943d85c79bd96d8e75170e63c",
           "sizeBytes": 913863,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'); return unit.setStat(1, 'salt_store', 0); return unit.setStat(2, 'salt_store', 12.5); return unit.spawn('bear_brown', 4, 2), settled 3.0s and held until `unit.getStat(1, 'salt_store') == 0 and unit.getStat(2, 'salt_store') == 12.5 and unit.getStat(3, 'salt_store') ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z7-units-v3-salt-store.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z7-units-v3-salt-store.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -3135,7 +3235,12 @@
           "sha256": "f5d2ae8559aef05cc8be9b039a4c8e4a2fac88742c0a50a0228e196183c6a1fc",
           "sizeBytes": 913971,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'); return unit.setStat(1, 'salt_store', 0); return unit.setStat(2, 'salt_store', 12.5); return unit.spawn('bear_brown', 4, 2), settled 3.0s and held until `unit.getStat(1, 'salt_store') == 0 and unit.getStat(2, 'salt_store') == 12.5 and unit.getStat(3, 'salt_store') ~= nil and unit.getPhysioOverride(1, 'hydration') == nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z8-units-v4-physiology-overrides.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z8-units-v4-physiology-overrides.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -3222,7 +3327,12 @@
           "sha256": "37d759d32fcd11bee8c0534a8cb77498bc79f6a733f234105a302194540e065a",
           "sizeBytes": 912079,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'), settled 3.0s and held until `unit.exists(1) and unit.exists(2) and world.getLocationInstance(1, 'generated_page') ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Before that, synarchy-save-codec seed-tags wrote the general gameplay-tag assignments {\"units\":[{\"page\":\"generated_page\",\"id\":{uid},\"tags\":[\"defender\",\"meeting_point\"]},{\"page\":\"generated_page\",\"id\":2,\"tags\":[\"defender\"]}],\"buildings\":[{\"page\":\"generated_page\",\"id\":{bid},\"tags\":[\"depot\"]}],\"locations\":[{\"page\":\"generated_page\",\"id\":1,\"tags\":[\"landmark\"]}]} into the saved bytes through the real session decoder and encoder (#2701: no public tag verb exists yet).",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z9-gameplay-tags.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z9-gameplay-tags.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -3309,7 +3419,12 @@
           "sha256": "c4902f0d5c53324552c33d55d1b9014625c298155d4eaf1597512ddbbc53c618",
           "sizeBytes": 912335,
           "provenance": "Derived from the tracked z9-gameplay-tags fixture (itself generated through the real headless engine and engine.saveWorld; see its own provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the physical-item gameplay-tag assignments {\"items\":[{\"id\":2,\"tags\":[\"food\",\"ration_a\"]},{\"id\":3,\"tags\":[\"food\"]},{\"id\":7,\"tags\":[\"comms\"]},{\"id\":8,\"tags\":[\"kit\"]},{\"id\":13,\"tags\":[\"kit\"]},{\"id\":15,\"tags\":[\"food\",\"second_unit\"]},{\"id\":21,\"tags\":[\"kit\",\"second_unit\"]}]} on the session (item instance ids 2, 3 and 7 are the first unit's two rations and radio, 8 and 13 among its equipped and worn items, 15 and 21 the second unit's first ration and an equipped item) and re-encoded it through the same encoder an ordinary save uses, writing core-session v2; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed (#2703: no public tag verb exists yet).",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z10-item-tags.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z10-item-tags.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -3396,13 +3511,18 @@
           "sha256": "3b40a1c5f2f41c6f6fac908d36a93c7ac6930a065b3eb7fe473accda099a7afe",
           "sizeBytes": 912702,
           "provenance": "Derived from the tracked z10-item-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only world-edits@5 (#2894), which decoded the whole session through the real decoder, set the page's terrain-cell and flora-occurrence gameplay-tag assignments, and the planting edit that places the planted occurrence, named by the spec {\"tiles\":[{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":-54,\"tags\":[\"quarry\",\"shared\"]},{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":-56,\"tags\":[\"deep\"]},{\"page\":\"generated_page\",\"x\":5,\"y\":1,\"z\":-50,\"tags\":[\"shared\"]}],\"plants\":[{\"page\":\"generated_page\",\"x\":-26,\"y\":-20,\"id\":2035870205241177074,\"tags\":[\"landmark_tree\",\"shared\"]},{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"id\":4611686018427387905,\"tags\":[\"sown\"]}],\"plantings\":[{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"species\":\"tomato_plant\",\"id\":4611686018427387905,\"plantedDay\":0,\"baseWidth\":12}]}, re-encoded it through the same encoder an ordinary save uses and took just world-edits, written in its frozen v5 shape (downgradeWorldEditsV5), from that re-encode, keeping every other component of z10-item-tags verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt. Every target exists in the page it is seeded on: each cell is a stored non-air cell of its seed-42 column, the generated occurrence is the scots_pine chunk (-2, -2) generates at canonical tile (-26, -20), and the planted one is the tomato_plant a planting edit places at (6, 3); the 'save migrations' group's tag-target examples reconstruct each owning chunk and fail if any assignment would be dropped by its admission.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z11-tile-flora-tags.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z11-tile-flora-tags.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
     {
       "id": "z12-item-scenario-refs",
-      "description": "Scenario item references (#2709) as the current build writes them: the session's item \u2192 scenario-reference mapping in core-session v3, keyed by item instance id, with explicit ids (ration-a, comms.radio, second.unit.ration) and an automatic path id (units[1].equipment.main_hand) beside the physical-item gameplay tags of z10 on the same items. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z11 and every older fixture are the empty-default (core-session v2 and older) counterparts.",
+      "description": "Scenario item references (#2709) as the current build writes them: the session's item → scenario-reference mapping in core-session v3, keyed by item instance id, with explicit ids (ration-a, comms.radio, second.unit.ration) and an automatic path id (units[1].equipment.main_hand) beside the physical-item gameplay tags of z10 on the same items. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z11 and every older fixture are the empty-default (core-session v2 and older) counterparts.",
       "declaredAt": "2026-10-18",
       "declaredByIssue": 2709,
       "supportStatus": "supported",
@@ -3483,13 +3603,18 @@
           "sha256": "190692896d7bc447ea0d1367bf1aca70c9861291eb0d67798cb464d50da14c2d",
           "sizeBytes": 912839,
           "provenance": "Derived from the tracked z11-tile-flora-tags fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only core-session (#2894), which decoded the whole session through the real decoder, set the item scenario references {\"items\":[{\"id\":2,\"ref\":\"ration-a\"},{\"id\":7,\"ref\":\"comms.radio\"},{\"id\":15,\"ref\":\"second.unit.ration\"},{\"id\":21,\"ref\":\"units[1].equipment.main_hand\"}]}, re-encoded it through the same encoder an ordinary save uses and took just core-session (v3) from that re-encode, keeping every other component of z11-tile-flora-tags verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z12-item-scenario-refs.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z12-item-scenario-refs.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
     {
       "id": "z13-unit-scenario-refs",
-      "description": "Scenario unit references (#2710) as the current build writes them: each page's unit \u2192 scenario-reference mapping in units v6, keyed by unit id, with an explicit id (scout, unit 1) and an automatic path id (units[1], unit 2) beside z12's item references and z9's unit tags on the same units. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z12 and every older fixture are the empty-default (units v5 and older) counterparts.",
+      "description": "Scenario unit references (#2710) as the current build writes them: each page's unit → scenario-reference mapping in units v6, keyed by unit id, with an explicit id (scout, unit 1) and an automatic path id (units[1], unit 2) beside z12's item references and z9's unit tags on the same units. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z12 and every older fixture are the empty-default (units v5 and older) counterparts.",
       "declaredAt": "2026-10-18",
       "declaredByIssue": 2710,
       "supportStatus": "supported",
@@ -3570,7 +3695,12 @@
           "sha256": "8c957d43852c7c43bdfa3911f4e4615601bc1f08c495d32f4b195e36aa29d69d",
           "sizeBytes": 912884,
           "provenance": "Derived from the tracked z12-item-scenario-refs fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags --only units (#2894), which decoded the whole session through the real decoder, set the unit scenario references {\"units\":[{\"page\":\"generated_page\",\"id\":1,\"ref\":\"scout\"},{\"page\":\"generated_page\",\"id\":2,\"ref\":\"units[1]\"}]}, re-encoded it through the same encoder an ordinary save uses and took just units (v6) from that re-encode, keeping every other component of z12-item-scenario-refs verbatim, bytes and version (the metadata timestamp was already normalized). Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Recipe: docs/pr-proofs/issue-2894-make-z11-z13-z17.py.txt.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z13-unit-scenario-refs.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z13-unit-scenario-refs.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -3770,7 +3900,7 @@
     },
     {
       "id": "z16-scenario-world",
-      "description": "A scenario world-content session (#2711) as the current build writes it: the finite 20x10 arena page 'finite_arena' of z15 carrying a page's PHYSICAL PLANT STATE in world-edits v6 \u2014 a white_oak and a tomato_plant as named planting edits (planted-id namespace) each followed by a WeSetFloraState edit that records the offsets, visual variant, health (0.5 for the oak) and the stored age baseline the planting edit cannot (it replays offsets 0, health 1, variant 0), a wheat crop plot, an oak regrowth timer (game seconds remaining), the planted-id cursor above both ids, and tile / occurrence / plot gameplay tags. Seeded through synarchy-save-codec seed-tags because no public verb installs scenario content yet (SCN-13 composes it). z15 and every older fixture are the no-state (world-edits v5 and older) counterparts.",
+      "description": "A scenario world-content session (#2711) as the current build writes it: the finite 20x10 arena page 'finite_arena' of z15 carrying a page's PHYSICAL PLANT STATE in world-edits v6 — a white_oak and a tomato_plant as named planting edits (planted-id namespace) each followed by a WeSetFloraState edit that records the offsets, visual variant, health (0.5 for the oak) and the stored age baseline the planting edit cannot (it replays offsets 0, health 1, variant 0), a wheat crop plot, an oak regrowth timer (game seconds remaining), the planted-id cursor above both ids, and tile / occurrence / plot gameplay tags. Seeded through synarchy-save-codec seed-tags because no public verb installs scenario content yet (SCN-13 composes it). z15 and every older fixture are the no-state (world-edits v5 and older) counterparts.",
       "declaredAt": "2026-10-19",
       "declaredByIssue": 2711,
       "supportStatus": "supported",
@@ -3978,13 +4108,18 @@
           "sha256": "46b74dcaf1cb1fb617a20084292a2649c38d7893a1f130c1eb7f071602d872d0",
           "sizeBytes": 909180,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return item.spawnGround('field_toolbox', 6, 0) ~= nil; engine.setPaused(true); local g; for _, r in ipairs(item.listGround() or {}) do if r.defName == 'field_toolbox' then g = r.id end end; if g == nil then return false end; local c = require('scripts.unit_ai_core'); local s = c.ensureState({uid}); s.openOrder = { gid = g, issuedAt = engine.gameTime(), stalledFor = 1.5, bestDist = 6.0 }; return true, settled 1.0s and held until `(function() local s = require('scripts.unit_ai_core').aiState[1]; return s ~= nil and s.openOrder ~= nil and s.openOrder.gid ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-open-order-pending.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-open-order-pending.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
     {
       "id": "z17-scenario-placement",
-      "description": "A scenario placement session (#2712) as the current build writes it: a finite 20x10 arena page 'finite_arena' carrying placed scenario content with its scenario-identity mappings populated \u2014 buildings v4 holds each building's scenario reference (a charged battery 'battery' and a crate 'crate' holding a steel bar) and world-pages v16 holds the placed location's reference (a ruin_small instance 'ruin' at its authored anchor with its significant item bound, built as a real instance rather than an overlay entry), beside the damaged-variant floor and wall edits, the bound items' references in core-session, and the battery's charged power node. z16 and every older fixture are the no-reference (buildings v3 / world-pages v15 and older) counterparts.",
+      "description": "A scenario placement session (#2712) as the current build writes it: a finite 20x10 arena page 'finite_arena' carrying placed scenario content with its scenario-identity mappings populated — buildings v4 holds each building's scenario reference (a charged battery 'battery' and a crate 'crate' holding a steel bar) and world-pages v16 holds the placed location's reference (a ruin_small instance 'ruin' at its authored anchor with its significant item bound, built as a real instance rather than an overlay entry), beside the damaged-variant floor and wall edits, the bound items' references in core-session, and the battery's charged power node. z16 and every older fixture are the no-reference (buildings v3 / world-pages v15 and older) counterparts.",
       "declaredAt": "2026-10-19",
       "declaredByIssue": 2712,
       "supportStatus": "supported",
@@ -4096,7 +4231,7 @@
     },
     {
       "id": "z18-relation-causes",
-      "description": "Live directed relation causes (#2548, FTS-6B of #2496) as the current build writes them: five causes of three owners on four ordered tag pairs \u2014 two owners on one pair, its reverse direction, one owner on a second pair, and a shipped-tag pair beside runtime-minted tags \u2014 in the optional session component relation-causes v1, beside a generated page with one building and one unit. Seeded through synarchy-save-codec seed-tags because no production code adds a cause yet (FTS-6A/6E own the producers, FTS-6C the verbs). Every earlier fixture is the empty-default counterpart: absence means no cause exists.",
+      "description": "Live directed relation causes (#2548, FTS-6B of #2496) as the current build writes them: five causes of three owners on four ordered tag pairs — two owners on one pair, its reverse direction, one owner on a second pair, and a shipped-tag pair beside runtime-minted tags — in the optional session component relation-causes v1, beside a generated page with one building and one unit. Seeded through synarchy-save-codec seed-tags because no production code adds a cause yet (FTS-6A/6E own the producers, FTS-6C the verbs). Every earlier fixture is the empty-default counterpart: absence means no cause exists.",
       "declaredAt": "2026-10-21",
       "declaredByIssue": 2548,
       "supportStatus": "supported",
@@ -4202,7 +4337,12 @@
           "sha256": "23a3aabfd36e8a4cff097fe0df5f33bcf3df73979d5dd65bcc5e17a1a4ae2789",
           "sizeBytes": 909269,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Before that, synarchy-save-codec seed-tags wrote the general gameplay-tag assignments {\"relationCauses\":[{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"report:incident_7\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"diplomacy:truce_2\",\"source\":\"raid_b\",\"target\":\"raid_a\",\"relation\":\"ally\"},{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"farmers\",\"relation\":\"neutral\"},{\"owner\":\"report:incident_7\",\"source\":\"nomad\",\"target\":\"acolyte\",\"relation\":\"hostile\"}]} into the saved bytes through the real session decoder and encoder (#2701: no public tag verb exists yet).",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z18-relation-causes.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z18-relation-causes.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -4289,7 +4429,12 @@
           "sha256": "40628189bd24e5b52cb0b34aefeffa6083e6cd8190ab874c5a20ddf1ef190a9e",
           "sizeBytes": 905488,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml') if not fs then return false end local ps={} for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end table.sort(ps) for _,p in ipairs(ps) do engine.loadFloraYaml(p) end return flora.exists('tomato_plant') end)(), settled 2.0s and held until `(function() local p='generated_page' local site=nil for gy=-32,32 do for gx=-32,32 do if site==nil then local s=world.getSlopeAt(gx,gy) local f=world.getFluidAt(gx,gy) if s==0 and (f==nil or f=='') then site={gx,gy} end end end end if site==nil then return false end if not world.isPlantable(site[1],site[2]) then local z=world.getSurfaceAt(site[1],site[2]) world.setVegAt(p,site[1],site[2],z,77) end if world.isPlantable(site[1],site[2]) and world.getFloraAt(site[1],site[2])==nil then world.plantRowCropAt(p,site[1],site[2],'tomato_plant') end return world.getFloraAt(site[1],site[2])~=nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z19-flora-condition-store.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z19-flora-condition-store.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     },
@@ -4376,7 +4521,196 @@
           "sha256": "a2fb306af118e2c9ce97732e39f80f1c57d1198482e2493b864bb92d390a6479",
           "sizeBytes": 905533,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml') if not fs then return false end local ps={} for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end table.sort(ps) for _,p in ipairs(ps) do engine.loadFloraYaml(p) end return flora.exists('wheat') end)(), settled 2.0s and held until `(function() local p='generated_page' local site=nil for gy=-32,32 do for gx=-32,32 do if site==nil then local s=world.getSlopeAt(gx,gy) local f=world.getFluidAt(gx,gy) if s==0 and (f==nil or f=='') and world.getFloraAt(gx,gy)==nil then site={gx,gy} end end end end if site==nil then return false end if not world.isPlantable(site[1],site[2]) then local z=world.getSurfaceAt(site[1],site[2]) world.setVegAt(p,site[1],site[2],z,77) end if world.isPlantable(site[1],site[2]) and world.getCropPlotAt(site[1],site[2])==nil then world.plantCropAt(site[1],site[2],'wheat') end return world.getCropPlotAt(site[1],site[2])~=nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z20-crop-plot-condition.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z20-crop-plot-condition.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionDead, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "z21-flora-corpse-retention",
+      "description": "Current complete-session fixture for #2557: an expired cultivated tomato row persists its identity-specific WeRemoveFlora edit through world-edits v7.",
+      "declaredAt": "2026-11-01",
+      "declaredByIssue": 2557,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z21-flora-corpse-retention",
+          "path": "test-headless/data/save-compat/z21-flora-corpse-retention.bin",
+          "kind": "complete-session",
+          "sha256": "374f7c6ce06162b01a8f45861b939935fc120c061ea9408fccc8ee15b4d46efa",
+          "sizeBytes": 905573,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml'); if not fs then return false end; local ps={}; for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end; table.sort(ps); for _,p in ipairs(ps) do engine.loadFloraYaml(p) end; return flora.exists('tomato_plant') end)(), settled 2.0s and held until `(function() local p='generated_page'; local x,y=-32,-32; local d=world.getDate(p); if not d then return false end; local f=world.getFloraAt(x,y); if d.absoluteDay>=60 then return f==nil end; if d.absoluteDay~=0 then world.setDate(p,1,1,1); return false end; if not f then if not world.isPlantable(x,y) then local z=world.getSurfaceAt(x,y); world.setVegAt(p,x,y,z,77) else world.plantRowCropAt(p,x,y,'tomato_plant') end; return false end; if f.dead then world.setDate(p,1,3,1) else world.setFloraCondition(x,y,f.instanceId,'disease') end; return false end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. The migration probe also observes one legitimate load-time natural-death reconciliation: common_dandelion occurrence 4343535213627529159 at (-14,39), wild, natural death beginning on day 0, reseed expiry day 60; at the fixture date it is already reseeded. This live delta is checked separately and does not alter the codec-derived source summary; with the v9 flora-condition migration, its current record also carries the default fcrReseedMarker = Nothing.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z21-flora-corpse-retention.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionReseeded, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "2557-world-activity-v9",
+      "description": "Current component schema baseline for #2557 world-activity v9, derived from the preserved z21 PR fixture through the real compiled codec.",
+      "declaredAt": "2026-11-02",
+      "declaredByIssue": 2557,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.PageActivity v8-to-v9 migration; current envelope encode/decode via synarchy-save-codec",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 9,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z21-flora-corpse-retention-v9",
+          "path": "test-headless/data/save-compat/z21-flora-corpse-retention-v9.bin",
+          "kind": "complete-session",
+          "sha256": "26b5eedf5d3998c8330f5bd69162ed2563970bec2aa39eae02284d1b9b6d7235",
+          "sizeBytes": 905581,
+          "provenance": "Codec-derived from PR-head z21 (716c99298) with synarchy-save-codec seed-tags --only world-activity and an empty seed; the real codec decoded/migrated/assembled the original v8 session and re-encoded only world-activity as v9. No engine generation; original z21 bytes remain unchanged. Canonical summary was derived with synarchy-save-codec summary.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z21-flora-corpse-retention-v9.expected.json",
+          "expectedPostLoadReconciliationDelta": {
+            "/pages/0/floraConditions": [
+              "occurrence 4343535213627529159 FloraConditionRecord {fcrSpecies = FloraByName \"common_dandelion\", fcrTile = (-14,39), fcrCondition = ConditionReseeded, fcrCause = CauseNatural, fcrBeganDay = 0, fcrContext = ContextWild, fcrPhase = Just PhaseVegetating, fcrStage = Just CycleDormant, fcrRetention = RetentionTransient 60 RetainReseed, fcrReseedMarker = Nothing}"
+            ]
+          }
         }
       ]
     }

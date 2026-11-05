@@ -413,7 +413,7 @@ spec = do
 
       it "accepts v1 through v7, so no shipped payload lost \
          \its decoder" $
-        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8]
+        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
       it "does not follow the live harvest alias into the frozen v1/v2 \
          \layout: a tile-keyed timer still decodes as a tile-keyed timer" $ do
@@ -786,7 +786,8 @@ engineSpec = beforeAll setup $ do
               , padPendingChop = HM.map (ChopDesignationDTOv1 . chZ) pendingChop
               , padPendingHarvests = pendingHarv
               , padConstructNextAttempt = firstConstructAttemptId
-              , padFloraConditions = HM.empty }
+              , padFloraConditions = HM.empty
+              , padFloraGrowthAnchors = HM.empty }
       -- Round-trip the v4 slice through the real codec, then restore it
       -- and prove the deferred entries are still there to resolve.
       case ccDecode worldActivityCodec 4 (S.encode (WorldActivityDTO [slice])) of

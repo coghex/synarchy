@@ -212,6 +212,14 @@ spec = do
                 (floraFile [withVariants
                     [[("condition", "dying"), ("texture", "\"a.png\"")]]])
 
+        it "rejects internal successor markers outside the visual condition vocabulary" $
+            forM_ ["reseeded", "absent"] $ \token →
+                rejectsNaming
+                    [ "textureVariants[0]", "condition", token
+                    , "must", "be", "one", "of", "alive", "dead" ]
+                    (floraFile [withVariants
+                        [[("condition", token), ("texture", "\"a.png\"")]]])
+
         it "rejects an unknown cause token" $
             rejectsNaming ["textureVariants[0]", "cause", "lightning", "fire"]
                 (floraFile [withVariants
@@ -381,7 +389,10 @@ spec = do
                 , "unknown" ]
             successorVocabulary `shouldBe` ["reseed", "absent"]
             map contextText [minBound .. maxBound] `shouldBe` contextVocabulary
-            map conditionText [minBound .. maxBound]
+            -- FloraCondition also carries lifecycle markers (reseeded and
+            -- absent); they are not visual selector tokens. Keep this
+            -- vocabulary pinned to the contract's two renderable states.
+            map conditionText [ConditionAlive, ConditionDead]
                 `shouldBe` conditionVocabulary
             map deathCauseText [minBound .. maxBound]
                 `shouldBe` deathCauseVocabulary

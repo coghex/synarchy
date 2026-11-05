@@ -34,7 +34,8 @@
       "dateYear": 1,
       "dateMonth": 1,
       "dateDay": 1,
-      "mapMode": "ZMDefault"
+      "mapMode": "ZMDefault",
+      "floraConditions": []
     }
   ],
   "luaComponentCount": 0,

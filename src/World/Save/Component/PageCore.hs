@@ -164,7 +164,7 @@ import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests, emptyPendingFloraHarvests)
-import World.Flora.Condition (emptyFloraConditions)
+import World.Flora.Condition (emptyFloraConditions, emptyFloraGrowthAnchors)
 import Item.Ground (emptyGroundItems)
 import World.Save.Types (BuildingSnapshot(..), UnitSnapshot(..))
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
@@ -1636,6 +1636,7 @@ blankPageSnapshot pid params =
         , pgsUnitSimStates = HM.empty
         , pgsFloraHarvests = emptyFloraHarvests
         , pgsFloraConditions = emptyFloraConditions
+        , pgsFloraGrowthAnchors = emptyFloraGrowthAnchors
         , pgsChopDesignations = HM.empty
         , pgsPendingChopMigration = HM.empty
         , pgsPendingFloraHarvests = emptyPendingFloraHarvests

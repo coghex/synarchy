@@ -155,7 +155,7 @@ instance Hashable AnnualCycleKey where
 --   @docs/flora_visual_state_contract.md@ (#2530) defines. This module
 --   holds them as loaded CONTENT only: 'FloraSpecies' carries the
 --   declared variant table and the corpse policy. World.Flora.Visual reads
---   the variants; corpse retention remains deferred to EFM-10.
+--   the variants; World.Flora.ConditionSeam snapshots the policy at death.
 --   Phase and stage reuse 'LifePhaseTag' and 'AnnualStageTag'; the
 --   contract adds no token to either.
 
@@ -171,6 +171,8 @@ instance Hashable FloraContext where
 data FloraCondition
     = ConditionAlive
     | ConditionDead
+    | ConditionReseeded
+    | ConditionAbsent
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 instance NFData FloraCondition where rnf x = x `seq` ()
 instance Hashable FloraCondition where
@@ -344,8 +346,8 @@ data FloraSpecies = FloraSpecies
       -- ^ Declared @textureVariants@ (#2539), keyed by semantic
       --   selector; resolved by World.Flora.Visual (#2544).
     , fsCorpsePolicy    ∷ !FloraCorpsePolicy
-      -- ^ Authored or defaulted corpse retention (#2539). Loaded
-      --   content only: retention reads it from EFM-10.
+      -- ^ Authored or defaulted corpse retention (#2539). Loaded content
+      --   only; the death record snapshots the selected outcome.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 newFloraSpecies ∷ Text → TextureHandle → FloraSpecies

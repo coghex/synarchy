@@ -47,6 +47,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits, applySlopeEditsTd)
 import World.Flora.Designation
     (admitChunkFloraBatch, forgetFloraDroppedSince)
+import World.Thread.Command.Flora.Condition (reconcileAdmittedFlora)
 import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
 import World.Plant.Validate (revalidatePlantDesignations)
@@ -289,6 +290,9 @@ updateChunkLoading env logger = do
                                 -- same committed result.
                                  reconcileAdmittedPageTags logger worldState
                                     pageId newChunks' finalTd
+                                _ ← reconcileAdmittedFlora
+                                    (toWorldSimCapability env) pageId worldState
+                                    (map lcCoord newChunks')
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -592,6 +596,9 @@ drainInitQueues env logger = do
                          forgetFloraDroppedSince worldState newChunks' finalTd
                          reconcileAdmittedPageTags logger worldState pageId
                                                    newChunks' finalTd
+                        _ ← reconcileAdmittedFlora
+                            (toWorldSimCapability env) pageId worldState
+                            (map lcCoord newChunks')
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump

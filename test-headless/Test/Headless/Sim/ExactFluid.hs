@@ -32,16 +32,18 @@ import World.Fluid.Exact
     , exactSurfaceFloorZ, exactTopLevel, exactVolumeOverTerrain )
 import World.Save.Component.PageEdits
     ( WorldEditDTO(..), WorldEditDTOv1(..), WorldEditDTOv2(..)
-    , WorldEditDTOv3(..), WorldEditDTOv4(..)
+    , WorldEditDTOv3(..), WorldEditDTOv4(..), WorldEditDTOv6(..)
     , PageEditsDTO(..), PageEditsDTOv1(..), PageEditsDTOv2(..)
-    , PageEditsDTOv3(..), WorldEditsDTO(..), WorldEditsDTOv1(..)
+    , PageEditsDTOv3(..), PageEditsDTOv6(..)
+    , WorldEditsDTO(..), WorldEditsDTOv1(..)
     , WorldEditsDTOv2(..), WorldEditsDTOv3(..), PageEditsDTOv4(..), WorldEditsDTOv4(..)
+    , WorldEditsDTOv6(..)
     , worldEditsCodec )
 import World.Save.Component.Types
     (ccDecode, ccEncode, ccVersion, ccInputVers, renderComponentError)
 import World.Edit.Types (WorldEdit(..))
 import World.Page.Types (WorldPageId(..))
-import World.Flora.Identity (firstPlantedFloraCursor)
+import World.Flora.Identity (firstPlantedFloraCursor, plantedFloraInstanceId)
 import World.Save.Snapshot (PageSnapshot(..), captureSessionSnapshot)
 import Test.Headless.World.Save.Components.Fixture
     (minimalPage, minimalGlobals, page1)
@@ -607,7 +609,7 @@ spec = do
 -- * The world-edits wire contract
 
 saveSpec ∷ Spec
-saveSpec = describe "world-edits v4: exact fluid surfaces (#2520)" $ do
+saveSpec = describe "world-edits: exact fluid surfaces and identity removal (#2520/#2557)" $ do
     let pageId = WorldPageId "exact"
         coord  = ChunkCoord 0 0
 
@@ -634,9 +636,29 @@ saveSpec = describe "world-edits v4: exact fluid surfaces (#2520)" $ do
 
     it "is at its current version and still accepts every older one" $ do
         -- #2705: v5 appended the page's tile, occurrence and plot tags.
-        -- #2711: v6 appended WeSetFloraStateD to the edit sum.
-        ccVersion worldEditsCodec `shouldBe` 6
-        ccInputVers worldEditsCodec `shouldBe` [1, 2, 3, 4, 5, 6]
+        -- #2711 appended WeSetFloraStateD in v6; #2557 appends the
+        -- identity-specific removal in v7.
+        ccVersion worldEditsCodec `shouldBe` 7
+        ccInputVers worldEditsCodec `shouldBe` [1, 2, 3, 4, 5, 6, 7]
+
+    it "migrates the complete v6 shape and round-trips identity removal" $ do
+        let iid = plantedFloraInstanceId 9
+            old = WorldEditsDTOv6
+                [ PageEditsDTOv6 pageId
+                    (HM.singleton coord
+                        [WeSetFloraStateDv6 3 4 iid 5 0.25 0.75 2 0.5 19])
+                    firstPlantedFloraCursor [] [] [] [] ]
+            removalPayload = S.encode $ WorldEditsDTO
+                [ PageEditsDTO pageId
+                    (HM.singleton coord [WeRemoveFloraD 3 4 iid])
+                    10 [] [] [] [] ]
+        fmap (map pedEdits ∘ wedPages) (decodeAt 6 (S.encode old))
+            `shouldBe` Right
+                [HM.singleton coord
+                    [WeSetFloraStateD 3 4 iid 5 0.25 0.75 2 0.5 19]]
+        fmap (map pedEdits ∘ wedPages) (decodeAt 7 removalPayload)
+            `shouldBe` Right
+                [HM.singleton coord [WeRemoveFloraD 3 4 iid]]
 
     it "migrates a v1 snapshot's whole z to exactly z * 8" $
         fmap snapshotsOf (decodeAt 1 v1Payload)
