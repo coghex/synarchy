@@ -41,7 +41,7 @@ import World.Save.Component.Types
 import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Compat.SessionV90 (sessionComponentId, sessionComponentVersion)
 import World.Save.Envelope
-import World.Save.Envelope.Codec (DecodedEnvelope(..), encodeEnvelope, headerSize)
+import World.Save.Envelope.Codec (DecodedEnvelope(..), encodeEnvelope)
 import World.Save.Envelope.Types
 import Test.Headless.World.Save.CurrentSchema.Record
 
@@ -127,6 +127,18 @@ hex ∷ BS.ByteString → Text
 hex = T.pack . concatMap (\b → pad (showHex b "")) . BS.unpack
   where pad s = replicate (2 - length s) '0' ⧺ s
 
+-- | The header length, MEASURED from a real encoded envelope rather than
+--   read from the codec's private constant: total length less the
+--   cereal manifest (whose length the header itself states), its 8-byte
+--   checksum and the payload.
+measuredHeaderSize ∷ Int
+measuredHeaderSize =
+    let payload = "ab" ∷ BS.ByteString
+        bytes = encodeAt currentEnvelopeVersion
+                  [(ComponentId "probe", 1, True, payload)]
+        manifestLen = fromIntegral (decodeW64 (BS.take 8 (BS.drop 8 bytes)))
+    in BS.length bytes - manifestLen - 8 - BS.length payload
+
 -- | The framing's compiled constants and a byte-for-byte probe of the
 --   hand-written header layout and the cereal-encoded manifest around a
 --   fixed component. DECLARED, not derived: the layout is hand-written
@@ -135,7 +147,7 @@ framingDetail ∷ Value
 framingDetail = object
     [ "currentEnvelopeVersion" .= currentEnvelopeVersion
     , "envelopeMagic" .= envelopeMagic
-    , "headerSize" .= headerSize
+    , "headerSize" .= measuredHeaderSize
     , "fnv1a64Probe" .= tshow (fnv1a64 "synarchy-current-schema")
     , "layoutProbeHex" .= hex (encodeAt currentEnvelopeVersion
           [ (ComponentId "probe", 1, True, "ab")

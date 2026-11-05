@@ -26,7 +26,6 @@ GUARD_ARTIFACTS = (
 ADAPTER_PATHS = (
     "src/World/Save/Component/Types.hs",
     "src/World/Save/Envelope.hs",
-    "src/World/Save/Envelope/Codec.hs",
     "src/World/Save/Wire.hs",
     "src/World/Save/Wire",
     "test-headless/Spec.hs",

@@ -30,7 +30,6 @@ module World.Save.Envelope.Codec
     , ComponentSpec
     , encodeEnvelope
     , decodeEnvelope
-    , headerSize
     ) where
 
 import UPrelude
