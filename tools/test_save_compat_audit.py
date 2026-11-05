@@ -167,6 +167,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_save_compat_audit_codec as codec_tests  # noqa: E402
 import test_save_compat_audit_compare as compare_tests  # noqa: E402
 import test_save_compat_audit_coverage as coverage_tests  # noqa: E402
+import test_save_compat_audit_current as current_tests  # noqa: E402
 import test_save_compat_audit_discovery as discovery_tests  # noqa: E402
 import test_save_compat_audit_envelope as envelope_tests  # noqa: E402
 import test_save_compat_audit_manifest as manifest_tests  # noqa: E402
@@ -206,6 +207,20 @@ ALL_TESTS = [
     *coverage_tests.TESTS,
 ]
 
+# Current-mode tests remain outside ALL_TESTS until PSP-5 activates them.
+# The explicit required-name list makes a dropped selected registration a
+# failure, while leaving every pre-existing no-mode selection unchanged.
+CURRENT_TESTS = list(current_tests.TESTS)
+REQUIRED_CURRENT_TEST_NAMES = (
+    "test_current_record_checks_real_compiled_codec_and_records_identity",
+    "test_current_selection_does_not_read_historical_manifest_or_files",
+    "test_stale_or_dishonest_current_descriptors_fail_closed",
+    "test_empty_and_duplicate_current_selections_are_rejected",
+    "test_current_seed_and_comparison_outcomes_use_current_inputs",
+    "test_corrupt_current_checksum_and_unsupported_framing_are_refused",
+    "test_compare_tool_error_is_not_a_fixture_verdict",
+)
+
 
 def duplicate_members(tests: list) -> list[str]:
     """Names appearing more than once across the owner registries.
@@ -226,6 +241,11 @@ def duplicate_members(tests: list) -> list[str]:
         else:
             seen.add(fn)
     return duplicates
+
+
+def missing_current_tests(tests: list) -> list[str]:
+    registered = {fn.__name__ for fn in tests}
+    return [name for name in REQUIRED_CURRENT_TEST_NAMES if name not in registered]
 
 
 def selected_tests(only_reproducibility: bool,
@@ -256,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
         "--without-reproducibility", action="store_true",
         help="run every member EXCEPT the fixture-reproducibility "
              "member (#1360).")
+    parser.add_argument("--mode", choices=["current"],
+                        help="run only PSP-3 current-save audit tests")
     # This script already owns its command line, and CI drives it through
     # both selective forms, so the shared verbosity flag joins that parser
     # rather than being consumed behind its back; `begin` then
@@ -263,6 +285,27 @@ def main(argv: list[str] | None = None) -> int:
     selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
     selftestlib.begin(args.verbose)
+
+    if args.mode == "current":
+        if args.only_reproducibility or args.without_reproducibility:
+            parser.error("--mode current cannot be combined with legacy reproducibility selection flags")
+        duplicates = duplicate_members(CURRENT_TESTS)
+        missing = missing_current_tests(CURRENT_TESTS)
+        if duplicates or missing or not CURRENT_TESTS:
+            if duplicates:
+                print(f"current tests listed more than once: {duplicates}")
+            if missing:
+                print(f"required current tests missing from selection: {missing}")
+            if not CURRENT_TESTS:
+                print("no current tests selected -- refusing to report a vacuous pass")
+            return selftestlib.concluded(1)
+        for fn in CURRENT_TESTS:
+            fn()
+        if FAILURES:
+            print(f"\n{len(FAILURES)} failure(s)")
+            return selftestlib.concluded(1)
+        return selftestlib.concluded(
+            0, f"\nall current tests passed ({len(CURRENT_TESTS)} members)")
 
     # A member listed twice across the owner registries would run twice
     # and be counted twice (issue #2073).

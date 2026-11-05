@@ -4757,3 +4757,36 @@ and clean up their own process and private resource root. Output to a null
 fallback or skipped recovery remains distinguishable from physical acceptance.
 An invocation without an explicit mode exits before launching anything; use the
 direct command, since the aggregate runner does not choose an audible mode.
+
+## Current save-compatibility selection (#2917)
+
+`save_compat_audit.py` keeps its existing no-mode historical audit until PSP-5
+activates the new gate. The separate current selection reads only
+`tools/save_compat_current/record.json` and its listed fixtures; those files are
+outside the historical manifest and fixture-discovery paths. It checks the live
+Haskell and Lua registrations, framing version, fixture checksums and nonempty
+summaries, then decodes the recorded current fixtures with the compiled codec
+and compares their descriptors with the independent record.
+
+```bash
+cabal build all
+python3 tools/save_compat_audit.py --mode current
+python3 tools/test_save_compat_audit.py --mode current
+```
+
+The current self-test selection contains 7 members. The existing selection
+function is unchanged: its bare, `--without-reproducibility` and
+`--only-reproducibility` forms still select 104, 102 and 2 members respectively
+(measured from the selection function before and after this change). Current
+tests are separate until PSP-5. The `--mode current` self-test rejects either
+legacy reproducibility flag.
+
+To replace a current fixture, decode and re-encode a real session through
+`exe:synarchy-save-codec`, write its committed summary once, update its
+checksums and provenance in the current record, and hand-maintain the expected
+descriptor table independently. The audit never regenerates fixture summaries.
+It refuses fixtures whose framing, component versions, required flags or
+descriptors no longer match the live current schema. This slice does not boot
+the engine or run a migration probe.
+See [current audit details](../docs/save_compat_current_mode.md) for fixture
+replacement and validation behavior.
