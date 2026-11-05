@@ -329,31 +329,14 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--seed2", type=int, default=7)
     ap.add_argument("--size", type=int, default=64)
-    ap.add_argument("--keep-artifacts", action="store_true",
-                    help="retain isolated resources and engine logs under project evidence/2915")
     args = ap.parse_args()
-    args.keep_artifacts = (args.keep_artifacts
-                           or os.environ.get("SYNARCHY_KEEP_PROBE_ARTIFACTS") == "1")
 
     tmpdir = tempfile.mkdtemp(prefix="transactional_load_probe_")
     try:
         root = make_isolated_root(tmpdir)
-        result = _run(args, root)
-        if args.keep_artifacts:
-            stamp = time.strftime("%Y%m%dT%H%M%S")
-            evidence = os.path.expanduser(
-                f"~/.local/state/project-manager/synarchy/evidence/2915/"
-                f"transactional_load_{stamp}_{args.port}")
-            os.makedirs(os.path.dirname(evidence), exist_ok=True)
-            shutil.copytree(root, os.path.join(evidence, "root"), symlinks=True)
-            log = f"/tmp/transactional_load_probe_{args.port}.log"
-            if os.path.exists(log):
-                shutil.copy2(log, os.path.join(evidence, "engine.log"))
-            print(f"Artifacts retained at {evidence}")
-        return result
+        return _run(args, root)
     finally:
-        if not args.keep_artifacts:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _run(args, root: str) -> int:
