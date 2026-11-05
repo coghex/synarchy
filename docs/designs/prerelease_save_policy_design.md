@@ -226,8 +226,9 @@ analyze whether a retained historical decoder could still be compatible.
 
 Keep the small generated current-schema record, base-ref comparison that
 candidate regeneration cannot bypass, coverage/ambiguity failures, documented
-semantic limits and synthetic self-tests. No new migration or historical
-fixture is required. PSP-2 supplies the guard; PSP-5 activates it.
+semantic limits and synthetic self-tests. D-9 supersedes source-text discovery
+with compiled shape evidence, live registries and behavioral checks. No new
+migration or historical fixture is required. PSP-2 supplies the guard; PSP-5 activates it.
 
 This amendment is authorized by verified syn-manager reply
 `k8nvcbvvekhi9gqddjdbn86vcs` to PSP-2 question
@@ -290,6 +291,47 @@ Authority: verified syn-manager reply `34bhbcdfuuzkcwuqbz3bbq7yi2` to question
 and directing a design decision record followed by the PSP-5 draft for signoff.
 This policy answer does not itself approve the PSP-5 tracker artifact.
 
+### D-9. Read shapes from compiled code and versions from live registries
+
+Owner ruling on 2026-11-05: "Rewrite on compiled code". Close the source-parser
+attempt #2922, retain its branch for reference, amend #2916, and obtain fresh
+issue approval before a new implementation/review cycle. This supersedes the
+intermediate "Strict canonical forms" direction; do not keep expanding a
+source parser or require a special source spelling for this guard.
+
+The compiled helper walks actual persisted Haskell DTO Generic/Typeable
+representations transitively, including constructor/field order, instantiated
+field types, record selectors and newtypes; GHC resolves aliases. Bind the
+roots to the actual codecs before type erasure. Current/accepted versions
+come from the compiled component registry and metadata/framing values, plus
+the evaluated Lua save-module registry after loading the real modules in the
+existing headless Lua harness. Loading or coverage failures fail closed.
+Verify the real decoder entry points agree with reported acceptance, including
+full-session and metadata-only framing and exact-shape legacy paths.
+
+Generic is not proof of a Serialize implementation. Explicitly cover custom,
+newtype-derived and library encoding boundaries; fail when unlisted. Lua's
+dynamic payloads and hand-written framing require explicit owned contracts
+and distinguishing behavioral tests, not an invented GHC representation of
+Lua tables. State those limits and semantic changes with identical shape
+honestly. Undetected encoding/meaning changes still require version advancement,
+current-only acceptance and reviewed distinguishing evidence.
+
+Retain D-5's per-affected-carrier comparison rule and current-only acceptance.
+Extract both actual revisions independently, including the pre-guard base
+without a record/helper; any bootstrap inspection adapter preserves base
+wire declarations, version values and decode behavior. A regenerated candidate
+record never substitutes for that base. Keep the record/comparison/test ideas
+from #2922 where sound and independent of parsing. PSP-5 owns activation;
+strict gates remain until then. This changes no slice boundaries.
+
+Authority: task brief `save-policy-psp2-rewrite.md`, read first for this
+amendment, and verified syn-manager message `524565svgg4h9fvs3xfamdgnua`
+in #syn-save-policy at 2026-11-05 19:35:19 UTC, relaying the owner ruling.
+The brief authorizes this design publication now and requires the complete
+#2916 amendment and exact #2919/#2914 consistency edits to be presented for
+separate owner signoff via the manager. No tracker amendment is approved yet.
+
 ## Desired behavior and scope
 
 For a persisted-layout change, a contributor advances every affected on-disk
@@ -337,27 +379,51 @@ as well as normal malformed-byte and current-round-trip cases.
 
 ### P-2. Replace historical immutability with current-schema/version enforcement
 
-**Selected by amended D-5.** Use a small source-based current-schema record
-for every current component, metadata, Lua and framing boundary. Include
-transitive records/enums, newtypes/aliases and explicit custom-serializer
-ownership. Reuse discovery/fingerprint helpers where sound; missing or
-ambiguous coverage fails instead of silently omitting a carrier.
+**Selected by D-5 and D-9.** Emit a small canonical current-schema record
+from a compiled helper in the headless Hspec target or an existing Cabal
+executable. Walk each actual Haskell wire root's Generic/Typeable representation
+transitively, preserving ordered constructors/fields, record selectors,
+instantiated types and newtypes; aliases resolve through GHC. Capture roots
+before the component registry erases the DTO type. Cover metadata and framing,
+shared-type ownership and every live registration; unknown, duplicate, newly
+reachable or ambiguous coverage fails with a named carrier/reachability path.
+No source parser or source-text fingerprint is authoritative for this guard.
 
-Compare candidate source/schema with an explicit base revision. Any persisted
-shape change, including an enum append, requires every affected real on-disk
-version to advance. Regenerating the candidate record cannot bless a
-same-version change. Each affected carrier's accepted-version set must then
-be exactly its new current version, and its affected exact-shape legacy routes
-must be disabled. Fail on any older accepted version; do not compare old
-decoder shapes or decide whether they remain compatible. Unchanged carriers
-need no blanket purge. Keep existing source implementations where practical;
-no new migration or historical fixture is required.
+Obtain Haskell current/accepted versions from live registries and compiled
+metadata/framing values. Load the real Lua registering modules in the existing
+headless Lua harness and inspect the evaluated registry, including expressions
+and aliases. Service stubs must not substitute fake save modules. Check actual
+public decoder behavior against the reported policy, including framing and
+legacy fallbacks on full-session and metadata-only paths. Explicit legacy-route
+ownership includes B2's Haskell components; unknown ownership fails closed.
 
-The record is a current schema record, not a growing release history. Ignore
-comment/layout-only edits; document the limits of source inspection for custom
-serializers and indistinguishable positional values. Undetected encoding or
-meaning changes still require version advancement, current-only acceptance,
-explicit review evidence and a distinguishing test.
+Compare independently extracted base/candidate evidence for an explicit base
+revision. A persisted shape change, including an enum append, requires every
+affected real on-disk version to increase. A changed shape or version increase
+requires that carrier to accept exactly its current version and disables its
+affected exact-shape legacy routes. Do not analyze historical decoder shapes.
+Unchanged carriers need no blanket purge; retiring one old registration alone
+does not force retirement of other unchanged versions. Reject version decreases
+and unaccounted coverage loss; new carriers enter explicit coverage.
+
+Record regeneration, editing or deletion cannot bless same-version drift.
+First introduction must extract the actual pre-guard base without a record or
+helper, retaining its composed decoders and behavior; an inspection adapter
+cannot copy candidate types/records or replace base values. Missing refs,
+failed builds/extraction, incomplete evidence and candidate-to-itself checks
+fail. Record commits, tracked working-edit identity, toolchain/extractor
+identity and per-tree provenance so stale/opposite-tree binaries cannot pass.
+
+Classify custom serialization explicitly. Generic does not prove that a
+Serialize instance uses generic encoding; hand-written, newtype-derived and
+library codecs need explicit owned wire contracts and distinguishing tests
+where generic shapes do not describe their encoding. Lua dynamic payloads and
+hand-written framing are such boundaries. Unlisted boundaries fail closed.
+Compiled framing constants and custom contracts belong in the current record.
+This is a small replaceable record, not release history. Comments/layout and
+off-wire changes do not cause bumps. Semantic changes at identical shape and
+arbitrary custom behavior remain review/test obligations: a refreshed descriptor
+or an oracle generated by the changed serializer is not independent evidence.
 
 **Implementation placement approved with PSP-2 revision 2:** enum changes
 use the same new guard; do not add a separate enum-audit pre-release mode or
@@ -407,8 +473,12 @@ current
 fresh-process probe selected under its existing persistence-change policy;
 there is no need to reduce its three existing cycles to one.
 
-The current schema guard and current codec checks remain mandatory. Retain
-framing safety checks; historical immutability/reproduction obligations
+The compiled current schema guard, its nonempty extraction/behavior tests,
+live Lua registry inspection and current codec checks remain mandatory. The
+Python entry point may orchestrate builds and compare records, but may not
+parse source for schema/version/dispatch facts. PSP-5 wires independent base
+and candidate evidence for PRs, master push spans and tracked local edits.
+Retain framing safety checks; historical immutability/reproduction obligations
 are retired, including their obsolete implementations and records.
 `ci_parity_save_compat.py` must test the new actual policy,
 including absence of implicit historical work, rather than deleting its parity
@@ -509,29 +579,35 @@ processing. Q-1/Q-2 are resolved; they impose no further decision stop.
 
 - **Outcome:** Mechanical shape changes cannot pass by refreshing a golden
   file at the same version. Every affected carrier advances and accepts only
-  its new current version, with older accepted dispatch and affected legacy
-  routes removed. Historical decoder compatibility analysis is unnecessary.
-- **Scope / touched paths:** A focused current-schema guard, small generated
-  record, necessary reusable enum parsing/component discovery/fingerprint
-  helpers and tests, explicit ownership declarations and brief policy comments.
-  No separate enum pre-release mode/updater is proposed; PSP-5 owns selection.
-- **Phase / ordering:** 2, critical path. **Depends on:** PSP-1 (#2915).
-- **Relevant decisions:** D-1, amended D-4/D-5. **Open questions:** None.
-  The revised issue and enum placement were approved and filed as #2916.
-- **Acceptance signals:** Synthetic base/candidate cases cover record field
-  add/remove/reorder/retype, enums including append, aliases/newtypes, shared
-  shapes with partial bumps, baseline rewrite/deletion, unknown/ambiguous
-  coverage, custom owners, and any older accepted version/legacy route left on
-  an affected carrier. Complete bumps plus current-only dispatch pass without
-  migrations/fixtures; comments/layout and off-wire cases do not cause false
-  bumps. Cover initial record bootstrap and subsequent comparisons; state
-  semantic limits and required review evidence.
-- **Gates:** New guard self-tests and base-ref check; enum audit/self-tests;
-  discovery/fingerprint self-tests; `save components` dispatch invariants.
-  Existing mandatory checks remain active until PSP-5 switches policy.
-- **Out of scope:** Historical decoder compatibility analysis, a separate enum
-  pre-release mode, corpus expansion, serializer formal proof, deleting
-  migration source, or disabling legacy gates before activation.
+  its current version, with older dispatch and affected legacy routes disabled.
+- **Scope / touched paths:** Compiled Generic/Typeable inspector, live Haskell
+  and Lua registry inspection, thin orchestration/comparison driver, small
+  generated record, necessary type/inspection hooks and focused tests. Explicit
+  ownership/contracts for custom serializers, Lua payloads and framing.
+  No authoritative source parsing or canonical-source restrictions.
+- **Phase / ordering:** 2, critical path. **Depends on:** PSP-1 (#2915), delivered.
+- **Relevant decisions:** D-1, D-4/D-5 and D-9. **Open questions:** None.
+  #2916 remains the linked slice. Its source-parser implementation #2922 is
+  closed; the compiled replacement amendment below awaits owner signoff,
+  then fresh issue review and implementation. No ledger advancement is needed.
+- **Acceptance signals:** Compiled fixtures and comparator cases cover field
+  add/remove/reorder/retype, same-typed named-field swaps, enum reorder/append,
+  GHC-resolved aliases/newtypes, shared-type partial bumps, record bypasses,
+  unknown/custom coverage and actual retained older acceptance/legacy routes.
+  All three #2922 reviews map to regressions over evaluated values and real
+  public decoder paths, including syntax variations, dead-code wrappers and
+  direct legacy calls. Legal syntax preserving behavior passes. Custom cases
+  have owned behavioral tests and honest limits, not generic-proof claims.
+  Complete bumps plus current-only dispatch pass without historical fixtures.
+  Compare the actual pre-guard base and candidate for bootstrap; record evidence
+  identity and fail on missing/stale extraction. Layout/off-wire cases pass.
+- **Gates:** Proposed nonempty `current save schema` Hspec group; thin driver's
+  self-tests, base-ref and record-update interfaces; existing enum checks;
+  `save components`, `save envelope`, `Lua persistence components`; applicable
+  reused-helper regressions. Strict defaults remain until PSP-5 activation.
+- **Out of scope:** Arbitrary serializer proof, historical decoder compatibility
+  analysis, a separate enum mode, corpus expansion, gameplay/wire redesign,
+  deleting migration source or disabling legacy gates before activation.
 
 ### PSP-3. Separate current-save auditing from historical compatibility auditing
 
@@ -1364,3 +1440,222 @@ This document is the arc record and keeps its processing history. Do not archive
 it while epic #2914 remains open or open issues cite this path. Once the epic is
 closed and no open issue cites it, follow the repository's archival rule with
 `git mv` and `docs-push`; that future disposition is not performed here.
+
+## PSP-2 compiled-code amendment — pending tracker signoff
+
+D-9 is an authorized and published design decision. This section is the complete
+proposed tracker amendment, not approval to mutate GitHub. It supersedes the
+source-based #2916 wording only after owner signoff. The earlier PSP-5 payload
+above remains the historical approved/filed text; the exact consistency edits
+below are the proposed update. No titles, labels, dependencies or child
+checkboxes change. The manager re-runs issue readiness after approved edits;
+this design task does not set approval labels or start implementation.
+
+### Proposed #2916 body (complete)
+
+Title unchanged: [save-policy PSP-2] Enforce current-schema version changes without requiring migrations
+
+Existing classification labels unchanged: `enhancement`, `save-load`, `tooling`.
+The current readiness approval is not reused for the amended specification.
+
+````markdown
+## Background
+
+PSP-2 of #2914, Phase 2, critical path, depends on #2915 (PSP-1), now delivered. The owner ruled "Rewrite on compiled code" on 2026-11-05 after three CHANGES_REQUESTED rounds on the now-closed PR #2922. This replaces the source-parsing approach and its canonical-syntax restrictions; the retained branch is reference material only. A fresh implementation and review cycle is required.
+
+Before release, a persisted shape change advances every affected component, metadata, Lua or framing version, and each affected carrier then accepts only its current version. Disable its older accepted decoders and affected exact-shape legacy routes. No historical-decoder compatibility analysis, new migration or historical fixture is required.
+
+The live Haskell registry exposes rcVersion/rcInputVers, but erases the wire DTO type; componentCodec still knows that type through ComponentSpec d a. Metadata/framing have separate compiled constants and dispatch. The real Lua save-module registry contains evaluated version/inputVersions values and is exercised by the existing headless Lua harness. These are the evidence sources, not parsed source spellings. Generic describes representation, not arbitrary Serialize behavior.
+
+## Requirements
+
+1. Produce a small canonical current-schema record with a compiled helper in the headless Hspec target or an existing Cabal executable. Walk actual persisted Haskell wire roots using GHC Generic/Typeable representations, transitively including instantiated field types, ordered constructors/fields, record selectors, newtypes and GHC-resolved aliases. Preserve shared-type ownership and report every affected carrier with a reachability path. Bind roots to actual codec DTO types before erasure; do not maintain an unchecked parallel list of names. Cover metadata and framing as well as the live component registry. Missing, newly reachable, duplicate or ambiguous coverage fails closed. No source parser or source-text fingerprint is authoritative for shapes, versions, registrations or dispatch.
+2. Explicitly classify reachable serialization boundaries. Generic/Typeable alone cannot tell whether a Serialize instance uses generic encoding: hand-written, newtype-derived and library codecs need explicit treatment, owned wire descriptors and distinguishing behavioral tests where their encoding is not represented by the generic walk. Unlisted/unsupported boundaries fail closed; a Generic instance must not silently bless a custom encoder. Lua's dynamic payload schemas and the hand-written framing bytes belong to this explicit treatment, not a fictional GHC representation of Lua tables. Record compiled framing constants and the custom owners in the canonical record. State honestly which custom contracts are declared/tested rather than mechanically derived. Encoding or meaning changes outside detection still require every affected version to advance, current-only acceptance, review evidence and a distinguishing test; a refreshed descriptor or self-generated expected output is not that evidence.
+3. Read current and accepted versions from the live compiled Haskell registry and metadata/framing values, and from the evaluated Lua registry after loading the real registering modules in the existing headless Lua harness. Load production registration paths with only necessary engine-service stubs; do not substitute fake save modules or discover registrations with source patterns. Cross-check complete carrier coverage and fail on loading/coverage errors. Aliases, expressions, concatenations and registration wrappers must expose their actual runtime values. Prove advertised acceptance agrees with the real decoder entry points, including full-session and metadata-only framing/legacy paths; constants or a manually declared enabled flag alone are insufficient. Explicit legacy-route ownership must cover all affected carriers, including B2's Haskell components. Unknown ownership fails; do not compare historical decoder shapes.
+4. Compare independently obtained base and candidate evidence for an explicit base revision. A changed recorded shape, including an enum append, requires a strictly increased real on-disk version for every affected carrier. A changed shape or version increase requires that carrier's accepted set to be exactly its current version and its affected exact-shape legacy routes to be disabled. Unchanged carriers need no blanket purge; removing one old registration alone must not demand retirement of other unchanged versions. Reject version decreases and unaccounted coverage loss. New carriers enter explicit coverage. Regenerating, editing or deleting the candidate record cannot bless same-version drift. The bridge-only currentSaveVersion is not protection.
+5. Make first introduction non-vacuous: compile/extract the actual pre-guard base as well as the candidate, including a base with no generated record/helper and the existing composed older decoders. Any bootstrap inspection adapter must leave base wire declarations, version values and decoder behavior intact and be recorded with its provenance. Never substitute candidate types, candidate records, hand-entered expected shapes, or an empty base. Later checks likewise validate record freshness against compiled evidence. Missing refs, extraction/build failures, incomplete evidence and candidate-to-itself comparisons fail clearly. Record resolved commits, tracked working-edit identity, toolchain/extractor identity and which evidence belongs to which tree; never reuse a stale or opposite-tree binary. PSP-5 owns PR/master/local selection wiring.
+6. Keep enum enforcement in this guard; no separate enum pre-release mode/updater. Off-wire changes and comment/layout-only edits do not change the record. Reuse #2922's record/comparison/self-test ideas only where independent of source parsing. Keep existing strict enum/default gates unchanged until PSP-5 activates the replacement and retires historical machinery. No production wire/acceptance changes merely to satisfy the tooling; minimal inspection hooks, type evidence and behavior-preserving boundary factoring are in scope.
+
+## Acceptance
+
+Keep the Python entry point only as orchestration/comparison over compiled/runtime evidence. Provide --self-test, --base-ref and --update-record; update-record does not replace the independent base check. Add a nonempty compiled Hspec group named "current save schema" for extraction, coverage and behavioral regressions. Proposed commands after implementation:
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "current save schema"'
+python3 tools/current_save_schema_audit.py --self-test
+python3 tools/current_save_schema_audit.py --base-ref origin/master
+python3 tools/enum_append_only_audit.py --self-test
+python3 tools/enum_append_only_audit.py
+cabal test synarchy-test-headless --test-options='--match "save components"'
+cabal test synarchy-test-headless --test-options='--match "save envelope"'
+cabal test synarchy-test-headless --test-options='--match "Lua persistence components"'
+python3 tools/test_save_compat_audit.py --without-reproducibility
+```
+
+Record actual nonzero example counts and resolved base/candidate identities. Use a real distinct comparison base, including the introduction's actual pre-guard base. Demonstrate that a same-version compiled shape mutation fails both before and after record regeneration/deletion, and that a correct bump with current-only dispatch passes without migration/fixture inputs.
+
+Use compiled base/candidate fixtures plus comparator tests for field add/remove/reorder/retype, enum reorder/append, alias parameter permutations, nested/newtype/container types, shared types with partial bumps, missing custom ownership, new or omitted live registrations, and retained older versions/legacy routes. Include an equal-typed named-field swap. Positive cases cover unchanged shapes, whitespace/comments, off-wire edits and removing just one older registration. A model-only synthetic dictionary test does not establish extractor correctness.
+
+Map all three #2922 reviews to regression evidence: evaluated multiline/prefix version expressions; Lua registry aliases, quote/comment/spacing variants and whole-table expressions; appended/wrapped Haskell registries; older decoders behind composition/aliases; metadata list concatenation; framing calls through aliases or similarly prefixed identifiers; a dead-code rejection wrapper; direct legacy entry-point bypasses; and custom-encoder string-literal whitespace. Legal syntax with unchanged behavior passes; unsafe actual versions, acceptance or routes fail. Custom/semantic cases must have an explicit owned behavioral test and stated limit, never a claimed generic guarantee. Exercise public decode paths, not only the inspection report.
+
+No game boot, runtime probe, full headless suite or make ci is required. Follow the shared build-lock protocol for compiled validation. Preserve relevant helper regressions if reused and existing gate behavior throughout preparation.
+
+## Out of scope
+
+Historical-decoder compatibility analysis; a Haskell/Lua source parser or canonical-source language; automatic proof of arbitrary serializers; a separate enum mode; new migrations/historical fixtures or bulk runtime source deletion; gameplay/save-format changes; historical audit/test partitioning (PSP-3/4); mandatory gate activation (PSP-5).
+
+Scope is the compiled inspector, thin driver/comparator, current record, necessary live inspection hooks and focused tests. Tool-consumed records and executable Markdown follow the code PR. Human-facing documentation uses docs-push and is linked from the PR before final review.
+
+## Related
+
+- #2914: epic. Depends on #2915; #2919 activates this guard after all prerequisites land.
+- #2922: closed source-parser attempt; read its three review comments as the regression catalogue, not implementation instructions.
+- #2912: delivered intermediate probe opt-in; PSP-5 retires that probe.
+- Design: docs/designs/prerelease_save_policy_design.md, P-2/PSP-2, D-5/D-9. Owner ruling relayed by verified syn-manager message 524565svgg4h9fvs3xfamdgnua in #syn-save-policy on 2026-11-05.
+
+<!-- issue-origin:codex -->
+````
+
+### Exact related tracker edits — pending owner signoff
+
+Titles, labels, child checkboxes and dependencies remain unchanged. The Python command remains a thin driver, so it is not removed. No source-parsing command is left authoritative.
+
+#### #2919
+
+##### Replacement 1
+
+Replace exactly:
+
+```text
+Activate #2916's current-schema guard,
+```
+
+With:
+
+```text
+Activate #2916's compiled current-schema guard (including its nonempty compiled extraction/behavior tests and live Lua registry inspection),
+```
+
+##### Replacement 2
+
+Replace exactly:
+
+```text
+Record resolved base/candidate identities. Missing comparison evidence fails clearly;
+```
+
+With:
+
+```text
+Build/extract independent evidence from both revisions through #2916's compiled helper and live registries; the Python command is orchestration/comparison only, never source parsing. Include the compiled helper and its tests in gate selection. Record resolved base/candidate commits, tracked working-edit identity, toolchain/extractor identity and per-tree evidence provenance; never reuse a stale or opposite-tree binary. Missing comparison evidence fails clearly;
+```
+
+##### Replacement 3
+
+Replace exactly:
+
+```text
+Explain the guard's semantic limits and current-test procedure.
+```
+
+With:
+
+```text
+Explain the compiled guard's semantic and custom-serializer limits, explicit custom ownership (including dynamic Lua payloads and hand-written framing), and current-test procedure. Runtime acceptance and legacy-route behavior must agree with the inspected policy; do not restore canonical-source restrictions.
+```
+
+##### Replacement 4
+
+Replace exactly:
+
+```text
+cabal build synarchy-test-headless
+python3 tools/current_save_schema_audit.py --self-test
+```
+
+With:
+
+```text
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "current save schema"'
+python3 tools/current_save_schema_audit.py --self-test
+```
+
+##### Replacement 5
+
+Replace exactly:
+
+```text
+Run the guard's real base-ref check with recorded SHAs
+```
+
+With:
+
+```text
+Run the guard's real base-ref check over independently compiled base/candidate evidence, including the actual pre-guard bootstrap boundary, with recorded SHAs
+```
+
+##### Replacement 6
+
+Replace exactly:
+
+```text
+PSP-5/P-4, D-1–D-8.
+```
+
+With:
+
+```text
+PSP-5/P-4, D-1–D-9.
+```
+
+#### #2914
+
+##### Replacement 1
+
+Replace exactly:
+
+```text
+The owner approved an automated current-schema/version guard and a future compatibility promise beginning with the first public-release save format.
+```
+
+With:
+
+```text
+The owner approved an automated current-schema/version guard and a future compatibility promise beginning with the first public-release save format. The later owner ruling "Rewrite on compiled code" replaces #2922's closed source-parser attempt: #2916 reads persisted Haskell shapes through compiled Generic/Typeable evidence and versions through live Haskell/Lua registries, with explicit treatment of custom serializers and behavioral checks of actual acceptance/legacy paths.
+```
+
+##### Replacement 2
+
+Replace exactly:
+
+```text
+The automated guard rejects same-version shape drift even after baseline regeneration and documents its semantic limits.
+```
+
+With:
+
+```text
+The compiled guard compares independent base/candidate evidence, including a non-vacuous pre-guard bootstrap, and rejects same-version shape drift even after record regeneration. Missing coverage/evidence fails closed. It documents semantic/custom-serializer limits, including dynamic Lua payloads; source-pattern matching and canonical-source restrictions are not enforcement.
+```
+
+### Amendment evidence and scope
+
+Read all three #2922 reviews (comments 6666285557, 6666512335, 6667325506)
+and the live #2916/#2919/#2914 bodies. Verified current code at master
+`a431c215752f25ec4e9142fb1768c8f333437544`: ComponentSpec retains the actual
+DTO type before componentCodec/RegisteredComponent erasure; rcVersion and
+rcInputVers are runtime projections of the dispatch table. Metadata and framing
+are separate compiled boundaries. The Lua registry exposes evaluated specs;
+SaveModules.Support/Components exercise real modules without engine boot.
+Generic does not describe arbitrary Serialize code or dynamic Lua payloads,
+so D-9's explicit custom treatment is essential. No divergence from the owner's
+direction was identified; no new policy question is opened.
+
+This amends an existing child and its two named consistency surfaces, creates
+no issue and processes no later slice. The ledger remains six linked entries,
+zero unchecked; that records filing, not implementation. No implementation,
+branches, builds, tests, engines or review runs were performed. The separate
+PSP-4 work and unrelated dirty probe-census files were left untouched.
