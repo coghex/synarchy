@@ -26,6 +26,7 @@ import qualified Data.Text as T
 
 import qualified Data.HashSet as HS
 import World.Save.Envelope
+import World.Save.Wire (emptyWireRoot)
 import World.Save.Envelope.Codec
     (encodeEnvelope, decodeEnvelope, DecodedEnvelope(..))
 import World.Save.Envelope.Types
@@ -919,6 +920,7 @@ countingCodec ref required = ComponentCodec
     , ccEncode    = const (S.encode (0 ∷ Word32))
     , ccDecode    = countedDecode ref
     , ccValidate  = const []
+    , ccWire      = emptyWireRoot
     }
 
 -- | The probe's assembly fold. It only has to prove it RAN without

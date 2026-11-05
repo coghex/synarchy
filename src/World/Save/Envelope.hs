@@ -77,6 +77,22 @@ module World.Save.Envelope
     , decodeSessionEnvelopeClassified
     , decodeSaveEnvelopeMetadataClassified
     , foreignOptionalComponentIds
+      -- * Inspection hooks for the current-schema guard (issue #2916)
+      --
+      -- Read-only views of the SAME bindings and entry points the decode
+      -- path uses; none changes what is accepted.
+    , metadataComponentInputVersions
+    , metadataWireRoot
+    , framingWireRoot
+    , LegacyDecodeResult(..)
+    , decodeLegacySessionEnvelope
+    , decodeLegacySessionMetadata
+    , decodeB2SessionEnvelope
+    , decodeB2SessionMetadata
+    , b1LegacyIds
+    , b2Ids
+    , luaStateComponentId
+    , luaStateComponentVersion
     ) where
 
 import UPrelude
@@ -89,6 +105,8 @@ import World.Save.Envelope.Types
 import World.Save.Envelope.Codec
 import World.Save.Payload (LuaComponentSpec(..))
 import World.Save.Types (SaveMetadata)
+import World.Save.Wire (WireRoot, wireRoot)
+import Data.Proxy (Proxy(..))
 import World.Save.Compat.MetadataV1
     (decodeSaveMetadataV1, migrateSaveMetadataV1)
 import World.Save.Compat.MetadataV2
@@ -104,6 +122,18 @@ import World.Save.Component.Types
 import World.Save.Compat.SessionV90
     ( sessionComponentId, sessionComponentVersion
     , decodeSessionV90, migrateSessionV90 )
+
+-- | The compiled wire shape of the @"metadata"@ component's CURRENT
+--   payload: the type 'encodeSessionSnapshot' encodes with 'S.encode'
+--   (issue #2916).
+metadataWireRoot ∷ WireRoot
+metadataWireRoot = wireRoot (Proxy ∷ Proxy SaveMetadata)
+
+-- | The compiled wire shape of the cereal-encoded manifest the framing
+--   carries. The hand-written header bytes around it are declared and
+--   probed by the guard, not derived (issue #2916).
+framingWireRoot ∷ WireRoot
+framingWireRoot = wireRoot (Proxy ∷ Proxy EnvelopeManifest)
 
 -- | The envelope-framing generation (requirement 15): bumped only when
 --   the FRAMING contract itself changes incompatibly — never merely

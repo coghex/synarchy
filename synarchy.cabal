@@ -1104,6 +1104,8 @@ library
                      World.Save.Envelope.Codec
                      World.Save.Envelope
                      World.Save.Component.Types
+                     World.Save.Wire
+                     World.Save.Wire.Custom
                      World.Save.Component.WorldGen
                      World.Save.Component.WorldGenClimate
                      World.Save.Component.WorldGenNaming
@@ -1711,6 +1713,10 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.Save.CurrentSchema
+                   Test.Headless.World.Save.CurrentSchema.Fixtures
+                   Test.Headless.World.Save.CurrentSchema.Live
+                   Test.Headless.World.Save.CurrentSchema.Record
                    Test.Headless.World.Save.Components.Fixture
                    Test.Headless.World.Save.Components.Registry
                    Test.Headless.World.Save.Components.Compatibility

@@ -135,6 +135,7 @@ import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
 import qualified Test.Headless.World.Save.Components as SaveComponents
+import qualified Test.Headless.World.Save.CurrentSchema as CurrentSaveSchema
 import qualified Test.Headless.World.Save.Compat as SaveCompat
 import qualified Test.Headless.World.Save.Compat.TagTargets as SaveCompatTagTargets
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
@@ -1091,6 +1092,7 @@ restLane = do
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "save envelope" SaveEnvelope.spec
     describe "save components" SaveComponents.spec
+    describe "current save schema" CurrentSaveSchema.spec
     describe "save migrations" SaveCompat.spec
     -- #2894: every tracked fixture's tile and occurrence tags through the
     -- real load staging, against the shipped materials and flora.

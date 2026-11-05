@@ -23,6 +23,7 @@ import qualified Data.Text as T
 import Numeric (showHex)
 
 import World.Save.Envelope.Types (ComponentId(..))
+import World.Save.Wire (emptyWireRoot)
 import World.Save.Component
 import World.Save.Component.Types
 import World.Save.Component.Session
@@ -1090,4 +1091,5 @@ stubComponent ∷ ComponentId → [ComponentId] → RegisteredComponent
 stubComponent cid deps = RegisteredComponent
     { rcId = cid, rcVersion = 1, rcInputVers = [1], rcRequired = True
     , rcDeps = deps, rcEncode = const BS.empty
+    , rcWire = emptyWireRoot
     , rcPrepare = const (Right (\s → Right s)) }

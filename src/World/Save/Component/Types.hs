@@ -151,6 +151,9 @@ import qualified Data.HashSet as HS
 import qualified Data.List as L
 import World.Page.Types (WorldPageId)
 import World.Save.Snapshot (SessionSnapshot, PageSnapshot)
+import World.Save.Wire (WireSchema, WireRoot, wireRoot)
+import World.Save.Wire.Custom ()
+import Data.Proxy (Proxy(..))
 
 -- | Which phase of turning bytes into a validated snapshot slice failed
 --   (requirement 6: an error names the failing phase, not just that
@@ -198,6 +201,11 @@ data ComponentCodec a = ComponentCodec
     , ccEncode    ∷ SessionSnapshot → BS.ByteString
     , ccDecode    ∷ Word32 → BS.ByteString → Either ComponentError a
     , ccValidate  ∷ a → [ComponentError]
+    , ccWire      ∷ ~WireRoot
+      -- ^ The compiled wire shape of the CURRENT version's frozen DTO,
+      --   taken from the type 'componentCodec' encodes before the
+      --   registry erases it (issue #2916). Lazy and unused by save/load:
+      --   only the current-schema guard forces it.
     }
 
 -- | What one prepared component contributes to assembly: a fold from
@@ -230,6 +238,8 @@ data RegisteredComponent = RegisteredComponent
     , rcRequired     ∷ !Bool
     , rcDeps         ∷ ![ComponentId]
     , rcEncode       ∷ SessionSnapshot → BS.ByteString
+    , rcWire         ∷ ~WireRoot
+      -- ^ 'ccWire', carried through erasure (issue #2916).
     , rcPrepare      ∷ DecodedEnvelope
                        → Either [ComponentError] ComponentFold
       -- ^ Decode + component-local-validate this component from a
@@ -281,6 +291,7 @@ registerComponent cc fold = RegisteredComponent
     , rcRequired     = ccRequired cc
     , rcDeps         = ccDeps cc
     , rcEncode       = ccEncode cc
+    , rcWire         = ccWire cc
     , rcPrepare      = \de →
         if optionalAndAbsent de then Right (\snap → Right snap)
         else do
@@ -452,7 +463,8 @@ olderVersionTableError (ComponentId cid) current = go HS.empty
 --   parsing the same declarations, the registered-codec invariants in
 --   the @save components@ hspec group) observes the SAME rule and is
 --   documented defense-in-depth, not a second source of truth.
-componentCodec ∷ S.Serialize d ⇒ ComponentSpec d a → ComponentCodec a
+componentCodec
+    ∷ ∀ d a. (S.Serialize d, WireSchema d) ⇒ ComponentSpec d a → ComponentCodec a
 componentCodec spec =
     case olderVersionTableError cid (csVersion spec) declaredOlder of
       Just problem → error (T.unpack problem)
@@ -471,6 +483,7 @@ componentCodec spec =
                                    <> " (reader supports "
                                    <> T.intercalate ", " renderedVersions <> ")"))
         , ccValidate  = csValidate spec
+        , ccWire      = wireRoot (Proxy ∷ Proxy d)
         }
   where
     cid           = csComponent spec
