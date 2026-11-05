@@ -7296,8 +7296,9 @@ difference by the scale, each of which yields a different number),
 `--match "Sim.Fluid.Conservation"`, `--match "Sim.Fluid.Seam"`,
 `--match "unlike-fluid reaction"`, `--match "save migrations"` (the
 v1/v2/v3 → v4 scaling and the exact round trip),
-`python3 tools/save_compat_audit.py`, and
-`python3 tools/save_compat_migration_probe.py`.
+and `python3 tools/save_compat_audit.py`. The slow
+`python3 tools/save_compat_migration_probe.py` (every legacy fixture, about an
+hour) is optional (#2912): run it on request, not as a required gate.
 
 The tracked `z3-exact-fluid-units` fixture is a real saved session whose
 snapshots carry partial top levels under several fluid types, Ocean
