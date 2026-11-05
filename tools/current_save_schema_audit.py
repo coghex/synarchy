@@ -103,6 +103,7 @@ def check(root: Path, base_ref: str, *, extract=None, bootstrap_fn=None) -> dict
     result["candidate"] = {
         "examples": ev.examples, "failures": ev.failures,
         "extractorSha256": ev.executable_sha256, "toolchain": ev.toolchain,
+        "provenance": ev.provenance,
         "mode": "compiled from the candidate tree only"}
     committed = root / RECORD_REL
     result["problems"] += check_fresh(
@@ -143,7 +144,8 @@ def render(result: dict) -> str:
         lines.append(f"candidate extraction: {cand['examples']} examples, "
                      f"{cand['failures']} failures, extractor "
                      f"{cand['extractorSha256'][:12]}, ghc "
-                     f"{cand['toolchain'].get('ghc')} ({cand['mode']})")
+                     f"{cand['toolchain'].get('ghc')} ({cand['mode']}); "
+                     f"provenance {cand.get('provenance')}")
     lines += [f"note: {n}" for n in result["notes"]]
     if result["problems"]:
         lines.append(f"FAIL ({len(result['problems'])} problem(s)):")

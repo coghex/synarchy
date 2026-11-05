@@ -485,8 +485,7 @@ liveExtras lua = object
     [ "luaWire" .= object
         [ "owner" .= ("scripts/lib/data_codec.lua" ∷ Text)
         , "versioned" .= False
-        , "probeHex" .= leProbe lua ]
-    , "luaLoader" .= object [ "scriptsRequested" .= length (leLoaded lua) ] ]
+        , "probeHex" .= leProbe lua ] ]
 
 -- | A carrier whose advertised acceptance disagrees with what its real
 --   decode entry point accepts.

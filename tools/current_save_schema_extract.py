@@ -37,6 +37,7 @@ class Evidence:
     executable: str
     executable_sha256: str
     fixtures: list = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
 
 def _run(cmd, cwd: Path, env=None, timeout=None) -> subprocess.CompletedProcess:
@@ -109,7 +110,8 @@ def build_and_run(root: Path, builddir: Path | None = None,
     toolchain["ghc"] = ghc.stdout.strip()
     return Evidence(record=record, toolchain=toolchain, examples=examples,
                     failures=failures, executable=str(exe),
-                    executable_sha256=digest, fixtures=fixtures)
+                    executable_sha256=digest, fixtures=fixtures,
+                    provenance=dict(payload.get("provenance", {})))
 
 
 def bootstrap_base(root: Path, rev: Revisions) -> tuple[dict, dict]:

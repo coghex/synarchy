@@ -22,6 +22,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Serialize as S
@@ -47,7 +48,7 @@ import World.Fluid.Seabed.Types (SeabedTable(..))
 import World.Geology.Coastal.Types (CoastalTable(..))
 import World.Geology.Ore.Types (WorldOreDeposits(..))
 import World.Save.Compat.SessionV90 (sessionComponentVersion)
-import World.Save.Envelope (luaStateComponentVersion)
+import World.Save.Envelope (luaStateComponentVersion, currentEnvelopeVersion)
 import Test.Headless.World.Save.CurrentSchema.Fixtures
 import Test.Headless.World.Save.CurrentSchema.Live
 import Test.Headless.World.Save.CurrentSchema.Record
@@ -90,11 +91,13 @@ spec = do
             r ← extractLive
             case r of
                 Left ps → expectationFailure (T.unpack (T.unlines ps))
-                Right (record, _) → do
+                Right (record, ev) → do
                     out ← lookupEnv "SYNARCHY_CURRENT_SCHEMA_EVIDENCE"
                     forM_ out $ \path →
                         BL.writeFile path (encode (object
                             [ "record" .= record
+                            , "provenance" .= object
+                                [ "luaScriptsRequested" .= length (leLoaded ev) ]
                             , "toolchain" .= object
                                 [ "compiler" .= T.pack (compilerName ⧺ "-" ⧺ showVersion compilerVersion)
                                 , "arch" .= T.pack arch, "os" .= T.pack os
@@ -146,6 +149,21 @@ spec = do
                 -- declared layout, not produced by the encoder under test
                 actual `shouldBe` expected
 
+    describe "library and primitive boundary layouts" $ do
+        it "every reachable library or primitive boundary has a hand-specified layout, and none is stale" $ do
+            Right (_, ev) ← extractLive
+            let reached = L.sort (L.nub
+                    [ t | c ← liveCarriers ev, Just r ← [ciRoot c]
+                        , n ← Map.elems (wrNodes r)
+                        , t ← case wnKind n of
+                            WKPrimitive d → [d]
+                            WKLibrary d   → [d]
+                            _             → [] ])
+            reached `shouldBe` L.sort [ d | (d, _, _) ← libraryLayouts ]
+        forM_ libraryLayouts $ \(detail, expected, actual) →
+            it ("library boundary layout: " <> T.unpack detail) $
+                actual `shouldBe` expected
+
     describe "acceptance agrees with the real decode entry points" $ do
         it "every carrier's advertised versions equal the versions its decoder accepts" $ do
             Right (_, ev) ← extractLive
@@ -154,10 +172,17 @@ spec = do
         it "the framing declares its advertised version and every entry point agrees" $ do
             Right (_, ev) ← extractLive
             let framing = [ c | c ← liveCarriers ev, ciId c ≡ "framing" ]
-            map ciAccepted framing `shouldBe` [[1]]
+                cur = currentEnvelopeVersion
+            map ciAccepted framing `shouldBe` [[cur]]
             concatMap advertisedMismatch framing `shouldBe` []
-            let widened = [ c { ciAccepted = [0, 1] } | c ← framing ]
+            let widened = [ c { ciAccepted = [cur - 1, cur] } | c ← framing ]
             concatMap advertisedMismatch widened `shouldNotBe` []
+            -- a legitimate bump (current-only decoding at the next
+            -- version) is consistent, so extraction would not reject it
+            let bumped = [ c { ciVersion = cur + 1, ciAccepted = [cur + 1]
+                             , ciDetail = object [ "advertised" .= [cur + 1] ] }
+                         | c ← framing ]
+            concatMap advertisedMismatch bumped `shouldBe` []
 
         it "entry points that disagree about acceptance are reported" $ do
             entryDisagreements "framing" [("a", [1]), ("b", [1])] `shouldBe` []
@@ -220,6 +245,14 @@ spec = do
                     map ciAccepted carriers `shouldBe` [[1, 2]]
                     map ciOwners carriers `shouldBe` [["scripts/fixture_added.lua", "scripts/lib/data_codec.lua"]]
                     liveProblems ev `shouldBe` []
+
+        it "loading an additional non-registering script leaves the canonical record unchanged" $ do
+            Right ev0 ← luaEvidence
+            Right ev1 ← luaEvidenceWith
+                [("scripts/ui_only.lua", "return { init = function() end }")]
+            length (leLoaded ev1) `shouldBe` length (leLoaded ev0) + 1
+            buildRecord (liveCarriers ev1) liveRoutes (liveExtras ev1)
+                `shouldBe` buildRecord (liveCarriers ev0) liveRoutes (liveExtras ev0)
 
         it "a script that cannot initialise fails the run instead of being skipped" $ do
             r ← luaEvidenceWith [("scripts/broken.lua", "return { init = function() error('boom') end }")]
@@ -341,6 +374,38 @@ customLayouts =
     , ( "WorldOreDeposits"
       , lst [coord 1 2 <> lst [be 1 1 <> i64 2, be 1 3 <> i64 4]]
       , S.encode (WorldOreDeposits (HM.singleton (ChunkCoord 1 2) [(1, 2), (3, 4)])) )
+    ]
+
+-- | Every reachable library or primitive boundary, keyed by the
+--   description its instance declares, with bytes specified by hand. The
+--   orphan instances in this repository (Text, HashMap, Vector, HashSet)
+--   are ours; the rest are cereal's, pinned all the same so a swap of the
+--   serializer behind any of them is visible.
+libraryLayouts ∷ [(Text, BS.ByteString, BS.ByteString)]
+libraryLayouts =
+    [ ( "UPrelude orphan Serialize HashMap (list of key/value pairs)"
+      , lst [i64 1 <> i64 2], S.encode (HM.fromList [(1 ∷ Int, 2 ∷ Int)]) )
+    , ( "World.Hydrology.Types orphan Serialize Vector (as a list)"
+      , lst [i64 1, i64 2], S.encode (V.fromList [1, 2 ∷ Int]) )
+    , ( "World.Generate.Types orphan Serialize HashSet (as a list)"
+      , lst [i64 7], S.encode (HS.fromList [7 ∷ Int]) )
+    , ( "cereal list (Int64 length prefix, then elements)"
+      , lst [i64 1, i64 2], S.encode [1, 2 ∷ Int] )
+    , ( "UPrelude orphan Serialize Text (UTF-8, length prefixed)"
+      , i64 2 <> "ab", S.encode ("ab" ∷ Text) )
+    , ( "cereal ByteString (Int64 length prefix)"
+      , i64 2 <> "ab", S.encode ("ab" ∷ BS.ByteString) )
+    , ( "cereal Double (IEEE 754 bits, big endian)"
+      , be 8 0x3FF8000000000000, S.encode (1.5 ∷ Double) )
+    , ( "cereal Float (IEEE 754 bits, big endian)"
+      , be 4 0x3FC00000, S.encode (1.5 ∷ Float) )
+    , ( "cereal Int (8 bytes, big endian)", i64 5, S.encode (5 ∷ Int) )
+    , ( "cereal Int64 (big endian)", i64 (-2), S.encode (-2 ∷ Int64) )
+    , ( "cereal Word8", be 1 7, S.encode (7 ∷ Word8) )
+    , ( "cereal Word16 (big endian)", be 2 0x0102, S.encode (0x0102 ∷ Word16) )
+    , ( "cereal Word32 (big endian)", be 4 0x01020304, S.encode (0x01020304 ∷ Word32) )
+    , ( "cereal Word64 (big endian)", be 8 0x0102030405060708
+      , S.encode (0x0102030405060708 ∷ Word64) )
     ]
 
 fromText' ∷ Text → KM.Key

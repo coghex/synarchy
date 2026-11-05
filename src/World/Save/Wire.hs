@@ -61,6 +61,7 @@ module World.Save.Wire
     , GShape(..)
     , GFields(..)
     , GSample(..)
+    , GMin(..)
     ) where
 
 import UPrelude
@@ -198,6 +199,12 @@ class Typeable a ⇒ WireSchema a where
     --   type cannot make the walk diverge. Leaves ignore the budget.
     wireSamplesD ∷ Int → Proxy a → [a]
     wireSamplesD _ = wireSamples
+    -- | The simplest value that exists, found without a nesting budget
+    --   (the path guards a type that contains itself). It is what keeps a
+    --   deeply wrapped type sampled once the budget is spent, so no
+    --   checked classification is ever left without evidence.
+    wireMinimalD ∷ [Text] → Proxy a → Maybe a
+    wireMinimalD _ = listToMaybe . wireSamples
 
 -- Generic shape ------------------------------------------------------
 
@@ -272,6 +279,23 @@ instance WireSchema c ⇒ GSample (K1 i c) where
         [x]     → [K1 x]
         (x : y : _) → [K1 (if even k then x else y)]
 
+-- | The first constructible value of a representation, constructors in
+--   order, fields minimal. @path@ holds the type keys being built, so a
+--   type that contains itself falls through to another constructor.
+class GMin (f ∷ Type → Type) where
+    gmin ∷ [Text] → [f p]
+
+instance GMin V1 where gmin _ = []
+instance GMin U1 where gmin _ = [U1]
+instance (GMin f, GMin g) ⇒ GMin (f :+: g) where
+    gmin path = map L1 (gmin path) ⧺ map R1 (gmin path)
+instance GMin f ⇒ GMin (M1 i c f) where
+    gmin path = map M1 (gmin path)
+instance (GMin f, GMin g) ⇒ GMin (f :*: g) where
+    gmin path = [ a :*: b | a ← take 1 (gmin path), b ← take 1 (gmin path) ]
+instance WireSchema c ⇒ GMin (K1 i c) where
+    gmin path = maybe [] (pure . K1) (wireMinimalD path (Proxy ∷ Proxy c))
+
 -- | The nesting budget a node's own checks start with.
 sampleDepth ∷ Int
 sampleDepth = 5
@@ -284,7 +308,7 @@ sampleDepth = 5
 --   declared in "World.Save.Wire.Custom" or it fails that check.
 instance {-# OVERLAPPABLE #-}
     ( Generic a, Typeable a, S.Serialize a
-    , GShape (Rep a), S.GSerializePut (Rep a), GSample (Rep a) )
+    , GShape (Rep a), S.GSerializePut (Rep a), GSample (Rep a), GMin (Rep a) )
     ⇒ WireSchema a where
     wireNode p = (genericNode p)
         { wnKind = WKGeneric
@@ -303,9 +327,13 @@ instance {-# OVERLAPPABLE #-}
                     Right y → S.encode (y `asTypeOf` x) ≡ real
                     Left _  → False }
     wireSamples = wireSamplesD sampleDepth
-    wireSamplesD d _
-        | d ≤ 0     = []
+    wireSamplesD d p
+        | d ≤ 0     = maybeToList (wireMinimalD [] p)
         | otherwise = concat [ map to (gsample d k ∷ [Rep a ()]) | k ← [0, 1 ∷ Int] ]
+    wireMinimalD path p
+        | typeKey p `elem` path = Nothing
+        | otherwise = listToMaybe
+            [ to x | x ← (gmin (typeKey p : path) ∷ [Rep a ()]) ]
 
 genericNode
     ∷ ∀ a. (Generic a, Typeable a, GShape (Rep a)) ⇒ Proxy a → WireNode
@@ -452,31 +480,36 @@ instance {-# OVERLAPPING #-} WireSchema a ⇒ WireSchema [a] where
                            [Child (Proxy ∷ Proxy a)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [[], take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy a))]
+    wireMinimalD _ _ = Just []
 
 instance {-# OVERLAPPING #-} WireSchema a ⇒ WireSchema (V.Vector a) where
     wireNode = libraryNode "World.Hydrology.Types orphan Serialize Vector (as a list)"
                            [Child (Proxy ∷ Proxy a)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [V.empty, V.fromList (take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy a)))]
+    wireMinimalD _ _ = Just V.empty
 
 instance {-# OVERLAPPING #-} WireSchema a ⇒ WireSchema (Seq.Seq a) where
     wireNode = libraryNode "cereal Seq (Int64 length prefix, then elements)"
                            [Child (Proxy ∷ Proxy a)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [Seq.empty, Seq.fromList (take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy a)))]
+    wireMinimalD _ _ = Just Seq.empty
 
 instance {-# OVERLAPPING #-} (WireSchema a, Ord a) ⇒ WireSchema (Set.Set a) where
     wireNode = libraryNode "cereal Set (ascending elements)"
                            [Child (Proxy ∷ Proxy a)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [Set.empty, Set.fromList (take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy a)))]
+    wireMinimalD _ _ = Just Set.empty
 
 instance {-# OVERLAPPING #-} (WireSchema a, Hashable a)
     ⇒ WireSchema (HS.HashSet a) where
-    wireNode = libraryNode "cereal HashSet (via list of elements)"
+    wireNode = libraryNode "World.Generate.Types orphan Serialize HashSet (as a list)"
                            [Child (Proxy ∷ Proxy a)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [HS.empty, HS.fromList (take 2 (wireSamplesD (d - 1) (Proxy ∷ Proxy a)))]
+    wireMinimalD _ _ = Just HS.empty
 
 instance {-# OVERLAPPING #-} (WireSchema k, WireSchema v, Ord k)
     ⇒ WireSchema (Map.Map k v) where
@@ -484,12 +517,14 @@ instance {-# OVERLAPPING #-} (WireSchema k, WireSchema v, Ord k)
                            [Child (Proxy ∷ Proxy k), Child (Proxy ∷ Proxy v)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [Map.empty, Map.fromList (pairs d (Proxy ∷ Proxy k) (Proxy ∷ Proxy v))]
+    wireMinimalD _ _ = Just Map.empty
 
 instance {-# OVERLAPPING #-} WireSchema v ⇒ WireSchema (IM.IntMap v) where
     wireNode = libraryNode "cereal IntMap (ascending key/value pairs)"
                            [Child (Proxy ∷ Proxy v)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [IM.empty, IM.fromList (zip [0, 1] (wireSamplesD (d - 1) (Proxy ∷ Proxy v)))]
+    wireMinimalD _ _ = Just IM.empty
 
 instance {-# OVERLAPPING #-} (WireSchema k, WireSchema v, Hashable k)
     ⇒ WireSchema (HM.HashMap k v) where
@@ -497,6 +532,7 @@ instance {-# OVERLAPPING #-} (WireSchema k, WireSchema v, Hashable k)
                            [Child (Proxy ∷ Proxy k), Child (Proxy ∷ Proxy v)]
     wireSamples = wireSamplesD sampleDepth
     wireSamplesD d _ = [HM.empty, HM.fromList (pairs d (Proxy ∷ Proxy k) (Proxy ∷ Proxy v))]
+    wireMinimalD _ _ = Just HM.empty
 
 pairs ∷ (WireSchema k, WireSchema v) ⇒ Int → Proxy k → Proxy v → [(k, v)]
 pairs d pk pv = take 2 (zip (wireSamplesD (d - 1) pk) (wireSamplesD (d - 1) pv))

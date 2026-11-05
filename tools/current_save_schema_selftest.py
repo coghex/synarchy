@@ -52,6 +52,7 @@ def mini(version=1, accepted=None, leaf_fields=(("n", "Int"),),
          route_on=True, lua_version=1, codec="aa", framing="ff"):
     acc = [version] if accepted is None else accepted
     fdetail = {"layout": framing, "advertised": [1], "currentEnvelopeVersion": 1,
+               "entryPoints": ["decodeSaveEnvelopeMetadata"],
                "envelopeMagic": 1397178945, "fnv1a64Probe": "9", "headerSize": 16,
                "layoutProbeHex": "00"}
     flags = {k: route_on for k in cmp.ENTRY_KEYS}
@@ -69,7 +70,8 @@ def mini(version=1, accepted=None, leaf_fields=(("n", "Int"),),
                                  detail={"advertised": [1]}),
             "metadata": carrier("metadata", 3, [1, 2, 3], "M.Meta",
                                 ["M.Meta", "Int"],
-                                detail={"advertised": [1, 2, 3]}),
+                                detail={"advertised": [1, 2, 3],
+                                        "entryPoints": ["decodeSaveEnvelopeMetadata"]}),
             "framing": carrier("framing", 1, None, "M.Frame",
                                ["M.Frame", "Int"], detail=fdetail),
             "lua:m": carrier("lua-module", lua_version, None, None, [],
@@ -125,6 +127,13 @@ class RecordValidation(unittest.TestCase):
             "advertised disagrees": lambda r: r["carriers"]["framing"]["detail"].update(advertised=[0, 1]),
             "framing probe missing": lambda r: r["carriers"]["framing"]["detail"].pop("layoutProbeHex"),
             "custom without test": lambda r: r["types"]["M.Leaf"]["shape"].update(kind="custom"),
+            "custom unsampled": lambda r: (r["types"]["M.Leaf"]["shape"].update(kind="custom", detail="owner"), r["types"]["M.Leaf"].update(declared={"contract": "c", "test": "t", "sampled": False})),
+            "framing probes falsified": lambda r: r["carriers"]["framing"]["detail"].update(currentEnvelopeVersion=False, headerSize=False, fnv1a64Probe=False, layoutProbeHex=False),
+            "framing version disagrees": lambda r: r["carriers"]["framing"]["detail"].update(currentEnvelopeVersion=2),
+            "entry points cleared": lambda r: (r["carriers"]["framing"]["detail"].update(entryPoints=[]), r["carriers"]["metadata"]["detail"].update(entryPoints=[])),
+            "lua without shared codec": lambda r: r["carriers"]["lua:m"].update(owners=["scripts/m.lua"]),
+            "malformed field object": lambda r: r["types"]["M.Leaf"]["shape"]["constructors"][0]["fields"].append("oops"),
+            "malformed constructor": lambda r: r["types"]["M.Leaf"]["shape"]["constructors"].append(7),
             "no lua": lambda r: r["carriers"].pop("lua:m"),
             "no framing": lambda r: r["carriers"].pop("framing"),
             "missing field": lambda r: r["carriers"]["metadata"].pop("detail"),
@@ -132,6 +141,13 @@ class RecordValidation(unittest.TestCase):
         for name, mut in cases.items():
             with self.subTest(name):
                 self.assertTrue(broken(mut), name)
+
+    def test_malformed_nodes_return_errors_not_exceptions(self):
+        r = mini()
+        r["types"]["M.Leaf"]["shape"]["constructors"][0]["fields"].append(None)
+        r["types"]["Weird"] = {"shape": []}
+        r["types"]["Weird2"] = {"shape": {"kind": "generic"}}
+        self.assertTrue(cmp.validate_record(r))
 
     def test_parse_rejects_garbage(self):
         for text in ("", "{", "[]", '{"format": 1}'):
@@ -260,6 +276,7 @@ class Evidence:
         self.examples, self.failures = 41, 0
         self.executable_sha256 = "0" * 64
         self.toolchain = {"ghc": "9.12.2"}
+        self.provenance = {"luaScriptsRequested": 35}
 
 
 class BaseRecords(unittest.TestCase):

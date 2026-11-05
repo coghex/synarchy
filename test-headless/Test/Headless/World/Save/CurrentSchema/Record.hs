@@ -90,8 +90,10 @@ wireProblems root = concat
       , wkActual c ≢ wkGeneric c ]
     , [ "round trip failed: " <> wnKey n <> " on " <> wkSample c
       | n ← nodes, c ← wnChecks n, not (wkRoundTrip c) ]
-    , [ "undistinguished custom boundary: " <> wnKey n <> " has no sample values"
-      | n ← nodes, WKCustom _ ← [wnKind n], null (wnChecks n) ]
+    , [ "unchecked boundary: " <> wnKey n <> " is classified "
+        <> what (wnKind n) <> " (or declared custom) but no sample value could "
+        <> "be built for it, so its encoding was never compared"
+      | n ← nodes, needsEvidence (wnKind n), null (wnChecks n) ]
     , [ "unreached type: " <> wnKey n <> " names " <> e <> ", which the walk did not reach"
       | n ← nodes, e ← nodeEdges n, not (Map.member e (wrNodes root)) ]
     ]
@@ -101,6 +103,11 @@ wireProblems root = concat
         WKGeneric → True
         WKNewtype → True
         _         → False
+    needsEvidence k = case k of
+        WKGeneric  → True
+        WKNewtype  → True
+        WKCustom _ → True
+        _          → False
     what k = case k of WKNewtype → "a transparent newtype"; _ → "generic"
     against k = case k of
         WKNewtype → "its field's encoding"

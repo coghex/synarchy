@@ -100,6 +100,23 @@ instance S.Serialize FxHandUndeclared__A where
     put (FxHandUndeclared__A a b) = S.put b >> S.put a
     get = do b ← S.get; a ← S.get; pure (FxHandUndeclared__A a b)
 
+-- | Seven nested single-field wrappers; the OUTER one writes a prefix
+--   byte yet round-trips. Sampling must still reach it however deep the
+--   wrapping goes.
+data FxD1__A = FxD1__A !Int deriving (Show, Generic, S.Serialize)
+data FxD2__A = FxD2__A !FxD1__A deriving (Show, Generic, S.Serialize)
+data FxD3__A = FxD3__A !FxD2__A deriving (Show, Generic, S.Serialize)
+data FxD4__A = FxD4__A !FxD3__A deriving (Show, Generic, S.Serialize)
+data FxD5__A = FxD5__A !FxD4__A deriving (Show, Generic, S.Serialize)
+data FxD6__A = FxD6__A !FxD5__A deriving (Show, Generic, S.Serialize)
+data FxD7__A = FxD7__A !FxD6__A deriving (Show, Generic)
+instance S.Serialize FxD7__A where
+    put (FxD7__A x) = S.putWord8 0xAA >> S.put x
+    get = S.getWord8 >> (FxD7__A ⊚ S.get)
+
+-- | A type with no constructible value at all.
+data FxLoop__A = FxLoop__A !FxLoop__A deriving (Show, Generic, S.Serialize)
+
 -- | A newtype whose encoder ROUND-TRIPS but is not its field's own
 --   encoding (a prefix byte): same recorded shape, wrong declaration.
 newtype FxNtOpaque__A = FxNtOpaque__A Int
@@ -209,6 +226,12 @@ catalogue =
     , Case "round-tripping non-transparent newtype fails extraction"
         (Right Null) (record' [car "nt" 1 [1] (Proxy ∷ Proxy FxNtOpaque__A)] [])
         (Fails "transparent newtype")
+    , Case "deeply wrapped type with a round-tripping prefix serializer fails extraction"
+        (Right Null) (record' [car "deep" 1 [1] (Proxy ∷ Proxy FxD7__A)] [])
+        (Fails "unclassified encoder")
+    , Case "type with no constructible sample fails extraction"
+        (Right Null) (record' [car "loop" 1 [1] (Proxy ∷ Proxy FxLoop__A)] [])
+        (Fails "unchecked boundary")
     , c "declared hand-written encoder extracts"
         (one "h" 1 [1] (Proxy ∷ Proxy FxHandDeclared__A))
         (one "h" 1 [1] (Proxy ∷ Proxy FxHandDeclared__A)) Passes

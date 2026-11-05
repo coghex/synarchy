@@ -985,9 +985,6 @@
   },
   "extractor": "current-save-schema/1",
   "extras": {
-    "luaLoader": {
-      "scriptsRequested": 35
-    },
     "luaWire": {
       "owner": "scripts/lib/data_codec.lua",
       "probeHex": "4d333a53313a6149313a3153313a6241333a5453313a7844383a000000000000044053313a6353313a79",
@@ -1668,7 +1665,7 @@
         ],
         "constructors": [],
         "dataType": "",
-        "detail": "cereal HashSet (via list of elements)",
+        "detail": "World.Generate.Types orphan Serialize HashSet (as a list)",
         "kind": "library",
         "newtype": false
       }

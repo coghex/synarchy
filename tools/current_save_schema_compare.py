@@ -102,11 +102,13 @@ def validate_record(rec) -> list[str]:
     if not (isinstance(wire, dict) and isinstance(wire.get("probeHex"), str)
             and wire["probeHex"] and wire.get("owner")):
         problems.append("extras.luaWire is missing its codec probe")
+    node_problems: list[str] = []
     for key, node in types.items():
-        problems += _validate_node(key, node, types)
+        node_problems += _validate_node(key, node, types)
+    problems += node_problems
     reached_by: dict[str, set[str]] = {k: set() for k in types}
     for cid, c in carriers.items():
-        problems += _validate_carrier(cid, c, types)
+        problems += _validate_carrier(cid, c, types, not node_problems)
         if isinstance(c, dict) and isinstance(c.get("reaches"), list):
             for k in c["reaches"]:
                 if k in reached_by:
@@ -150,10 +152,18 @@ def _validate_node(key, node, types) -> list[str]:
             if not (isinstance(f, dict) and isinstance(f.get("type"), str)
                     and isinstance(f.get("selector"), str)):
                 out.append(f"type `{key}` has a malformed field")
-    if shape["kind"] == "custom" and not (
-            isinstance(node.get("declared"), dict)
-            and node["declared"].get("test")):
-        out.append(f"custom type `{key}` declares no owning test")
+    if shape["kind"] == "custom":
+        declared = node.get("declared")
+        if not (isinstance(declared, dict)
+                and all(isinstance(declared.get(k), str) and declared[k]
+                        for k in ("contract", "test"))
+                and declared.get("sampled") is True):
+            out.append(f"custom type `{key}` lacks its declared contract, "
+                       f"owning test or sample evidence")
+        if not shape["detail"]:
+            out.append(f"custom type `{key}` names no owner")
+    if out:
+        return out
     for edge in _edges(node):
         if edge not in types:
             out.append(f"type `{key}` names unreached type `{edge}`")
@@ -171,7 +181,7 @@ def _closure(root, types) -> set:
     return seen
 
 
-def _validate_carrier(cid, c, types) -> list[str]:
+def _validate_carrier(cid, c, types, nodes_ok) -> list[str]:
     if not isinstance(c, dict):
         return [f"carrier `{cid}` is not an object"]
     missing = [k for k in CARRIER_KEYS if k not in c]
@@ -202,11 +212,25 @@ def _validate_carrier(cid, c, types) -> list[str]:
             out.append(f"carrier `{cid}` advertises "
                        f"{detail.get('advertised')} but its decoder "
                        f"accepts {acc}")
+    if c["class"] in ("metadata", "framing"):
+        detail = c["detail"] if isinstance(c["detail"], dict) else {}
+        eps = detail.get("entryPoints")
+        if not (isinstance(eps, list) and eps
+                and all(isinstance(e, str) and e for e in eps)):
+            out.append(f"carrier `{cid}` records no probed entry points")
     if c["class"] == "framing":
         detail = c["detail"] if isinstance(c["detail"], dict) else {}
-        for k in FRAMING_KEYS:
-            if detail.get(k) in (None, ""):
-                out.append(f"framing is missing its `{k}` probe")
+        for k in ("currentEnvelopeVersion", "envelopeMagic", "headerSize"):
+            v = detail.get(k)
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                out.append(f"framing `{k}` is not a positive integer")
+        for k in ("fnv1a64Probe", "layoutProbeHex"):
+            v = detail.get(k)
+            if not isinstance(v, str) or not v:
+                out.append(f"framing `{k}` is not a recorded probe")
+        if detail.get("currentEnvelopeVersion") != c["version"]:
+            out.append("framing currentEnvelopeVersion disagrees with the "
+                       "carrier version")
     if not isinstance(c["reaches"], list) or not isinstance(c["owners"], list):
         return out + [f"carrier `{cid}` reaches/owners are mistyped"]
     if c["root"] is None:
@@ -218,12 +242,15 @@ def _validate_carrier(cid, c, types) -> list[str]:
         if c["root"] not in types:
             return out + [f"carrier `{cid}` root `{c['root']}` is not a "
                           f"recorded type"]
-        want = sorted(_closure(c["root"], types))
-        if sorted(c["reaches"]) != want:
+        want = sorted(_closure(c["root"], types)) if nodes_ok else None
+        if want is not None and sorted(c["reaches"]) != want:
             out.append(f"carrier `{cid}` reaches {len(c['reaches'])} type(s) "
                        f"but its root's transitive closure is {len(want)}")
-    if c["class"] == "lua-module" and not c["owners"]:
-        out.append(f"carrier `{cid}` names no owning source")
+    if c["class"] == "lua-module" and (
+            len(c["owners"]) < 2
+            or "scripts/lib/data_codec.lua" not in c["owners"]):
+        out.append(f"carrier `{cid}` must name its owning script and the "
+                   f"shared scripts/lib/data_codec.lua")
     return out
 
 
