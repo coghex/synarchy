@@ -6,8 +6,8 @@ The tree being extracted is always built from source here, immediately
 before the run (the same reason `save_compat_audit_codec` builds before
 `cabal list-bin`): `list-bin` names a path whether or not that file is
 current, and accepting a binary because it EXISTS would compare against
-yesterday's code. A binary older than the newest tracked source is
-rejected outright.
+yesterday's code. After the build, cabal's own dry run must report
+nothing left to build, or the binary is rejected.
 """
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from current_save_schema_git import (
 
 TARGET = "synarchy-test-headless"
 GROUP = "current save schema"
-SOURCE_DIRS = ("src", "app", "test-headless", "tools/river_runtime/src")
 
 
 @dataclass
@@ -45,15 +44,17 @@ def _run(cmd, cwd: Path, env=None, timeout=None) -> subprocess.CompletedProcess:
                           capture_output=True, timeout=timeout)
 
 
-def _newest_source_mtime(root: Path) -> float:
-    newest = (root / "synarchy.cabal").stat().st_mtime
-    for d in SOURCE_DIRS:
-        base = root / d
-        if base.is_dir():
-            for p in base.rglob("*"):
-                if p.is_file() and p.suffix in (".hs", ".lua", ".c", ".h"):
-                    newest = max(newest, p.stat().st_mtime)
-    return newest
+def assert_up_to_date(root: Path, flags: list[str]) -> None:
+    """Cabal's own plan is the evidence that the helper is current: after
+    the build, a dry run must have nothing left to build. (A timestamp
+    scan would also trip on files the target never compiles, such as
+    app/Main.hs.)"""
+    dry = _run(["cabal", "build", TARGET, "--dry-run", *flags], root)
+    text = dry.stdout + dry.stderr
+    if dry.returncode != 0 or "Up to date" not in text:
+        raise EvidenceError(
+            f"stale candidate binary: cabal still has work to do for "
+            f"{TARGET} after the build:\n{text[-800:]}")
 
 
 def parse_counts(output: str) -> tuple[int, int]:
@@ -78,10 +79,7 @@ def build_and_run(root: Path, builddir: Path | None = None,
         else None
     if where.returncode != 0 or exe is None or not exe.is_file():
         raise EvidenceError(f"cabal list-bin {TARGET} found no executable")
-    if exe.stat().st_mtime + 1 < _newest_source_mtime(root):
-        raise EvidenceError(
-            f"stale candidate binary: {exe} is older than the newest "
-            f"source in {root}; refusing to compare against it")
+    assert_up_to_date(root, flags)
     digest = hashlib.sha256(exe.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "evidence.json"

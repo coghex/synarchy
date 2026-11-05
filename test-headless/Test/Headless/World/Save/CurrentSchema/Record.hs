@@ -82,17 +82,29 @@ renderNode n = jsonObj
 --   walk did not reach.
 wireProblems ∷ WireRoot → [Text]
 wireProblems root = concat
-    [ [ "unclassified encoder: " <> wnKey n <> " is walked as generic but its "
-        <> "real Serialize encoding differs from cereal's generic encoding on "
-        <> wkSample c <> " (declare it in World.Save.Wire.Custom)"
-      | n ← nodes, wnKind n ≡ WKGeneric, c ← wnChecks n
+    [ [ "unclassified encoder: " <> wnKey n <> " is walked as " <> what (wnKind n)
+        <> " but its real Serialize encoding differs from "
+        <> against (wnKind n) <> " on " <> wkSample c
+        <> " (declare it in World.Save.Wire.Custom)"
+      | n ← nodes, checksEncoding (wnKind n), c ← wnChecks n
       , wkActual c ≢ wkGeneric c ]
     , [ "round trip failed: " <> wnKey n <> " on " <> wkSample c
       | n ← nodes, c ← wnChecks n, not (wkRoundTrip c) ]
+    , [ "undistinguished custom boundary: " <> wnKey n <> " has no sample values"
+      | n ← nodes, WKCustom _ ← [wnKind n], null (wnChecks n) ]
     , [ "unreached type: " <> wnKey n <> " names " <> e <> ", which the walk did not reach"
       | n ← nodes, e ← nodeEdges n, not (Map.member e (wrNodes root)) ]
     ]
-  where nodes = Map.elems (wrNodes root)
+  where
+    nodes = Map.elems (wrNodes root)
+    checksEncoding k = case k of
+        WKGeneric → True
+        WKNewtype → True
+        _         → False
+    what k = case k of WKNewtype → "a transparent newtype"; _ → "generic"
+    against k = case k of
+        WKNewtype → "its field's encoding"
+        _         → "cereal's generic encoding"
 
 -- | Build the record, or every reason it cannot be built.
 buildRecord ∷ [CarrierIn] → [RouteIn] → Value → Either [Text] Value

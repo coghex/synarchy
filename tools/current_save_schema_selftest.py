@@ -50,27 +50,42 @@ def carrier(cls, version, accepted=None, root=None, reaches=(), owners=(),
 
 def mini(version=1, accepted=None, leaf_fields=(("n", "Int"),),
          route_on=True, lua_version=1, codec="aa", framing="ff"):
+    acc = [version] if accepted is None else accepted
+    fdetail = {"layout": framing, "advertised": [1], "currentEnvelopeVersion": 1,
+               "envelopeMagic": 1397178945, "fnv1a64Probe": "9", "headerSize": 16,
+               "layoutProbeHex": "00"}
+    flags = {k: route_on for k in cmp.ENTRY_KEYS}
+    types = {"M.Root": node([("leaf", "M.Leaf")]),
+             "M.Leaf": node(leaf_fields), "Int": node(kind="primitive"),
+             "M.Meta": node([("x", "Int")]), "M.Frame": node([("y", "Int")])}
     return {
-        "format": 1, "extractor": "current-save-schema/1",
-        "types": {"M.Root": node([("leaf", "M.Leaf")]),
-                  "M.Leaf": node(leaf_fields), "Int": node(kind="primitive"),
-                  "M.Meta": node([("x", "Int")]), "M.Frame": node([("y", "Int")])},
+        "format": 1, "extractor": "current-save-schema/1", "types": types,
         "carriers": {
-            "haskell:a": carrier("component", version, accepted, "M.Root",
-                                 ["M.Root", "M.Leaf", "Int"]),
+            "haskell:a": carrier("component", version, acc, "M.Root",
+                                 ["M.Root", "M.Leaf", "Int"],
+                                 detail={"advertised": acc}),
             "haskell:b": carrier("component", 1, None, "M.Root",
-                                 ["M.Root", "M.Leaf", "Int"]),
+                                 ["M.Root", "M.Leaf", "Int"],
+                                 detail={"advertised": [1]}),
             "metadata": carrier("metadata", 3, [1, 2, 3], "M.Meta",
-                                ["M.Meta", "Int"]),
+                                ["M.Meta", "Int"],
+                                detail={"advertised": [1, 2, 3]}),
             "framing": carrier("framing", 1, None, "M.Frame",
-                               ["M.Frame", "Int"], detail={"layout": framing}),
+                               ["M.Frame", "Int"], detail=fdetail),
             "lua:m": carrier("lua-module", lua_version, None, None, [],
-                             ["scripts/m.lua", "scripts/lib/data_codec.lua"]),
-            "legacy:session": carrier("legacy", 90, [90])},
-        "routes": {"b1": {"owners": ["metadata", "haskell:a", "haskell:b"],
-                          "enabled": {"publicFullSession": route_on,
-                                      "directFullSession": route_on}}},
-        "extras": {"luaWire": {"probeHex": codec}}}
+                             ["scripts/m.lua", "scripts/lib/data_codec.lua"],
+                             detail={"advertised": [lua_version]}),
+            "legacy:session": carrier("legacy", 90, [90]),
+            "legacy:lua-state": carrier("legacy", 1, [1])},
+        "routes": {
+            "b1-session": {"owners": ["metadata", "legacy:session",
+                                      "haskell:a", "haskell:b"],
+                           "enabled": dict(flags)},
+            "b2-session": {"owners": ["metadata", "legacy:lua-state",
+                                      "haskell:a", "haskell:b"],
+                           "enabled": dict(flags)}},
+        "extras": {"luaWire": {"owner": "scripts/lib/data_codec.lua",
+                               "probeHex": codec}}}
 
 
 def problems_of(base, cand):
@@ -95,8 +110,21 @@ class RecordValidation(unittest.TestCase):
             "unsorted": lambda r: r["carriers"]["metadata"].update(accepted=[3, 1]),
             "root unrecorded": lambda r: r["carriers"]["haskell:a"].update(root="Nope"),
             "unreached edge": lambda r: r["types"]["M.Leaf"]["shape"]["constructors"][0]["fields"].append({"selector": "z", "type": "Gone"}),
-            "route owner": lambda r: r["routes"]["b1"]["owners"].append("ghost"),
+            "route owner": lambda r: r["routes"]["b1-session"]["owners"].append("ghost"),
             "no routes": lambda r: r.update(routes={}),
+            "empty node shape": lambda r: r["types"]["M.Leaf"].update(shape={}),
+            "deleted reaches": lambda r: r["carriers"]["haskell:a"].update(reaches=["M.Root"]),
+            "cleared route owners": lambda r: r["routes"]["b1-session"].update(owners=[]),
+            "string route booleans": lambda r: r["routes"]["b1-session"]["enabled"].update(directFullSession="yes"),
+            "missing route entry point": lambda r: r["routes"]["b2-session"]["enabled"].pop("publicMetadataOnly"),
+            "route ownership incomplete": lambda r: r["routes"]["b1-session"]["owners"].remove("haskell:b"),
+            "missing route": lambda r: r["routes"].pop("b2-session"),
+            "lua probe removed": lambda r: r["extras"].pop("luaWire"),
+            "empty lua probe": lambda r: r["extras"]["luaWire"].update(probeHex=""),
+            "orphan type": lambda r: r["types"].update({"Orphan": node()}),
+            "advertised disagrees": lambda r: r["carriers"]["framing"]["detail"].update(advertised=[0, 1]),
+            "framing probe missing": lambda r: r["carriers"]["framing"]["detail"].pop("layoutProbeHex"),
+            "custom without test": lambda r: r["types"]["M.Leaf"]["shape"].update(kind="custom"),
             "no lua": lambda r: r["carriers"].pop("lua:m"),
             "no framing": lambda r: r["carriers"].pop("framing"),
             "missing field": lambda r: r["carriers"]["metadata"].pop("detail"),
@@ -143,7 +171,7 @@ class Comparator(unittest.TestCase):
     def test_route_enabled_over_affected_owner(self):
         cand = mini(version=2, accepted=[2], route_on=True)
         found = problems_of(mini(), cand)
-        self.assertTrue(any("legacy route `b1`" in p and "haskell:a" in p for p in found))
+        self.assertTrue(any("legacy route `b1-session`" in p and "haskell:a" in p for p in found))
 
     def test_route_over_unchanged_owners_needs_nothing(self):
         self.assertEqual(problems_of(mini(), mini(route_on=True)), [])
@@ -171,7 +199,7 @@ class Comparator(unittest.TestCase):
     def test_removed_carrier_is_reported(self):
         cand = mini()
         cand["carriers"].pop("haskell:b")
-        cand["routes"]["b1"]["owners"].remove("haskell:b")
+        [r["owners"].remove("haskell:b") for r in cand["routes"].values()]
         found, notes = cmp.compare(mini(), cand)
         self.assertEqual(found, [])
         self.assertTrue(any("no longer covered" in n for n in notes))
@@ -192,7 +220,7 @@ class Comparator(unittest.TestCase):
     def test_declared_prose_is_not_a_shape(self):
         cand = mini()
         cand["types"]["M.Leaf"]["declared"] = {"contract": "reworded"}
-        cand["carriers"]["framing"]["detail"] = {"layout": "ff", "contract": "reworded"}
+        cand["carriers"]["framing"]["detail"]["contract"] = "reworded"
         self.assertEqual(problems_of(mini(), cand), [])
 
     def test_freshness(self):
@@ -354,6 +382,34 @@ class Adapter(unittest.TestCase):
 
     def test_hook_rewrites_are_allowed(self):
         self.assertEqual(cgit.adapter_problems(self.ALLOWED.encode()), [])
+
+
+class Freshness(unittest.TestCase):
+    """The helper is current when cabal's own plan has nothing left to
+    build; an unrelated file (app/Main.hs) never matters."""
+
+    def check(self, out, code=0):
+        import current_save_schema_extract as ex
+        real = ex._run
+        ex._run = lambda cmd, cwd, env=None, timeout=None: \
+            subprocess.CompletedProcess(cmd, code, out, "")
+        try:
+            ex.assert_up_to_date(Path("."), [])
+        finally:
+            ex._run = real
+
+    def test_up_to_date(self):
+        self.check("Build profile: -w ghc-9.12.2\nUp to date\n")
+
+    def test_work_left_is_stale(self):
+        from current_save_schema_git import EvidenceError
+        with self.assertRaises(EvidenceError):
+            self.check("In order, the following would be built:\n - synarchy (test:synarchy-test-headless)\n")
+
+    def test_failed_plan_is_stale(self):
+        from current_save_schema_git import EvidenceError
+        with self.assertRaises(EvidenceError):
+            self.check("Up to date\n", code=1)
 
 
 @unittest.skipIf(os.environ.get("SYNARCHY_CS_SKIP_COMPILED"),

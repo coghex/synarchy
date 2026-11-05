@@ -100,6 +100,17 @@ instance S.Serialize FxHandUndeclared__A where
     put (FxHandUndeclared__A a b) = S.put b >> S.put a
     get = do b ← S.get; a ← S.get; pure (FxHandUndeclared__A a b)
 
+-- | A newtype whose encoder ROUND-TRIPS but is not its field's own
+--   encoding (a prefix byte): same recorded shape, wrong declaration.
+newtype FxNtOpaque__A = FxNtOpaque__A Int
+    deriving stock (Show, Generic)
+instance S.Serialize FxNtOpaque__A where
+    put (FxNtOpaque__A n) = S.putWord8 0xAA >> S.put n
+    get = S.getWord8 >> (FxNtOpaque__A ⊚ S.get)
+instance WireSchema FxNtOpaque__A where
+    wireNode = newtypeNode "FxNtOpaque" "" FxNtOpaque__A
+    wireSamples = newtypeSamples FxNtOpaque__A
+
 -- | The same shape of encoder, declared: extraction passes.
 data FxHandDeclared__A = FxHandDeclared__A !Int !Int
     deriving (Show, Generic)
@@ -109,7 +120,7 @@ instance S.Serialize FxHandDeclared__A where
 instance WireSchema FxHandDeclared__A where
     wireNode = customNodeOpaque
         (CustomDecl "fixture" "second field, then first field"
-                    "current save schema: custom boundaries round-trip")
+                    "current save schema: fixture layout")
         [Child (Proxy ∷ Proxy Int)]
     wireSamples _ = [FxHandDeclared__A 1 2, FxHandDeclared__A 3 4]
 
@@ -195,6 +206,9 @@ catalogue =
     , Case "undeclared hand-written encoder fails extraction"
         (Right Null) (record' [car "h" 1 [1] (Proxy ∷ Proxy FxHandUndeclared__A)] [])
         (Fails "unclassified encoder")
+    , Case "round-tripping non-transparent newtype fails extraction"
+        (Right Null) (record' [car "nt" 1 [1] (Proxy ∷ Proxy FxNtOpaque__A)] [])
+        (Fails "transparent newtype")
     , c "declared hand-written encoder extracts"
         (one "h" 1 [1] (Proxy ∷ Proxy FxHandDeclared__A))
         (one "h" 1 [1] (Proxy ∷ Proxy FxHandDeclared__A)) Passes

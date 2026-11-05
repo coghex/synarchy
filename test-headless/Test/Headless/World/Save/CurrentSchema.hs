@@ -19,7 +19,13 @@ import UPrelude
 import Test.Hspec
 import Data.Aeson (Value(..), object, toJSON, (.=), encode)
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.Serialize as S
+import Data.Int (Int64)
 import qualified Data.List as L
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
@@ -32,6 +38,16 @@ import World.Save.Component.Types
 import World.Save.Wire
 import World.Save.Wire.Custom (customBoundaries)
 import World.Save.Envelope.Types (ComponentId(..))
+import World.Chunk.Types (ChunkCoord(..))
+import World.Fluid.Types (IceLevelGrid(..))
+import World.Fluid.Lake.Types (LakeChunkEntry(..), WorldLakes(..))
+import World.Fluid.River.Types (RiverChunkEntry(..), WorldRivers(..))
+import World.Fluid.OceanMask (WorldOceanMask(..))
+import World.Fluid.Seabed.Types (SeabedTable(..))
+import World.Geology.Coastal.Types (CoastalTable(..))
+import World.Geology.Ore.Types (WorldOreDeposits(..))
+import World.Save.Compat.SessionV90 (sessionComponentVersion)
+import World.Save.Envelope (luaStateComponentVersion)
 import Test.Headless.World.Save.CurrentSchema.Fixtures
 import Test.Headless.World.Save.CurrentSchema.Live
 import Test.Headless.World.Save.CurrentSchema.Record
@@ -115,10 +131,37 @@ spec = do
             let ok = caseCand (byName "declared hand-written encoder extracts")
             either (const False) (const True) ok `shouldBe` True
 
+    describe "custom boundary layouts" $ do
+        it "every declared custom boundary has a layout example and a distinguishing sample" $ do
+            Right (_, ev) ← extractLive
+            let declaredTests = L.sort (map (cdTest . snd) customBoundaries)
+            declaredTests `shouldBe` L.sort [ "current save schema: custom boundary layout: " <> n | (n, _, _) ← customLayouts ]
+            forM_ (liveCarriers ev) $ \c → forM_ (ciRoot c) $ \r →
+                forM_ (Map.elems (wrNodes r)) $ \n → case wnKind n of
+                    WKCustom _ → length (wnChecks n) `shouldSatisfy` (>= 2)
+                    _ → pure ()
+        forM_ customLayouts $ \(name, expected, actual) →
+            it ("custom boundary layout: " <> T.unpack name) $
+                -- the expected bytes are specified by hand from the
+                -- declared layout, not produced by the encoder under test
+                actual `shouldBe` expected
+
     describe "acceptance agrees with the real decode entry points" $ do
         it "every carrier's advertised versions equal the versions its decoder accepts" $ do
             Right (_, ev) ← extractLive
             concatMap advertisedMismatch (liveCarriers ev) `shouldBe` []
+
+        it "the framing declares its advertised version and every entry point agrees" $ do
+            Right (_, ev) ← extractLive
+            let framing = [ c | c ← liveCarriers ev, ciId c ≡ "framing" ]
+            map ciAccepted framing `shouldBe` [[1]]
+            concatMap advertisedMismatch framing `shouldBe` []
+            let widened = [ c { ciAccepted = [0, 1] } | c ← framing ]
+            concatMap advertisedMismatch widened `shouldNotBe` []
+
+        it "entry points that disagree about acceptance are reported" $ do
+            entryDisagreements "framing" [("a", [1]), ("b", [1])] `shouldBe` []
+            entryDisagreements "framing" [("a", [1]), ("b", [0, 1])] `shouldNotBe` []
 
         it "a carrier advertising a version its decoder rejects is reported" $ do
             Right (_, ev) ← extractLive
@@ -127,23 +170,60 @@ spec = do
             concatMap advertisedMismatch tampered `shouldNotBe` []
 
     describe "retired legacy routes" $ do
-        it "records the B1 and B2 routes as enabled through every entry point, owned conservatively" $ do
+        it "records the B1 and B2 routes with every entry point's real state" $ do
             Right (Object rec', _) ← extractLive
             let routes = case KM.lookup "routes" rec' of Just (Object o) → o; _ → mempty
             KM.member "b1-session" routes `shouldBe` True
             KM.member "b2-session" routes `shouldBe` True
-            let flags = [ b | rt ← KM.elems routes, Object o ← [rt]
-                        , Just (Object e) ← [KM.lookup "enabled" o]
-                        , Bool b ← KM.elems e ]
-            length flags `shouldBe` 8
-            and flags `shouldBe` True
+            forM_ (KM.elems routes) $ \rt → case rt of
+                Object o → case KM.lookup "enabled" o of
+                    Just (Object e) → do
+                        L.sort (map show (KM.keys e)) `shouldBe`
+                            L.sort (map show ["publicFullSession", "publicMetadataOnly"
+                                             , "directFullSession", "directMetadataOnly" ∷ Text])
+                        forM_ (KM.elems e) $ \f → f `shouldSatisfy` isBool
+                    _ → expectationFailure "route has no entry-point state"
+                _ → expectationFailure "route is not an object"
+
+        it "reads a refused shape as disabled through the same entry points" $ do
+            -- A retired route is one whose shape the entry points no
+            -- longer recognise: probe the real predicates with a frozen
+            -- version no reader accepts.
+            let off r bytes = case legacyFlags r bytes of
+                    Object o → and [ f ≡ Bool False | f ← KM.elems o ]
+                    _ → False
+            off "b1-session" (b1ProbeWith (sessionComponentVersion + 1)) `shouldBe` True
+            off "b2-session" (b2ProbeWith (luaStateComponentVersion + 1)) `shouldBe` True
 
     describe "Lua registry" $ do
         it "evaluates the production registrations through the real loader" $ do
             Right (_, ev) ← extractLive
             length (leLoaded ev) `shouldSatisfy` (> 20)
-            let ids = [ i | Object o ← leModules ev, Just (String i) ← [KM.lookup "id" o] ]
-            L.sort ids `shouldBe` ["building_spawn", "tutorial_progress", "unit_ai"]
+            let mods = [ o | Object o ← leModules ev ]
+            mods `shouldSatisfy` (not . null)
+            forM_ mods $ \o → do
+                case KM.lookup "owner" o of
+                    Just (String p) → leLoaded ev `shouldSatisfy` (p `elem`)
+                    _ → expectationFailure "module without an owning script"
+                case (KM.lookup "version" o, KM.lookup "accepted" o) of
+                    (Just v, Just (Array xs)) → V.toList xs `shouldSatisfy` (v `elem`)
+                    _ → expectationFailure "module without version or probed acceptance"
+
+        it "a newly registered module flows through the same extraction" $ do
+            r ← luaEvidenceWith [("scripts/fixture_added.lua", fixtureModule)]
+            case r of
+                Left e → expectationFailure (T.unpack e)
+                Right ev → do
+                    let ids = [ i | Object o ← leModules ev, Just (String i) ← [KM.lookup "id" o] ]
+                    ids `shouldSatisfy` ("fixture_added" `elem`)
+                    let carriers = [ c | c ← liveCarriers ev, ciId c ≡ "lua:fixture_added" ]
+                    map ciAccepted carriers `shouldBe` [[1, 2]]
+                    map ciOwners carriers `shouldBe` [["scripts/fixture_added.lua", "scripts/lib/data_codec.lua"]]
+                    liveProblems ev `shouldBe` []
+
+        it "a script that cannot initialise fails the run instead of being skipped" $ do
+            r ← luaEvidenceWith [("scripts/broken.lua", "return { init = function() error('boom') end }")]
+            either ("failed under the stubs" `T.isInfixOf`) (const False) r `shouldBe` True
 
     describe "compiled shape fixtures" $ do
         let find = byName
@@ -181,6 +261,87 @@ spec = do
             forM_ out $ \path →
                 BL.writeFile path (encode (toJSON (map caseValue cases)))
             length cases `shouldSatisfy` (> 20)
+
+isBool ∷ Value → Bool
+isBool (Bool _) = True
+isBool _ = False
+
+-- | A registering module for the module-addition regression.
+fixtureModule ∷ Text
+fixtureModule = T.unlines
+    [ "local m = {}"
+    , "function m.init()"
+    , "  require('scripts.lib.save_modules').register('fixture_added', {"
+    , "    version = 2, inputVersions = { 1, 2 }, required = true, scope = 'global', deps = {},"
+    , "    snapshot = function() return {} end, decode = function(v, d) return d end,"
+    , "    validate = function(d) return nil end, apply = function(d) end })"
+    , "end"
+    , "return m" ]
+
+-- Hand-specified wire bytes -------------------------------------------
+
+be ∷ Int → Int64 → BS.ByteString
+be n v = BS.pack [ fromIntegral (v `shiftR` (8 * i)) | i ← [n - 1, n - 2 .. 0] ]
+
+i64 ∷ Int64 → BS.ByteString
+i64 = be 8
+
+-- | A cereal list: its Int length, then the elements.
+lst ∷ [BS.ByteString] → BS.ByteString
+lst xs = i64 (fromIntegral (length xs)) <> BS.concat xs
+
+coord ∷ Int64 → Int64 → BS.ByteString
+coord a b = i64 a <> i64 b
+
+w8 ∷ [Int64] → [BS.ByteString]
+w8 = map (be 1)
+
+-- | A 256-tile bitmask packed into 32 bytes, bit i of byte b = tile 8b+i.
+packed ∷ [Int] → BS.ByteString
+packed on = lst (w8 [ sum [ 2 ^ i | i ← [0 .. 7], 8 * b + i `elem` on ] | b ← [0 .. 31] ])
+
+bitmask ∷ [Int] → VU.Vector Bool
+bitmask on = VU.generate 256 (`elem` on)
+
+customLayouts ∷ [(Text, BS.ByteString, BS.ByteString)]
+customLayouts =
+    [ ( "IceLevelGrid"
+      , i64 1 <> i64 2 <> lst [i64 3]
+      , S.encode (IceLevelGrid 1 2 (VU.fromList [3])) )
+    , ( "LakeChunkEntry"
+      , i64 5 <> packed [0, 9]
+      , S.encode (LakeChunkEntry 5 (bitmask [0, 9])) )
+    , ( "WorldLakes"
+      , lst [] <> lst [coord 1 2 <> lst [i64 5 <> packed [0, 9]]]
+          <> lst [coord 3 4 <> lst [i64 5, i64 6]]
+      , S.encode (WorldLakes V.empty
+            (HM.singleton (ChunkCoord 1 2) (V.fromList [LakeChunkEntry 5 (bitmask [0, 9])]))
+            (HM.singleton (ChunkCoord 3 4) (VU.fromList [5, 6]))) )
+    , ( "RiverChunkEntry"
+      , i64 6 <> packed [0, 9] <> lst [i64 7, i64 8] <> lst (w8 [1, 2])
+      , S.encode (RiverChunkEntry 6 (bitmask [0, 9]) (VU.fromList [7, 8]) (VU.fromList [1, 2])) )
+    , ( "WorldRivers"
+      , lst [] <> lst [coord 1 2 <> lst [i64 6 <> packed [0, 9] <> lst [i64 7, i64 8] <> lst (w8 [1, 2])]]
+          <> lst [coord 3 4 <> lst [i64 5, i64 6]]
+      , S.encode (WorldRivers V.empty
+            (HM.singleton (ChunkCoord 1 2)
+                (V.fromList [RiverChunkEntry 6 (bitmask [0, 9]) (VU.fromList [7, 8]) (VU.fromList [1, 2])]))
+            (HM.singleton (ChunkCoord 3 4) (VU.fromList [5, 6]))) )
+    , ( "WorldOceanMask"
+      , lst [coord 1 2 <> packed [0, 9]]
+      , S.encode (WorldOceanMask (HM.singleton (ChunkCoord 1 2) (bitmask [0, 9]))) )
+    , ( "SeabedTable"
+      , lst [coord 1 2 <> lst [i64 1, i64 (-2)]] <> lst [coord 3 4 <> lst (w8 [3, 4])]
+      , S.encode (SeabedTable (HM.singleton (ChunkCoord 1 2) (VU.fromList [1, -2]))
+                              (HM.singleton (ChunkCoord 3 4) (VU.fromList [3, 4]))) )
+    , ( "CoastalTable"
+      , lst [coord 1 2 <> lst [i64 1, i64 (-2)]] <> lst [coord 3 4 <> lst (w8 [3, 4])]
+      , S.encode (CoastalTable (HM.singleton (ChunkCoord 1 2) (VU.fromList [1, -2]))
+                               (HM.singleton (ChunkCoord 3 4) (VU.fromList [3, 4]))) )
+    , ( "WorldOreDeposits"
+      , lst [coord 1 2 <> lst [be 1 1 <> i64 2, be 1 3 <> i64 4]]
+      , S.encode (WorldOreDeposits (HM.singleton (ChunkCoord 1 2) [(1, 2), (3, 4)])) )
+    ]
 
 fromText' ∷ Text → KM.Key
 fromText' = fromString . T.unpack

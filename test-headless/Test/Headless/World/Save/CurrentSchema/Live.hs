@@ -15,7 +15,12 @@ module Test.Headless.World.Save.CurrentSchema.Live
     , advertisedMismatch
     , customProblems
     , luaEvidence
+    , luaEvidenceWith
     , LuaEvidence(..)
+    , b1ProbeWith
+    , b2ProbeWith
+    , legacyFlags
+    , entryDisagreements
     ) where
 
 import UPrelude
@@ -90,38 +95,74 @@ encodeAt envVersion specs =
 
 type ComponentSpec' = (ComponentId, Word32, Bool, BS.ByteString)
 
--- | Every REQUIRED Haskell component, empty: the metadata-only listing
---   still demands the reader's whole required set be present.
+-- | The public decode entry points that read the envelope framing and
+--   the metadata component, each reduced to the failure text it reports.
+--   Production loading uses the classified full-session path
+--   ('decodeSessionEnvelopeClassified', its own 'decodeClassifiedEnvelope'
+--   implementation), listing uses the metadata-only pair, so acceptance
+--   is probed through ALL four and they must agree.
+entryPoints ∷ [(Text, BS.ByteString → Maybe Text)]
+entryPoints =
+    [ ( "decodeSaveEnvelopeMetadata"
+      , either Just (const Nothing) . decodeSaveEnvelopeMetadata HS.empty )
+    , ( "decodeSaveEnvelopeMetadataClassified"
+      , either (Just . renderGenerationFailure) (const Nothing)
+          . decodeSaveEnvelopeMetadataClassified HS.empty )
+    , ( "decodeSessionEnvelope"
+      , either Just (const Nothing) . decodeSessionEnvelope HS.empty HS.empty )
+    , ( "decodeSessionEnvelopeClassified"
+      , either (Just . renderGenerationFailure) (const Nothing)
+          . decodeSessionEnvelopeClassified HS.empty HS.empty ) ]
+
+-- | Every REQUIRED Haskell component, empty: the reader's required set
+--   must be present for any entry point to get past the structure check.
 requiredFiller ∷ [ComponentSpec']
 requiredFiller =
     [ (rcId rc, rcVersion rc, True, BS.empty)
     | rc ← saveComponentRegistry, rcRequired rc ]
 
--- | The versions the real metadata-only decode accepts for the
---   @"metadata"@ component.
-probeMetadata ∷ [Word32]
-probeMetadata =
-    [ v | v ← probeRange metadataComponentInputVersions
-        , accepts v ]
+-- | The versions each entry point accepts, found by reading whether it
+--   reports the unsupported-version failure for @prefix@.
+probeEntries
+    ∷ Text → [Word32] → (Word32 → BS.ByteString) → [(Text, [Word32])]
+probeEntries prefix advertised mk =
+    [ (name, [ v | v ← probeRange advertised, accepts run v ])
+    | (name, run) ← entryPoints ]
   where
-    accepts v = case decodeSaveEnvelopeMetadata HS.empty
-                         (encodeAt currentEnvelopeVersion
-                            ((metadataComponentId, v, True, BS.empty) : requiredFiller)) of
-        Left t  → not ("unsupported save version: metadata component"
-                       `T.isPrefixOf` t)
-        Right _ → True
+    accepts run v = case run (mk v) of
+        Just t  → not (prefix `T.isPrefixOf` t)
+        Nothing → True
 
--- | The envelope-framing versions the real decode accepts.
+-- | The entry points must agree: any difference is a problem the record
+--   cannot hide, and the carrier records the agreed list.
+entryDisagreements ∷ Text → [(Text, [Word32])] → [Text]
+entryDisagreements what rows =
+    [ "entry points disagree on " <> what <> " acceptance: "
+      <> T.intercalate "; " [ n <> " accepts " <> tshow vs | (n, vs) ← rows ]
+    | length (L.nub (map snd rows)) > 1 ]
+
+metadataEntries ∷ [(Text, [Word32])]
+metadataEntries = probeEntries "unsupported save version: metadata component"
+    metadataComponentInputVersions $ \v →
+        encodeAt currentEnvelopeVersion
+            ((metadataComponentId, v, True, BS.empty) : requiredFiller)
+
+framingEntries ∷ [(Text, [Word32])]
+framingEntries = probeEntries "unsupported save version: envelope framing"
+    [currentEnvelopeVersion] $ \v →
+        encodeAt v ((metadataComponentId, metadataComponentVersion, True, BS.empty)
+                    : requiredFiller)
+
+agreed ∷ [(Text, [Word32])] → [Word32]
+agreed rows = case rows of
+    ((_, vs) : _) → vs
+    []            → []
+
+probeMetadata ∷ [Word32]
+probeMetadata = agreed metadataEntries
+
 probeFraming ∷ [Word32]
-probeFraming = [ v | v ← probeRange [currentEnvelopeVersion], accepts v ]
-  where
-    accepts v = case decodeSaveEnvelopeMetadata HS.empty
-                         (encodeAt v
-                            ((metadataComponentId, metadataComponentVersion
-                             , True, BS.empty) : requiredFiller)) of
-        Left t  → not ("unsupported save version: envelope framing"
-                       `T.isPrefixOf` t)
-        Right _ → True
+probeFraming = agreed framingEntries
 
 hex ∷ BS.ByteString → Text
 hex = T.pack . concatMap (\b → pad (showHex b "")) . BS.unpack
@@ -146,6 +187,8 @@ measuredHeaderSize =
 framingDetail ∷ Value
 framingDetail = object
     [ "currentEnvelopeVersion" .= currentEnvelopeVersion
+    , "advertised" .= [currentEnvelopeVersion]
+    , "entryPoints" .= map fst entryPoints
     , "envelopeMagic" .= envelopeMagic
     , "headerSize" .= measuredHeaderSize
     , "fnv1a64Probe" .= tshow (fnv1a64 "synarchy-current-schema")
@@ -168,23 +211,43 @@ legacyV1Metadata = S.encode (SaveMetadataV1 "n" 1 2 3 "t" Nothing Nothing)
 --   its shape; it then fails at the session decode, so the probes tell
 --   "recognised" from "not recognised" by how far each entry point got.
 b1Probe ∷ BS.ByteString
-b1Probe = encodeAt currentEnvelopeVersion
+b1Probe = b1ProbeWith sessionComponentVersion
+
+-- | The B1 shape with the session component at the given version
+--   (the exact frozen shape when it is 'sessionComponentVersion').
+b1ProbeWith ∷ Word32 → BS.ByteString
+b1ProbeWith sessionVersion = encodeAt currentEnvelopeVersion
     [ (metadataComponentId, legacyMetadataComponentVersion, True, legacyV1Metadata)
-    , (sessionComponentId, sessionComponentVersion, True, BS.empty) ]
+    , (sessionComponentId, sessionVersion, True, BS.empty) ]
 
 -- | A correctly shaped B2 envelope: metadata v1, the opaque lua-state
 --   blob, and every REQUIRED Haskell component, with empty payloads.
 b2Probe ∷ BS.ByteString
-b2Probe = encodeAt currentEnvelopeVersion $
+b2Probe = b2ProbeWith luaStateComponentVersion
+
+-- | The B2 shape with the opaque lua-state blob at the given version.
+b2ProbeWith ∷ Word32 → BS.ByteString
+b2ProbeWith luaVersion = encodeAt currentEnvelopeVersion $
     [ (metadataComponentId, legacyMetadataComponentVersion, True, legacyV1Metadata)
-    , (luaStateComponentId, luaStateComponentVersion, True
+    , (luaStateComponentId, luaVersion, True
       , S.encode (HM.empty ∷ HM.HashMap Text Text)) ]
     ⧺ [ (rcId rc, rcVersion rc, True, BS.empty)
       | rc ← saveComponentRegistry, rcRequired rc ]
 
-recognised ∷ LegacyDecodeResult a → Bool
-recognised NotLegacyShaped = False
-recognised _               = True
+-- | Whether a legacy entry point took the route far enough to do real
+--   work: it decoded, or it got as far as per-component work before
+--   failing. A shape the route refuses (a version it no longer accepts)
+--   stops at the envelope and is NOT live, even though the entry point
+--   recognised the manifest.
+liveFull ∷ LegacyDecodeResult a → Bool
+liveFull (LegacyDecoded _) = True
+liveFull (LegacyShapedButFailed (ReachedComponents _) _) = True
+liveFull _ = False
+
+-- | The metadata-only counterpart: live only when it returned metadata.
+liveMeta ∷ LegacyDecodeResult a → Bool
+liveMeta (LegacyDecoded _) = True
+liveMeta _ = False
 
 -- | Whether the PUBLIC full-session decode took the legacy route: a
 --   legacy-shaped envelope that got as far as per-component work
@@ -198,6 +261,16 @@ publicFullRecognised bytes = case decodeSessionEnvelopeClassified HS.empty HS.em
 publicMetadataRecognised ∷ BS.ByteString → Bool
 publicMetadataRecognised bytes =
     either (const False) (const True) (decodeSaveEnvelopeMetadata HS.empty bytes)
+
+-- | The four entry-point states for one route, read for @bytes@.
+legacyFlags ∷ Text → BS.ByteString → Value
+legacyFlags route bytes = case route of
+    "b1-session" → routeFlags publicFullRecognised publicMetadataRecognised
+        (liveFull . decodeLegacySessionEnvelope)
+        (liveMeta . decodeLegacySessionMetadata) bytes
+    _ → routeFlags publicFullRecognised publicMetadataRecognised
+        (liveFull . decodeB2SessionEnvelope)
+        (liveMeta . decodeB2SessionMetadata) bytes
 
 routeFlags
     ∷ (BS.ByteString → Bool) → (BS.ByteString → Bool)
@@ -228,15 +301,11 @@ liveRoutes ∷ [RouteIn]
 liveRoutes =
     [ RouteIn "b1-session"
         ("metadata" : "legacy:session" : haskellIds)
-        (routeFlags publicFullRecognised publicMetadataRecognised
-            (recognised . decodeLegacySessionEnvelope)
-            (recognised . decodeLegacySessionMetadata) b1Probe)
+        (legacyFlags "b1-session" b1Probe)
     , RouteIn "b2-session"
         ("metadata" : "legacy:lua-state"
             : [ "haskell:" <> cidText (rcId rc) | rc ← saveComponentRegistry, rcRequired rc ])
-        (routeFlags publicFullRecognised publicMetadataRecognised
-            (recognised . decodeB2SessionEnvelope)
-            (recognised . decodeB2SessionMetadata) b2Probe) ]
+        (legacyFlags "b2-session" b2Probe) ]
   where
     haskellIds = [ "haskell:" <> cidText (rcId rc) | rc ← saveComponentRegistry ]
     cidText (ComponentId t) = t
@@ -254,8 +323,8 @@ data LuaEvidence = LuaEvidence
 --   read the evaluated @saveModules.registry@. Only engine services the
 --   scripts call outside a boot are stubbed; a script that cannot be
 --   loaded or initialised fails the run.
-luaChunk ∷ Text
-luaChunk = T.intercalate "\n"
+luaChunk ∷ [(Text, Text)] → Text
+luaChunk extra = T.intercalate "\n" $
     [ "local loaded = {}"
     , "local function proxy()"
     , "  return setmetatable({}, { __index = function(t, k)"
@@ -272,13 +341,17 @@ luaChunk = T.intercalate "\n"
     , "local ok, err = pcall(function() require('scripts.init_loader').load() end)"
     , "if not ok then error('init_loader.load failed: ' .. tostring(err)) end"
     , "if #loaded == 0 then error('the production loader requested no scripts') end"
-    , "local sm = require('scripts.lib.save_modules')"
+    , "local sources = {}"] ⧺ concat
+    [ [ "sources[(" <> lit path <> ")] = " <> lit src
+      , "loaded[#loaded + 1] = " <> lit path ]
+    | (path, src) ← extra ] ⧺
+    [ "local sm = require('scripts.lib.save_modules')"
     , "local owners = {}"
     , "for i, path in ipairs(loaded) do"
     , "  local before = {}"
     , "  for id in pairs(sm.registry) do before[id] = true end"
     , "  local lok, lerr = pcall(function()"
-    , "    local chunk = assert(loadfile(path))"
+    , "    local chunk = sources[path] and assert(load(sources[path], '@' .. path)) or assert(loadfile(path))"
     , "    local m = chunk()"
     , "    if type(m) == 'table' and type(m.init) == 'function' then m.init(i) end"
     , "  end)"
@@ -317,12 +390,23 @@ luaChunk = T.intercalate "\n"
     , "return '{\"modules\":[' .. table.concat(mods, ',') .. '],\"loaded\":[' .. table.concat(files, ',') .. '],\"codecProbeHex\":\"' .. hexp .. '\"}'"
     ]
 
--- | Run the chunk in a fresh interpreter; the failure text on error.
+-- | A Lua long-bracket string literal.
+lit ∷ Text → Text
+lit t = "[==[" <> t <> "]==]"
+
+-- | The production evidence: only the loader's own scripts.
 luaEvidence ∷ IO (Either Text LuaEvidence)
-luaEvidence = do
+luaEvidence = luaEvidenceWith []
+
+-- | Run the chunk in a fresh interpreter; the failure text on error.
+--   @extra@ are additional (path, source) scripts treated exactly like
+--   ones the loader requested, so a regression can add a registering
+--   module and watch it flow through the SAME extraction.
+luaEvidenceWith ∷ [(Text, Text)] → IO (Either Text LuaEvidence)
+luaEvidenceWith extra = do
     r ← Lua.run @Lua.Exception $ do
         Lua.openlibs
-        status ← Lua.dostring (TE.encodeUtf8 luaChunk)
+        status ← Lua.dostring (TE.encodeUtf8 (luaChunk extra))
         case status of
             Lua.OK → do
                 out ← Lua.tostring (-1)
@@ -380,7 +464,8 @@ metadataCarrier = CarrierIn
     , ciVersion = metadataComponentVersion
     , ciAccepted = probeMetadata, ciRequired = True
     , ciRoot = Just metadataWireRoot, ciOwners = []
-    , ciDetail = object [ "advertised" .= L.sort metadataComponentInputVersions ] }
+    , ciDetail = object [ "advertised" .= L.sort metadataComponentInputVersions
+                        , "entryPoints" .= map fst entryPoints ] }
 
 framingCarrier ∷ CarrierIn
 framingCarrier = CarrierIn
@@ -433,6 +518,8 @@ customProblems cs =
 liveProblems ∷ LuaEvidence → [Text]
 liveProblems lua = concat
     [ concatMap advertisedMismatch (liveCarriers lua)
+    , entryDisagreements "metadata" metadataEntries
+    , entryDisagreements "framing" framingEntries
     , customProblems (liveCarriers lua)
     , [ "b2 ownership does not cover the compiled b2Ids: " <> tshow (HS.toList b2Ids)
       | HS.fromList (map (\(ComponentId t) → t) (HS.toList b2Ids))

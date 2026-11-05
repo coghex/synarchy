@@ -39,6 +39,12 @@ TOP_KEYS = ("format", "extractor", "types", "carriers", "routes", "extras")
 CARRIER_KEYS = ("class", "version", "accepted", "required", "root",
                 "reaches", "owners", "detail")
 CLASSES = ("component", "metadata", "framing", "lua-module", "legacy")
+ENTRY_KEYS = ("directFullSession", "directMetadataOnly",
+              "publicFullSession", "publicMetadataOnly")
+FRAMING_KEYS = ("advertised", "currentEnvelopeVersion", "envelopeMagic",
+                "fnv1a64Probe", "headerSize", "layoutProbeHex")
+SHAPE_KEYS = ("kind", "detail", "dataType", "newtype", "constructors", "args")
+KINDS = ("generic", "primitive", "library", "newtype", "custom")
 # The one place a record may carry human prose: ignored when comparing.
 DESCRIPTIVE_DETAIL_KEYS = ("contract",)
 
@@ -90,72 +96,169 @@ def validate_record(rec) -> list[str]:
     if not isinstance(types, dict) or not isinstance(carriers, dict) \
             or not isinstance(routes, dict):
         return problems + ["types, carriers and routes must be objects"]
+    if not isinstance(rec["extras"], dict):
+        return problems + ["extras must be an object"]
+    wire = rec["extras"].get("luaWire")
+    if not (isinstance(wire, dict) and isinstance(wire.get("probeHex"), str)
+            and wire["probeHex"] and wire.get("owner")):
+        problems.append("extras.luaWire is missing its codec probe")
     for key, node in types.items():
-        if not isinstance(node, dict) or "shape" not in node:
-            problems.append(f"type `{key}` has no shape")
-            continue
-        for edge in _edges(node):
-            if edge not in types:
-                problems.append(f"type `{key}` names unreached type `{edge}`")
+        problems += _validate_node(key, node, types)
+    reached_by: dict[str, set[str]] = {k: set() for k in types}
     for cid, c in carriers.items():
-        if not isinstance(c, dict):
-            problems.append(f"carrier `{cid}` is not an object")
-            continue
-        for key in CARRIER_KEYS:
-            if key not in c:
-                problems.append(f"carrier `{cid}` is missing `{key}`")
-        if any(k not in c for k in CARRIER_KEYS):
-            continue
-        if c["class"] not in CLASSES:
-            problems.append(f"carrier `{cid}` has unknown class {c['class']!r}")
-        if not isinstance(c["version"], int) or c["version"] < 0:
-            problems.append(f"carrier `{cid}` has a bad version")
-            continue
-        acc = c["accepted"]
-        if not (isinstance(acc, list) and all(isinstance(v, int) for v in acc)
-                and acc == sorted(set(acc))):
-            problems.append(f"carrier `{cid}` accepted set is not a sorted "
-                            f"set of integers")
-            continue
-        if c["class"] != "legacy" and c["version"] not in acc:
-            problems.append(f"carrier `{cid}` does not accept its own "
-                            f"version {c['version']}")
-        if any(v > c["version"] for v in acc):
-            problems.append(f"carrier `{cid}` accepts a version newer than "
-                            f"its current {c['version']}")
-        if c["root"] is not None:
-            if c["root"] not in types:
-                problems.append(f"carrier `{cid}` root `{c['root']}` is not "
-                                f"a recorded type")
-            if c["root"] not in c["reaches"]:
-                problems.append(f"carrier `{cid}` does not reach its root")
-        for k in c["reaches"]:
-            if k not in types:
-                problems.append(f"carrier `{cid}` reaches unrecorded `{k}`")
-        if c["class"] in ("component", "metadata", "framing") \
-                and c["root"] is None:
-            problems.append(f"carrier `{cid}` ({c['class']}) has no wire root")
-        if c["class"] == "lua-module" and not c["owners"]:
-            problems.append(f"carrier `{cid}` names no owning source")
+        problems += _validate_carrier(cid, c, types)
+        if isinstance(c, dict) and isinstance(c.get("reaches"), list):
+            for k in c["reaches"]:
+                if k in reached_by:
+                    reached_by[k].add(cid)
+    for key, who in reached_by.items():
+        if not who:
+            problems.append(f"type `{key}` is reached by no carrier")
     classes = {c.get("class") for c in carriers.values()
                if isinstance(c, dict)}
     for need in ("component", "metadata", "framing", "lua-module", "legacy"):
         if need not in classes:
             problems.append(f"no carrier of class `{need}`: coverage is "
                             f"incomplete")
-    for rid, r in routes.items():
-        if not isinstance(r, dict) or "owners" not in r or "enabled" not in r:
-            problems.append(f"route `{rid}` is malformed")
+    problems += _validate_routes(routes, carriers)
+    return problems
+
+
+def _validate_node(key, node, types) -> list[str]:
+    if not isinstance(node, dict) or not isinstance(node.get("shape"), dict):
+        return [f"type `{key}` has no shape"]
+    shape = node["shape"]
+    out = []
+    for k in SHAPE_KEYS:
+        if k not in shape:
+            out.append(f"type `{key}` shape is missing `{k}`")
+    if out:
+        return out
+    if shape["kind"] not in KINDS:
+        out.append(f"type `{key}` has unknown kind {shape['kind']!r}")
+    if not isinstance(shape["newtype"], bool) \
+            or not isinstance(shape["constructors"], list) \
+            or not isinstance(shape["args"], list):
+        return out + [f"type `{key}` shape has mistyped fields"]
+    for con in shape["constructors"]:
+        if not (isinstance(con, dict) and isinstance(con.get("name"), str)
+                and isinstance(con.get("record"), bool)
+                and isinstance(con.get("fields"), list)):
+            out.append(f"type `{key}` has a malformed constructor")
             continue
+        for f in con["fields"]:
+            if not (isinstance(f, dict) and isinstance(f.get("type"), str)
+                    and isinstance(f.get("selector"), str)):
+                out.append(f"type `{key}` has a malformed field")
+    if shape["kind"] == "custom" and not (
+            isinstance(node.get("declared"), dict)
+            and node["declared"].get("test")):
+        out.append(f"custom type `{key}` declares no owning test")
+    for edge in _edges(node):
+        if edge not in types:
+            out.append(f"type `{key}` names unreached type `{edge}`")
+    return out
+
+
+def _closure(root, types) -> set:
+    seen, queue = set(), deque([root])
+    while queue:
+        cur = queue.popleft()
+        if cur in seen or cur not in types:
+            continue
+        seen.add(cur)
+        queue.extend(_edges(types[cur]))
+    return seen
+
+
+def _validate_carrier(cid, c, types) -> list[str]:
+    if not isinstance(c, dict):
+        return [f"carrier `{cid}` is not an object"]
+    missing = [k for k in CARRIER_KEYS if k not in c]
+    if missing:
+        return [f"carrier `{cid}` is missing `{missing[0]}`"]
+    out: list[str] = []
+    if c["class"] not in CLASSES:
+        out.append(f"carrier `{cid}` has unknown class {c['class']!r}")
+    if not isinstance(c["version"], int) or isinstance(c["version"], bool) \
+            or c["version"] < 0:
+        return out + [f"carrier `{cid}` has a bad version"]
+    acc = c["accepted"]
+    if not (isinstance(acc, list) and all(isinstance(v, int) for v in acc)
+            and acc == sorted(set(acc))):
+        return out + [f"carrier `{cid}` accepted set is not a sorted set of "
+                      f"integers"]
+    if not isinstance(c["required"], bool):
+        out.append(f"carrier `{cid}` required is not a boolean")
+    if c["class"] != "legacy" and c["version"] not in acc:
+        out.append(f"carrier `{cid}` does not accept its own version "
+                   f"{c['version']}")
+    if any(v > c["version"] for v in acc):
+        out.append(f"carrier `{cid}` accepts a version newer than its "
+                   f"current {c['version']}")
+    if c["class"] in ("component", "metadata", "framing", "lua-module"):
+        detail = c["detail"] if isinstance(c["detail"], dict) else {}
+        if detail.get("advertised") != acc:
+            out.append(f"carrier `{cid}` advertises "
+                       f"{detail.get('advertised')} but its decoder "
+                       f"accepts {acc}")
+    if c["class"] == "framing":
+        detail = c["detail"] if isinstance(c["detail"], dict) else {}
+        for k in FRAMING_KEYS:
+            if detail.get(k) in (None, ""):
+                out.append(f"framing is missing its `{k}` probe")
+    if not isinstance(c["reaches"], list) or not isinstance(c["owners"], list):
+        return out + [f"carrier `{cid}` reaches/owners are mistyped"]
+    if c["root"] is None:
+        if c["class"] in ("component", "metadata", "framing"):
+            out.append(f"carrier `{cid}` ({c['class']}) has no wire root")
+        if c["reaches"]:
+            out.append(f"carrier `{cid}` has no root but reaches types")
+    else:
+        if c["root"] not in types:
+            return out + [f"carrier `{cid}` root `{c['root']}` is not a "
+                          f"recorded type"]
+        want = sorted(_closure(c["root"], types))
+        if sorted(c["reaches"]) != want:
+            out.append(f"carrier `{cid}` reaches {len(c['reaches'])} type(s) "
+                       f"but its root's transitive closure is {len(want)}")
+    if c["class"] == "lua-module" and not c["owners"]:
+        out.append(f"carrier `{cid}` names no owning source")
+    return out
+
+
+def _validate_routes(routes, carriers) -> list[str]:
+    out: list[str] = []
+    if not routes:
+        return ["no legacy route is recorded"]
+    components = {k for k, c in carriers.items()
+                  if isinstance(c, dict) and c.get("class") == "component"}
+    required = {k for k in components if carriers[k].get("required") is True}
+    need = {"b1-session": {"metadata", "legacy:session"} | components,
+            "b2-session": {"metadata", "legacy:lua-state"} | required}
+    for rid in need:
+        if rid not in routes:
+            out.append(f"legacy route `{rid}` is not recorded")
+    for rid, r in routes.items():
+        if not isinstance(r, dict) or not isinstance(r.get("owners"), list) \
+                or not isinstance(r.get("enabled"), dict):
+            out.append(f"route `{rid}` is malformed")
+            continue
+        if not r["owners"]:
+            out.append(f"route `{rid}` has no owners")
         for owner in r["owners"]:
             if owner not in carriers:
-                problems.append(f"route `{rid}` is owned by unknown "
-                                f"carrier `{owner}`")
-        if not isinstance(r["enabled"], dict) or not r["enabled"]:
-            problems.append(f"route `{rid}` records no entry-point state")
-    if not routes:
-        problems.append("no legacy route is recorded")
-    return problems
+                out.append(f"route `{rid}` is owned by unknown carrier "
+                           f"`{owner}`")
+        if sorted(r["enabled"]) != sorted(ENTRY_KEYS) or not all(
+                isinstance(v, bool) for v in r["enabled"].values()):
+            out.append(f"route `{rid}` must record exactly the entry points "
+                       f"{', '.join(ENTRY_KEYS)} as booleans")
+        missing = sorted(need.get(rid, set()) - set(r["owners"]))
+        if missing:
+            out.append(f"route `{rid}` ownership is incomplete: missing "
+                       f"{', '.join(missing[:4])}")
+    return out
 
 
 # ---------------------------------------------------------------- shapes

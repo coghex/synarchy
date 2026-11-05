@@ -6,8 +6,17 @@
       ],
       "class": "framing",
       "detail": {
+        "advertised": [
+          1
+        ],
         "contract": "header: magic(4) envelopeVersion(4) manifestLength(8), big endian and hand written; then the cereal-encoded EnvelopeManifest, its fnv1a64 checksum(8), and the component payloads. Hand-written bytes are declared and probed, not derived.",
         "currentEnvelopeVersion": 1,
+        "entryPoints": [
+          "decodeSaveEnvelopeMetadata",
+          "decodeSaveEnvelopeMetadataClassified",
+          "decodeSessionEnvelope",
+          "decodeSessionEnvelopeClassified"
+        ],
         "envelopeMagic": 1398362689,
         "fnv1a64Probe": "17827435446371168120",
         "headerSize": 16,
@@ -950,6 +959,12 @@
           1,
           2,
           3
+        ],
+        "entryPoints": [
+          "decodeSaveEnvelopeMetadata",
+          "decodeSaveEnvelopeMetadataClassified",
+          "decodeSessionEnvelope",
+          "decodeSessionEnvelopeClassified"
         ]
       },
       "owners": [],
@@ -4647,8 +4662,8 @@
     "World.Fluid.Lake.Types.LakeChunkEntry": {
       "declared": {
         "contract": "the lake id, then the 256-tile bitmask packed into a list of 32 Word8",
-        "sampled": false,
-        "test": "current save schema: custom boundaries round-trip"
+        "sampled": true,
+        "test": "current save schema: custom boundary layout: LakeChunkEntry"
       },
       "shape": {
         "args": [
@@ -4666,7 +4681,7 @@
       "declared": {
         "contract": "the lake list, the per-chunk entry rows, then the per-chunk carve-delta rows",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: WorldLakes"
       },
       "shape": {
         "args": [
@@ -4685,7 +4700,7 @@
       "declared": {
         "contract": "a list of (chunk coordinate, packed bitmask bytes) rows",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: WorldOceanMask"
       },
       "shape": {
         "args": [
@@ -4747,8 +4762,8 @@
     "World.Fluid.River.Types.RiverChunkEntry": {
       "declared": {
         "contract": "the river id, the packed 32-byte bitmask, the per-tile surface Z list, the width-radius list",
-        "sampled": false,
-        "test": "current save schema: custom boundaries round-trip"
+        "sampled": true,
+        "test": "current save schema: custom boundary layout: RiverChunkEntry"
       },
       "shape": {
         "args": [
@@ -4767,7 +4782,7 @@
       "declared": {
         "contract": "the river list, the per-chunk entry rows, then the per-chunk carve-delta rows",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: WorldRivers"
       },
       "shape": {
         "args": [
@@ -4786,7 +4801,7 @@
       "declared": {
         "contract": "elevation-delta rows then material-override rows, each (chunk coordinate, list)",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: SeabedTable"
       },
       "shape": {
         "args": [
@@ -4836,7 +4851,7 @@
       "declared": {
         "contract": "grid width (Int), spacing (Int), then the level vector as a list of Int",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: IceLevelGrid"
       },
       "shape": {
         "args": [
@@ -4854,7 +4869,7 @@
       "declared": {
         "contract": "elevation-delta rows then material-override rows, each (chunk coordinate, list)",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: CoastalTable"
       },
       "shape": {
         "args": [
@@ -4922,7 +4937,7 @@
       "declared": {
         "contract": "the per-chunk deposit map as a list of (chunk coordinate, [(Word8, Int)]) rows",
         "sampled": true,
-        "test": "current save schema: custom boundaries round-trip"
+        "test": "current save schema: custom boundary layout: WorldOreDeposits"
       },
       "shape": {
         "args": [
