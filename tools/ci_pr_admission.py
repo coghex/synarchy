@@ -377,8 +377,9 @@ def force_push_epoch(cli: Runner, repo: str, pr_number: str
     push of the PR onward, whichever commit that push named. The timeline
     event records the push itself rather than inferring it from whichever
     review-gate runs are listed yet, and (GraphQL, unlike REST) names both the
-    heads it moved between, which is what lets a same-second run be tied to
-    THAT transition instead of guessed at from one-second timestamps.
+    heads it moved between, which is what lets the push's own review-gate run
+    be found and a same-second run be ordered against it by run id instead of
+    guessed at from one-second timestamps.
     """
     owner, _, name = repo.partition("/")
     rc, out, _ = cli("api", "graphql", "-f", f"query={_FORCE_PUSHES}",
@@ -460,9 +461,36 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # ... and, when the timeline records any force push, only runs created at
     # or after the latest one: it is the transition being admitted, and
     # it is visible even while the runs it triggered are not yet listed.
+    #
+    # Same-second ordering is settled by RUN ID, which is allocated in
+    # creation order. The force push is a synchronize like any other, so it
+    # has its own review-gate run, recognisable by the transition it names
+    # (before, after); a run created in that second counts only if its id is
+    # at or after that run's, i.e. it was created by or after the push. If the
+    # push's own run is not listed yet, same-second runs stay pending.
+    anchor = None
+    if epoch:
+        pushes = []
+        for run in scoped:
+            if _timestamp(run.get("created_at")) != epoch:
+                continue
+            jobs = _jobs(cli, repo, run["id"])
+            if jobs is None:
+                return False, None
+            names = {job.get("name") for job in jobs}
+            if any(transition_name(before, after) in names for before, after in transitions):
+                pushes.append(run["id"])
+        anchor = max(pushes, default=None)
+
+    def after_push(run: dict) -> bool:
+        if not epoch:
+            return True
+        created = _timestamp(run.get("created_at"))
+        return created > epoch or (created == epoch and anchor is not None
+                                   and run["id"] >= anchor)
+
     mine = [run for run in scoped
-            if run.get("head_sha") == sha and run["id"] > latest_other
-            and (not epoch or _timestamp(run.get("created_at")) >= epoch)]
+            if run.get("head_sha") == sha and run["id"] > latest_other and after_push(run)]
     unsettled = Dismissal("queued", "")
     if not mine:
         return True, unsettled
@@ -471,15 +499,6 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
         jobs = _jobs(cli, repo, run["id"])
         if jobs is None:
             return False, None
-        if epoch and _timestamp(run.get("created_at")) == epoch:
-            # Created in the same second as the force push: one-second stamps
-            # cannot order it against the push, and neither can a later job
-            # start. It is the push's own run only if it POSITIVELY names that
-            # transition; the head's older runs name another one.
-            names = {job.get("name") for job in jobs}
-            if not any(transition_name(before, sha) in names
-                       for before, after in transitions if after == sha):
-                continue
         jobs = [job for job in jobs if job.get("name") == DISMISSAL_CHECK]
         if not jobs:
             return True, unsettled
@@ -926,7 +945,7 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         return f"2026-01-01T{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}Z"
 
     def gate_run(run_id: int, *jobs: dict, head: str = HEAD, prs: tuple = ("7",),
-                 transition: tuple | None = None) -> dict:
+                 transition: tuple | None = None, created: int | None = None) -> dict:
         """A review-gate run of a pull request at `head`. No jobs: not listed yet.
 
         Created `run_id` seconds into the scripted day, so ids order in time.
@@ -934,7 +953,8 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         # A job starts after its run is created and a runner is allocated.
         extra = ([job(run_id * 10 + 9, "completed", "success", transition_name(*transition))]
                  if transition else [])
-        return {"id": run_id, "head_sha": head, "jobs": list(jobs) + extra, "created_at": stamp(run_id),
+        return {"id": run_id, "head_sha": head, "jobs": list(jobs) + extra,
+                "created_at": stamp(run_id if created is None else created),
                 "pull_requests": [{"number": int(n)} for n in prs]}
 
     def ci_run(run_id: int, *, status: str = "completed", event: str = "pull_request",
@@ -1261,45 +1281,78 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("await: a run with no usable timestamp is never evidence after a force push",
           wait(Gate([{**gate_run(150, ok_job), "created_at": "garbage"}],
                     force_pushes=[(102, OLD)]), require=True), (True, Dismissal("queued", "")))
-    # The ordinary force-push case: the pushed head's own run lands in the
-    # push's second. Positive evidence = it names (before, after) of THAT push.
-    own = gate_run(102, ok_job, transition=(OTHER, HEAD))
-    push_back = [(102, HEAD, OTHER)]
-    check("await: the force push's own same-second run, naming its transition, is evidence",
+    # Same-second force pushes. The push is a synchronize, so it has its own
+    # review-gate run naming (before, after); same-second runs are ordered
+    # against THAT run by run id (ids are allocated in creation order).
+    push_back = [(102, HEAD, OTHER)]  # (second, after, before): OTHER -> HEAD
+    own = gate_run(200, ok_job, transition=(OTHER, HEAD), created=102)
+    check("await: the force push's own same-second run is evidence",
           wait(Gate([own], force_pushes=push_back), require=True), (True, _OK))
     check("await: ... for a non-synchronize too",
           wait(Gate([own], force_pushes=push_back), require=False), (True, _OK))
-    old_same_second = gate_run(102, ok_job, transition=(OLD, HEAD))
-    check("await: an OLD run for the same commit in the same second names another transition",
-          wait(Gate([old_same_second], force_pushes=push_back), require=True),
+    older = gate_run(199, ok_job, transition=(OLD, HEAD), created=102)
+    check("await: an older same-second run for the same commit, with the push's own run unlisted, is pending",
+          wait(Gate([older], force_pushes=push_back), require=True), (True, Dismissal("queued", "")))
+    check("await: a same-second run with no transition identity cannot anchor or be anchored",
+          wait(Gate([gate_run(200, ok_job, created=102)], force_pushes=push_back), require=True),
           (True, Dismissal("queued", "")))
-    check("await: ... and a queued old job starting later does not change that",
-          wait(Gate([{**old_same_second, "jobs": [{**j, "started_at": stamp(120)} for j in old_same_second["jobs"]]}],
-                    force_pushes=push_back), require=False), (True, Dismissal("queued", "")))
-    check("await: a same-second run with no transition identity is not evidence",
-          wait(Gate([gate_run(102, ok_job)], force_pushes=push_back), require=True),
-          (True, Dismissal("queued", "")))
-    check("await: a run naming the head's transition from a DIFFERENT push is not evidence",
-          wait(Gate([own], force_pushes=[(102, OLD, OTHER)]), require=True),
-          (True, Dismissal("queued", "")))
-    check("await: a transition naming another head is not evidence",
-          wait(Gate([gate_run(102, ok_job, transition=(OTHER, OLD))], force_pushes=push_back), require=True),
-          (True, Dismissal("queued", "")))
-    check("await: a push whose before-commit is unknown ties nothing",
+    check("await: a push whose before-commit is unknown anchors nothing",
           wait(Gate([own], force_pushes=[(102, HEAD, OTHER, False)]), require=True),
           (True, Dismissal("queued", "")))
-    check("await: the old run beside the push's own run: the own run's outcome decides",
-          wait(Gate([old_same_second, gate_run(103, job(13, "completed", "failure"))],
+    check("await: a transition from a DIFFERENT push anchors nothing",
+          wait(Gate([own], force_pushes=[(102, OLD, OTHER)]), require=True),
+          (True, Dismissal("queued", "")))
+    # Round 11: rewind to an ancestor X (force, same second) then fast-forward
+    # back to H: the timeline holds only H -> X, the current dismissal names
+    # X -> H, and its run id is after the force push's own run.
+    rewind = [(102, OLD, HEAD)]  # HEAD -> OLD, forced
+    f_run = gate_run(200, job(14, "completed", "skipped"), head=OLD, transition=(HEAD, OLD), created=102)
+    ff_run = gate_run(201, ok_job, transition=(OLD, HEAD), created=102)
+    check("await: rewind then fast-forward in one second: the fast-forward's run (after the push's) is evidence",
+          wait(Gate([f_run, ff_run], force_pushes=rewind), require=True), (True, _OK))
+    check("await: ... for a non-synchronize too",
+          wait(Gate([f_run, ff_run], force_pushes=rewind), require=False), (True, _OK))
+    check("await: ... and a fast-forward run not yet listed leaves it pending",
+          wait(Gate([f_run], force_pushes=rewind), require=True), (True, Dismissal("queued", "")))
+    # Round 11: X -> H -> X -> H within one second. The old X -> H run has the
+    # same marker as the current one but a LOWER id than the force push's run.
+    old_xh = gate_run(199, ok_job, transition=(OLD, HEAD), created=102)
+    check("await: a repeated pair: the old run (id before the push's own run) is not evidence",
+          wait(Gate([old_xh, f_run], force_pushes=rewind), require=True), (True, Dismissal("queued", "")))
+    check("await: ... and the current one, once listed, is",
+          wait(Gate([old_xh, f_run, ff_run], force_pushes=rewind), require=True), (True, _OK))
+    failed_ff = gate_run(201, job(15, "completed", "failure"), transition=(OLD, HEAD), created=102)
+    check("await: ... a current failure beats the old success",
+          wait(Gate([old_xh, f_run, failed_ff], force_pushes=rewind), require=True),
+          (True, Dismissal("completed", "failure")))
+    # Push to H itself: same-second runs for H BEFORE the push's own run are old.
+    old_h_tie = gate_run(199, job(90, "completed", "success"), transition=(OLD, HEAD), created=102)
+    check("await: a same-second run with a lower id than the push's own run is old, whatever its job id",
+          wait(Gate([old_h_tie, gate_run(200, job(13, "completed", "failure"),
+                                         transition=(OTHER, HEAD), created=102)],
                     force_pushes=push_back), require=True), (True, Dismissal("completed", "failure")))
+    # Two force pushes in the latest second: the LATER one's run is the anchor.
+    two = [(102, OLD, HEAD), (102, HEAD, OLD)]  # HEAD->OLD then OLD->HEAD
+    between = gate_run(170, job(90, "completed", "success"), created=102)
+    f_one = gate_run(150, job(14, "completed", "skipped"), head=OLD, transition=(HEAD, OLD), created=102)
+    f_two = gate_run(200, job(13, "completed", "failure"), transition=(OLD, HEAD), created=102)
+    check("await: with two same-second force pushes, the later push's run anchors",
+          wait(Gate([f_one, between, f_two], force_pushes=two), require=True),
+          (True, Dismissal("completed", "failure")))
     for label, event in (("synchronize", sync), ("labeled", approve),
                          ("dispatch", _event("workflow_dispatch", ""))):
         check(f"admit: {label} of a force-pushed head whose own run shares the push's second is admitted",
               admit(event, pull=pull_json(), gate=Gate([own], force_pushes=push_back)).eligible, True)
-        check(f"admit: {label}, an old same-second run beside a push back to the head is not admitted",
-              admit(event, pull=pull_json(), gate=Gate([old_same_second], force_pushes=push_back)).code,
+        check(f"admit: {label}, an older same-second run is not admitted",
+              admit(event, pull=pull_json(), gate=Gate([older], force_pushes=push_back)).code,
               "dismissal-pending")
         check(f"admit: {label}, a same-second run without identity is not admitted",
-              admit(event, pull=pull_json(), gate=Gate([gate_run(102, ok_job)], force_pushes=push_back)).code,
+              admit(event, pull=pull_json(), gate=Gate([gate_run(200, ok_job, created=102)],
+                                                       force_pushes=push_back)).code, "dismissal-pending")
+        check(f"admit: {label}, a same-second rewind and fast-forward is admitted",
+              admit(event, pull=pull_json(), gate=Gate([f_run, ff_run], force_pushes=rewind)).eligible, True)
+        check(f"admit: {label}, a repeated pair with the current run unlisted is not admitted",
+              admit(event, pull=pull_json(), gate=Gate([old_xh, f_run], force_pushes=rewind)).code,
               "dismissal-pending")
         check(f"admit: {label} with an old success 2s before the rewind is not admitted",
               admit(event, pull=pull_json(), gate=Gate(old100, force_pushes=[(102, OLD)])).code,
