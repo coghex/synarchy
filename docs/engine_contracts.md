@@ -483,7 +483,10 @@ moves afterwards can still require a branch update and a further run under
    and pushed back to is judged only on runs newer than the latest run for
    another head and newer than the PR's latest recorded force push (the PR
    timeline, any commit: a rewind to an ancestor and a fast-forward back
-   leaves a force push of the ancestor). Run, job and timeline history is always read to the
+   leaves a force push of the ancestor). Timestamps have one-second precision,
+   so order is proven strictly, with no slack: a run counts only if created
+   after that push, or in the same second for the commit the push left as the
+   head. Run, job and timeline history is always read to the
    end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
@@ -513,8 +516,9 @@ events of one head share one concurrency group (per head, no cancel), so they
 run one after another and never cancel each other's work. When an earlier
 run already ran CI for that exact identity (its `static-audits` concluded
 and its `ci-identity` job is named for this PR, base ref, base sha and head;
-automatic and dispatched runs alike, newest wins, so a successful manual
-recovery supersedes the failure it recovered; unfinished runs, which can only
+automatic and dispatched runs alike; the run that most recently finished
+executing wins (a rerun keeps its id), so a successful manual recovery
+supersedes the failure it recovered; unfinished runs, which can only
 be unrelated-label runs, are ignored), the later
 run's admission is mode `dup`: nothing runs, and `build-test` and
 `behavior-probes` mirror the earlier run's verdicts, so a duplicate event
