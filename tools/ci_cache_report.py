@@ -116,7 +116,7 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 #: The workflow worker whose caches this reports on.
 AUDITED_JOB = "test-and-audits"
-PROBE_JOB = "behavior-probes"
+PROBE_JOB = "behavior-probe-worker"
 #: The headless lane jobs (#2745): restore-only, on test-and-audits' keys.
 LANE_JOB = "headless-lanes"
 #: The workflow's one project-cache writer (#2745), after the aggregate.
@@ -801,7 +801,7 @@ def _self_test() -> int:
     dependency_reader_drift["jobs"][PROBE_JOB]["steps"][0]["with"]["restore-keys"] = \
         "deps-v3-other-image-Linux-ghc9.12.2-"
     dependency_reader_problems = check_wiring(dependency_reader_drift)
-    check(any("(job: behavior-probes): dependency-cache key or restore prefix" in problem
+    check(any("(job: behavior-probe-worker): dependency-cache key or restore prefix" in problem
               for problem in dependency_reader_problems),
           "dependency reader image/key drift must fail, got "
           f"{dependency_reader_problems!r}")

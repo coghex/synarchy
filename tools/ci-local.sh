@@ -680,6 +680,13 @@ python3 tools/review_gate_decision.py --self-test
 step "review-gate label policy self-test"
 python3 tools/review_gate_label_policy.py --self-test
 
+# PR admission (#2927): CI runs its expensive jobs only on an approved head
+# that contains the base tip. The self-test pins the decision, ci.yml's event
+# routing and the real verdict scripts of the required checks, so a wiring
+# edit that lets a gated-out head read as a pass fails here.
+step "PR admission self-test"
+python3 tools/ci_pr_admission.py --self-test
+
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
 # cache, so it has no outcome to classify -- but its classification and

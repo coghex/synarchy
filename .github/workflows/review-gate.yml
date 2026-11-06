@@ -6,6 +6,11 @@
 # ntfy-notify.yml) is the verdict, and this check enforces it.
 #
 # Flow:
+#   - since #2927 the check is also red for an approved head that does not
+#     contain the base branch's current tip (tools/ci_pr_admission.py
+#     freshness): the label is kept across a clean replay, so approval alone
+#     says nothing about freshness. It goes green again when the branch is
+#     updated (a label-keeping synchronize). KEEP/STRIP below is unaffected.
 #   - PR opened / updated → "review-approved" check FAILS
 #     (red = "review verdict pending", merging blocked)
 #   - reviewer applies `reviewed:approve`  → check PASSES
@@ -181,12 +186,30 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     steps:
+      # Full history: freshness is judged against the EXACT head commit,
+      # which the default merge-ref checkout would hide (#2927).
       - name: Check out the gate policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      # Independent of KEEP/STRIP: a clean replay of an approved head onto a
+      # newer base keeps the label, so approval alone cannot see a head that
+      # has fallen behind. The gate below stays red for such a head until the
+      # branch update (a label-keeping synchronize) makes it current.
+      - name: Check this head contains the base branch's current tip
+        id: freshness
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python3 tools/ci_pr_admission.py freshness \
+            --head-sha "$HEAD_SHA" \
+            --base-ref "$BASE_REF" \
+            --github-output "$GITHUB_OUTPUT"
       - name: Require a live reviewed:approve verdict for this head
         env:
+          BASE_FRESHNESS: ${{ steps.freshness.outputs.freshness }}
           EVENT_ACTION: ${{ github.event.action }}
           PAYLOAD_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'reviewed:approve') }}
           DISMISSAL_RESULT: ${{ needs.dismiss-stale-approval.result }}
@@ -198,4 +221,5 @@ jobs:
             --payload-label "$PAYLOAD_LABEL" \
             --dismissal-result "$DISMISSAL_RESULT" \
             --dismissal-decision "$DISMISSAL_DECISION" \
-            --dismissal-label "$DISMISSAL_LABEL"
+            --dismissal-label "$DISMISSAL_LABEL" \
+            --base-freshness "$BASE_FRESHNESS"
