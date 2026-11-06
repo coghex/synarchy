@@ -41,6 +41,11 @@ closed:
      An older APPROVE is never searched for behind a newer trusted record,
      whatever that record says; a malformed newest record, a record by anyone
      else and a lingering `reviewed:approve` label grant nothing.
+  6. The run is a RE-RUN (`github.run_attempt` >= 2). A pull_request event
+     starts attempt 1 by itself on every push, including the clean update of
+     an already approved head, and that must not start CI: only the manager's
+     explicit re-run does. Attempt 1 therefore never admits, and the reason
+     says it is waiting for the re-run. A master push has no such rule.
 
 The decision is published as outputs. `eligible=false` plus a reason skips the
 workers and the workflow fails the admission job with that reason, and the
@@ -78,6 +83,7 @@ MODE_NONE = "none"
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 _NUMBER = re.compile(r"[1-9][0-9]{0,9}")
+_ATTEMPT = re.compile(r"[1-9][0-9]{0,5}")
 _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 
 # A review record is a line of its own that opens the marker. Whether it is a
@@ -153,7 +159,7 @@ def latest_review_record(comments: list, author: str) -> tuple[str, str]:
 
 
 def decide(event_name: str, run_sha: str, pr_number: str, sha: str, repo: str,
-           author: str, ev: Evidence) -> Admission:
+           author: str, ev: Evidence, run_attempt: str = "") -> Admission:
     run_sha = (run_sha or "").strip().lower()
     if event_name == "push":
         return Admission(True, MODE_PUSH, "master push: always admitted", head_sha=run_sha)
@@ -215,6 +221,12 @@ def decide(event_name: str, run_sha: str, pr_number: str, sha: str, repo: str,
         how = f"approved at {approved_head[:12]}, carried onto the base"
     else:
         how = "approved at this head"
+    # Everything checks out, but a pull_request event starts attempt 1 by
+    # itself on every push, including the clean update of an approved head. CI
+    # starts only when the manager asks, and a re-run is that request.
+    if not _ATTEMPT.fullmatch((run_attempt or "").strip()) or int(run_attempt) < 2:
+        return no(f"{how}, but this is the run's automatic first attempt: CI starts only when the "
+                  f"manager re-runs it", **known)
     return Admission(True, MODE_PR, f"{how}; contains {base_ref}@{tip[:12]}",
                      pr_number=pr_number, head_sha=sha, base_ref=base_ref, base_sha=tip, fork=fork)
 
@@ -320,7 +332,7 @@ def _emit(result: Admission, path: str) -> None:
 
 def _admit_main(args: argparse.Namespace) -> int:  # noqa: D103
     result = decide(args.event_name, args.run_sha, args.pr_number, args.sha, args.repo,
-                    args.review_author, live_evidence(args.repo_dir))
+                    args.review_author, live_evidence(args.repo_dir), args.run_attempt)
     line = f"CI admission: {'ADMITTED' if result.eligible else 'NOT admitted'} (mode {result.mode}) {result.reason}"
     print(line)
     _emit(result, args.github_output)
@@ -458,8 +470,8 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
     def run(sha: str = A, *, event: str = "pull_request", run_sha: str | None = None,
-            pr: str = "7", ev: Evidence | None = None) -> Admission:
-        return decide(event, sha if run_sha is None else run_sha, pr, sha, REPO, AUTHOR, ev or fake())
+            pr: str = "7", ev: Evidence | None = None, attempt: str = "2") -> Admission:
+        return decide(event, sha if run_sha is None else run_sha, pr, sha, REPO, AUTHOR, ev or fake(), attempt)
 
     approve = [comment(1, "x\n" + marker(A))]
 
@@ -519,6 +531,28 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
     check("an unknown event runs nothing", run(event="schedule", ev=fake(comments=approve)).eligible, False)
     check("a push's run revision is not asked for a tree",
           run(event="push", run_sha=B, ev=fake(same_tree=False)).eligible, True)
+
+    # -- only a re-run starts CI -------------------------------------------------------
+    first = run(ev=fake(comments=approve), attempt="1")
+    check("an approved, current head is NOT admitted on the automatic first attempt", first.eligible, False)
+    check("... saying it waits for the manager's re-run", "re-runs it" in first.reason, True)
+    check("... and the refusal still names the head and base", (first.head_sha, first.base_sha), (A, C))
+    check("a first attempt of a carried approval is not admitted either",
+          run(B, ev=fake(head=B, comments=[comment(1, marker(A))], keeps=True), attempt="1").eligible, False)
+    check("a first attempt with a synthetic merge run revision is not admitted",
+          run(run_sha=B, ev=fake(comments=approve, same_tree=True), attempt="1").eligible, False)
+    check("the manager's re-run (attempt 2) of the same head is admitted",
+          run(ev=fake(comments=approve), attempt="2").eligible, True)
+    check("a carried approval is admitted on a re-run",
+          run(B, ev=fake(head=B, comments=[comment(1, marker(A))], keeps=True), attempt="2").eligible, True)
+    check("a later attempt is admitted", run(ev=fake(comments=approve), attempt="7").eligible, True)
+    for odd in ("", "0", "x", "-1", "02", "2; true", "1.5"):
+        check(f"an unreadable run attempt {odd!r} fails closed",
+              run(ev=fake(comments=approve), attempt=odd).eligible, False)
+    check("a re-run of an unapproved head is still refused (with the approval reason)",
+          "not approved" in run(ev=fake(comments=[]), attempt="2").reason
+          or "no review record" in run(ev=fake(comments=[]), attempt="2").reason, True)
+    check("a master push needs no re-run", run(event="push", attempt="1").eligible, True)
 
     # -- the label is not evidence --------------------------------------------------
     check("a lingering label with no record is refused",
@@ -633,8 +667,15 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
                             lambda *_: records, live.base_tip, live.contains, live.same_tree, live.replay_keeps)
 
         def real(head: str, records: list) -> Admission:
-            return decide("pull_request", head, "7", head, REPO, AUTHOR, ev_for(head, records))
+            return decide("pull_request", head, "7", head, REPO, AUTHOR, ev_for(head, records), "2")
 
+        first_attempt = decide("pull_request", merged, "7", merged, REPO, AUTHOR,
+                               ev_for(merged, [comment(1, marker(approved))]), "1")
+        check("git: approved A cleanly updated to B is NOT admitted on the automatic first attempt",
+              first_attempt.eligible, False)
+        check("git: ... but the manager's re-run of that run is",
+              decide("pull_request", merged, "7", merged, REPO, AUTHOR,
+                     ev_for(merged, [comment(1, marker(approved))]), "2").eligible, True)
         check("git: approved A then a clean update to B admits",
               real(merged, [comment(1, marker(approved))]).eligible, True)
         check("git: approved at B itself admits", real(merged, [comment(1, marker(merged))]).eligible, True)
@@ -657,13 +698,28 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
               live.same_tree(behind_merge, approved), False)
         check("git: an unknown revision is a tree error", _raises(lambda: live.same_tree(D, merged)), True)
         merged_run = decide("pull_request", synthetic, "7", merged, REPO, AUTHOR,
-                            ev_for(merged, [comment(1, marker(merged))]))
+                            ev_for(merged, [comment(1, marker(merged))]), "2")
         check("git: a re-run on the synthetic merge of the admitted head is admitted", merged_run.eligible, True)
         stale_run = decide("pull_request", behind_merge, "7", edited, REPO, AUTHOR,
-                           ev_for(edited, [comment(1, marker(edited))]))
+                           ev_for(edited, [comment(1, marker(edited))]), "2")
         check("git: a run that checked out something else than the head is refused", stale_run.eligible, False)
         nowhere = live_evidence(str(Path(tmp) / "nowhere"))
         check("git: a fetch failure is an error", _raises(lambda: nowhere.base_tip("master")), True)
+
+    # -- the command line the workflow runs: attempt, outputs --------------------------
+    real_live = globals()["live_evidence"]
+    globals()["live_evidence"] = lambda _dir=".": fake(comments=approve)
+    try:
+        for attempt, want in (("1", "false"), ("2", "true")):
+            with tempfile.NamedTemporaryFile("r+", suffix=".out") as out:
+                code = main(["admit", "--repo", REPO, "--event-name", "pull_request", "--run-sha", A,
+                             "--run-attempt", attempt, "--pr-number", "7", "--sha", A,
+                             "--review-author", AUTHOR, "--github-output", out.name])
+                published = dict(line.split("=", 1) for line in out.read().splitlines())
+                check(f"cli: attempt {attempt} publishes eligible={want}", published.get("eligible"), want)
+                check(f"cli: attempt {attempt} exits 0 (the refusal step fails the job)", code, 0)
+    finally:
+        globals()["live_evidence"] = real_live
 
     _check_workflow(workflow, image_workflow, check)
 
@@ -719,6 +775,10 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
           all("ref" not in (s.get("with") or {}) for s in steps if "checkout" in str(s.get("uses", ""))), True)
     env = helper_step.get("env") or {}
     check("ci.yml: admission binds the run revision", env.get("RUN_SHA"), "${{ github.sha }}")
+    check("ci.yml: admission is told the run attempt (only a re-run starts CI)",
+          env.get("RUN_ATTEMPT"), "${{ github.run_attempt }}")
+    check("ci.yml: admission passes the attempt to the helper",
+          "--run-attempt \"$RUN_ATTEMPT\"" in str(helper_step.get("run", "")), True)
     check("ci.yml: admission reads which pull request and head the event is for",
           (env.get("PR_NUMBER"), env.get("SHA")),
           ("${{ github.event.pull_request.number }}", "${{ github.event.pull_request.head.sha }}"))
@@ -850,6 +910,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     admit.add_argument("--repo", required=True)
     admit.add_argument("--event-name", required=True)
     admit.add_argument("--run-sha", required=True)
+    admit.add_argument("--run-attempt", default="", help="github.run_attempt (>= 2 is a re-run)")
     admit.add_argument("--pr-number", default="")
     admit.add_argument("--sha", default="")
     admit.add_argument("--review-author", required=True)

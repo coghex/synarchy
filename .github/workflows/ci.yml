@@ -16,7 +16,10 @@
 # status rollup, so branch protection reports the contexts missing).
 #
 # The `admission` job decides through tools/ci_pr_admission.py, from LIVE
-# state, never the event payload a rerun replays: the event's head is the
+# state, never the event payload a rerun replays, and only for a RE-RUN
+# (attempt 1 is the automatic start and never admits, even for an approved,
+# up-to-date head, so a push or "Update branch" cannot start CI by itself):
+# the event's head is the
 # pull request's current head, the code this run checks out has that head's
 # tree, the head contains the base's current tip, and the review service's
 # head-bound marker approves it. Every worker is gated behind it, and the two
@@ -227,7 +230,10 @@ jobs:
   # synthetic merge of an up-to-date head IS the head), the head contains the
   # base's current tip after a fresh fetch, and the newest head-bound review
   # marker by the repository owner's account approves it (or approves an
-  # earlier head this one only carries onto a newer base). Evidence it cannot
+  # earlier head this one only carries onto a newer base), and the run is a
+  # RE-RUN (github.run_attempt >= 2): a pull_request event starts attempt 1 by
+  # itself on every push, even the clean update of an approved head, and only
+  # the manager's explicit re-run may start CI. Evidence it cannot
   # read fails closed. It reads the pull request's comments and git, never
   # other runs, and never the event payload as evidence of anything but which
   # head this run was started for: a re-run replays that payload.
@@ -267,6 +273,7 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_AUTHOR: ${{ github.repository_owner }}
@@ -275,6 +282,7 @@ jobs:
           --repo "$REPO"
           --event-name "$EVENT_NAME"
           --run-sha "$RUN_SHA"
+          --run-attempt "$RUN_ATTEMPT"
           --pr-number "$PR_NUMBER"
           --sha "$SHA"
           --review-author "$REVIEW_AUTHOR"
