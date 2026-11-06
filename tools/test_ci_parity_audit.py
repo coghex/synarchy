@@ -520,6 +520,7 @@ jobs:
           ADMITTED: ${{ needs.admission.outputs.eligible }}
           ADMISSION_MODE: ${{ needs.admission.outputs.mode }}
           ADMISSION_REASON: ${{ needs.admission.outputs.reason }}
+          MIRROR_RESULT: ${{ needs.admission.outputs.mirror_build_test }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probe-worker.result }}

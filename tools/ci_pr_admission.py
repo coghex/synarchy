@@ -74,6 +74,10 @@ UNVERIFIED = "unverified"
 MODE_PUSH = "push"
 MODE_PR = "pr"
 MODE_NONE = "none"
+#: A run that admitted nothing because an earlier run already ran CI for this
+#: very head: it does no expensive work and its required checks MIRROR that
+#: run's verdicts (#2927).
+MODE_DUP = "dup"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -109,6 +113,7 @@ class PullRequest(NamedTuple):
     base_sha: str
     base_ref: str
     labels: frozenset
+    head_ref: str = ""
 
 
 class Dismissal(NamedTuple):
@@ -123,6 +128,8 @@ class Admission(NamedTuple):
     detail: str
     head_sha: str = ""
     base_sha: str = ""
+    mirror_build_test: str = ""
+    mirror_probes: str = ""
 
     @property
     def reason(self) -> str:
@@ -262,59 +269,90 @@ def fetch_pull(cli: Runner, repo: str, number: str) -> PullRequest | None:
             head_sha=str(doc["head"]["sha"]),
             base_sha=str(doc["base"]["sha"]),
             base_ref=str(doc["base"]["ref"]),
-            labels=frozenset(str(item["name"]) for item in doc["labels"]))
+            labels=frozenset(str(item["name"]) for item in doc["labels"]),
+            head_ref=str(doc["head"].get("ref", "")))
     except (ValueError, KeyError, TypeError):
         return None
 
 
-def fetch_dismissal(cli: Runner, repo: str, sha: str) -> tuple[bool, Dismissal | None]:
-    """The stale-approval outcome for `sha`, from review-gate.yml's own runs.
-
-    Answers (readable, outcome): a completed Dismissal; a not-completed one
-    while any review-gate run for this head has not SETTLED; or None, which
-    means every review-gate run for the head settled and none of them ran a
-    dismissal (the head never went through a synchronize). An unreadable
-    answer is never "none".
-
-    It reads the workflow RUNS and their jobs rather than check runs, because
-    a run exists the moment its event fires while its checks register a
-    little later: an empty check-runs answer cannot tell "this head was never
-    synchronized" from "its dismissal has not registered yet" (a labeled or
-    dispatched run that read the label in that window would admit a head the
-    pending dismissal was about to strip). A run whose jobs are not yet
-    listed, or a head with no review-gate run at all, is therefore PENDING,
-    not absent.
-
-    The dismissal job runs only on `synchronize`; on `opened` and `labeled`
-    events GitHub records it as a SKIPPED job. A skipped job is a settled
-    absence of a dismissal and never an outcome, so it can neither mask a
-    real result nor stand in for one.
-    """
+def _runs(cli: Runner, repo: str, workflow: str, **filters: str
+          ) -> list[dict] | None:
+    """A workflow's runs for the given filters; None when unreadable."""
+    flags: list[str] = []
+    for key, value in filters.items():
+        flags += ["-f", f"{key}={value}"]
     rc, out, _ = cli("api", "-X", "GET",
-                     f"repos/{repo}/actions/workflows/review-gate.yml/runs",
-                     "-f", f"head_sha={sha}", "-f", "event=pull_request",
+                     f"repos/{repo}/actions/workflows/{workflow}/runs",
+                     *flags, "-f", "per_page=100")
+    if rc != 0:
+        return None
+    try:
+        runs = json.loads(out)["workflow_runs"]
+        return [dict(item, id=int(item["id"])) for item in runs]
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _jobs(cli: Runner, repo: str, run_id: int) -> list[dict] | None:
+    rc, out, _ = cli("api", "-X", "GET", f"repos/{repo}/actions/runs/{run_id}/jobs",
                      "-f", "per_page=100")
     if rc != 0:
-        return False, None
+        return None
     try:
-        run_ids = [int(item["id"]) for item in json.loads(out)["workflow_runs"]]
+        return list(json.loads(out)["jobs"])
     except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _run_prs(run: dict) -> set[str]:
+    return {str(item.get("number")) for item in run.get("pull_requests") or []
+            if isinstance(item, dict)}
+
+
+def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
+                    sha: str) -> tuple[bool, Dismissal | None]:
+    """The stale-approval outcome for pull request `pr_number` at `sha`.
+
+    Answers (readable, outcome): a completed Dismissal; a not-completed one
+    while the head's evidence has not SETTLED; or None, which means the head
+    is POSITIVELY the pull request's initial head and nothing ran a
+    dismissal. An unreadable answer is never "none".
+
+    Evidence comes from review-gate.yml's own workflow RUNS and their jobs,
+    scoped to this pull request (its head branch, and the run's own pull
+    request list), not from check runs and not repository-wide by SHA:
+
+    * a run exists the moment its event fires while its checks register a
+      little later, so an empty check-runs answer cannot tell "never
+      synchronized" from "not registered yet";
+    * two pull requests can share a commit, and one PR's failed dismissal
+      must neither be hidden by, nor stand in for, the other's.
+
+    The dismissal job runs only on `synchronize`; on `opened`/`labeled` GitHub
+    records it as a SKIPPED job, a settled absence and never an outcome.
+
+    ABSENCE is accepted only for the initial head, and that is proved
+    positively: every review-gate run of this pull request is for `sha`.
+    A synchronize needs a different head to move to, so any head that was
+    ever pushed over another leaves a run for the earlier head behind. A head
+    with other heads in the PR's history and no dismissal outcome yet is
+    PENDING (its synchronize run has not registered, or its jobs are not
+    listed), however many skipped labeled/opened runs sit beside it.
+    """
+    runs = _runs(cli, repo, "review-gate.yml", branch=head_ref, event="pull_request")
+    if runs is None:
         return False, None
+    scoped = [run for run in runs if not _run_prs(run) or pr_number in _run_prs(run)]
+    mine = [run for run in scoped if run.get("head_sha") == sha]
     unsettled = Dismissal("queued", "")
-    if not run_ids:
+    if not mine:
         return True, unsettled
     outcomes: list[tuple[int, Dismissal]] = []
-    for run_id in run_ids:
-        rc, out, _ = cli("api", "-X", "GET",
-                         f"repos/{repo}/actions/runs/{run_id}/jobs",
-                         "-f", "per_page=100")
-        if rc != 0:
+    for run in mine:
+        jobs = _jobs(cli, repo, run["id"])
+        if jobs is None:
             return False, None
-        try:
-            jobs = [job for job in json.loads(out)["jobs"]
-                    if job.get("name") == DISMISSAL_CHECK]
-        except (ValueError, KeyError, TypeError):
-            return False, None
+        jobs = [job for job in jobs if job.get("name") == DISMISSAL_CHECK]
         if not jobs:
             return True, unsettled
         for job in jobs:
@@ -324,12 +362,15 @@ def fetch_dismissal(cli: Runner, repo: str, sha: str) -> tuple[bool, Dismissal |
                 continue
             outcomes.append((int(job.get("id", 0)),
                              Dismissal("completed", str(job.get("conclusion") or ""))))
-    if not outcomes:
-        return True, None
-    return True, max(outcomes, key=lambda pair: pair[0])[1]
+    if outcomes:
+        return True, max(outcomes, key=lambda pair: pair[0])[1]
+    if any(run.get("head_sha") != sha for run in scoped):
+        return True, unsettled
+    return True, None
 
 
-def await_dismissal(cli: Runner, repo: str, sha: str, *, require: bool,
+def await_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str, sha: str,
+                    *, require: bool,
                     wait_seconds: float, poll_seconds: float,
                     sleep: Callable[[float], None] = time.sleep,
                     clock: Callable[[], float] = time.monotonic
@@ -348,7 +389,7 @@ def await_dismissal(cli: Runner, repo: str, sha: str, *, require: bool,
     deadline = clock() + wait_seconds
     last: Dismissal | None = None
     while True:
-        readable, run = fetch_dismissal(cli, repo, sha)
+        readable, run = fetch_dismissal(cli, repo, pr_number, head_ref, sha)
         if readable:
             last = run
             if run is not None and run.status == "completed":
@@ -379,32 +420,122 @@ def base_freshness(run_git: Runner, head_sha: str, base_ref: str) -> str:
     return CURRENT if rc == 0 else BEHIND if rc == 1 else UNVERIFIED
 
 
-def run_admit(event: Event, repo: str, *, cli: Runner = gh, run_git: Runner = git,
-              wait_seconds: float = 900, poll_seconds: float = 15,
+class Prior(NamedTuple):
+    run_id: int
+    build_test: str
+    probes: str
+
+
+def find_prior_run(cli: Runner, repo: str, sha: str,
+                   my_run_id: str) -> tuple[str, Prior | None]:
+    """An earlier ci.yml run that already RAN CI for this exact head.
+
+    Answers ("ok" | "unreadable" | "busy", prior). Same-head runs are
+    serialized by the workflow's concurrency group, so a prior run is normally
+    finished by the time this one is admitted; one still running is reported
+    "busy" and is never admitted over.
+
+    A run RAN CI when its `static-audits` job concluded success or failure;
+    an un-admitted run, a mirror, or a cancelled one did not. The newest run
+    that did is the verdict a duplicate mirrors.
+    """
+    runs = _runs(cli, repo, "ci.yml", head_sha=sha)
+    if runs is None:
+        return "unreadable", None
+    best: Prior | None = None
+    for run in sorted(runs, key=lambda item: item["id"], reverse=True):
+        if str(run["id"]) == str(my_run_id) \
+                or run.get("event") not in ("pull_request", "workflow_dispatch"):
+            continue
+        if run.get("status") != "completed":
+            return "busy", None
+        jobs = _jobs(cli, repo, run["id"])
+        if jobs is None:
+            return "unreadable", None
+        by_name = {job.get("name"): job for job in jobs}
+        audits = by_name.get("static-audits") or {}
+        if audits.get("conclusion") not in ("success", "failure"):
+            continue
+        best = Prior(run["id"],
+                     str((by_name.get("build-test") or {}).get("conclusion") or ""),
+                     str((by_name.get("behavior-probes") or {}).get("conclusion") or ""))
+        break
+    return "ok", best
+
+
+def cancel_superseded(cli: Runner, repo: str, pr_number: str, head_ref: str,
+                      head_sha: str) -> list[int]:
+    """Cancel this pull request's live CI runs for any OTHER head.
+
+    The workflow's concurrency group is per head (so same-head events never
+    cancel each other's expensive work), which makes superseding a head an
+    explicit act: a newer head makes every older head's run obsolete. Best
+    effort, and never decisive for this run's own admission.
+    """
+    cancelled: list[int] = []
+    for status in ("in_progress", "queued"):
+        runs = _runs(cli, repo, "ci.yml", branch=head_ref, event="pull_request",
+                     status=status) or []
+        for run in runs:
+            if run.get("head_sha") == head_sha or pr_number not in _run_prs(run):
+                continue
+            rc, _, _ = cli("api", "-X", "POST",
+                           f"repos/{repo}/actions/runs/{run['id']}/cancel")
+            if rc == 0:
+                cancelled.append(run["id"])
+    return cancelled
+
+
+def run_admit(event: Event, repo: str, *, run_id: str = "", cli: Runner = gh,
+              run_git: Runner = git, wait_seconds: float = 900,
+              poll_seconds: float = 15,
               sleep: Callable[[float], None] = time.sleep,
               clock: Callable[[], float] = time.monotonic) -> Admission:
     """Gather the evidence in the right order, then decide.
 
-    The order is the point: the dismissal outcome first, the LIVE pull
-    request (head and labels) after it, so the label read cannot predate the
-    strip it is meant to reflect.
+    The order is the point: the pull request's identity first, then the
+    stale-approval outcome, then the LIVE pull request (head and labels), so
+    the label read cannot predate the strip it is meant to reflect.
     """
     if event.name not in ("pull_request", "workflow_dispatch") \
             or (event.name == "pull_request" and not is_admitting_event(event)):
         return decide(event, None, None, UNVERIFIED)
     run_head = event.pr_head_sha if event.name == "pull_request" else event.run_sha
+    identity_ok = _SHA.fullmatch(run_head or "") and event.pr_number.isdigit()
+    first = fetch_pull(cli, repo, event.pr_number) if identity_ok else None
     dismissal, readable = None, True
-    if _SHA.fullmatch(run_head or "") and event.pr_number.isdigit():
+    if first is not None:
+        if first.head_sha == run_head:
+            cancel_superseded(cli, repo, event.pr_number, first.head_ref, run_head)
         readable, dismissal = await_dismissal(
-            cli, repo, run_head,
+            cli, repo, event.pr_number, first.head_ref, run_head,
             require=(event.name == "pull_request" and event.action == "synchronize"),
             wait_seconds=wait_seconds, poll_seconds=poll_seconds,
             sleep=sleep, clock=clock)
-    pull = (fetch_pull(cli, repo, event.pr_number)
-            if event.pr_number.isdigit() else None)
+    pull = fetch_pull(cli, repo, event.pr_number) if first is not None else None
     base_ref = pull.base_ref if pull is not None else event.pr_base_ref
     freshness = base_freshness(run_git, run_head, base_ref)
-    return decide(event, pull, dismissal, freshness, readable)
+    admitted = decide(event, pull, dismissal, freshness, readable)
+    if not admitted.eligible or event.name != "pull_request":
+        # An explicit dispatch is a deliberate re-run and is never suppressed.
+        return admitted
+    state, prior = find_prior_run(cli, repo, run_head, run_id)
+    if state == "unreadable":
+        return no(MODE_PR, "prior-run-unreadable",
+                  "could not read the earlier CI runs for this head, so a duplicate "
+                  "cannot be ruled out", admitted.head_sha, admitted.base_sha)
+    if state == "busy":
+        return no(MODE_PR, "duplicate-in-flight",
+                  "another CI run for this head has not finished",
+                  admitted.head_sha, admitted.base_sha)
+    if prior is None:
+        return admitted
+    return Admission(
+        False, MODE_DUP, "duplicate-head",
+        f"run {prior.run_id} already ran CI for this head; its verdicts "
+        f"(build-test {prior.build_test or 'unknown'}, behavior-probes "
+        f"{prior.probes or 'unknown'}) are mirrored and nothing runs again",
+        admitted.head_sha, admitted.base_sha, prior.build_test, prior.probes)
 
 
 def _single_line(text: str) -> str:
@@ -423,14 +554,16 @@ def _admit_main(args: argparse.Namespace) -> int:
     event = Event(args.event_name, args.action, args.label, args.run_sha,
                   args.pr_number, args.pr_head_sha, args.pr_base_sha,
                   args.pr_base_ref)
-    result = run_admit(event, args.repo, wait_seconds=args.wait_seconds,
-                       poll_seconds=args.poll_seconds)
+    result = run_admit(event, args.repo, run_id=args.run_id,
+                       wait_seconds=args.wait_seconds, poll_seconds=args.poll_seconds)
     line = (f"CI admission: {'ADMITTED' if result.eligible else 'NOT admitted'} "
             f"(mode {result.mode}) {result.reason}")
     print(line)
     _emit({"eligible": "true" if result.eligible else "false",
            "mode": result.mode, "reason": result.reason,
-           "base_sha": result.base_sha, "head_sha": result.head_sha},
+           "base_sha": result.base_sha, "head_sha": result.head_sha,
+           "mirror_build_test": result.mirror_build_test,
+           "mirror_probes": result.mirror_probes},
           args.github_output)
     if args.github_summary:
         with open(args.github_summary, "a", encoding="utf-8") as handle:
@@ -622,86 +755,121 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         check(f"predicate/{name}/{action}/{label}",
               bool(_translate(ADMITTING_EXPRESSION, context)), is_admitting_event(event))
 
-    # -- await_dismissal / fetch_dismissal over a scripted review-gate ------
-    def job(identifier: int, status: str, conclusion: str | None) -> dict:
-        return {"id": identifier, "name": DISMISSAL_CHECK, "status": status,
-                "conclusion": conclusion}
+    # -- await_dismissal / fetch_dismissal over a scripted GitHub ----------
+    OLD = "e" * 40
 
-    def gate_run(run_id: int, *jobs: dict) -> tuple[int, list]:
-        return run_id, list(jobs)  # no jobs: the run exists, its jobs are not listed yet
+    def job(identifier: int, status: str, conclusion: str | None, name: str = DISMISSAL_CHECK) -> dict:
+        return {"id": identifier, "name": name, "status": status, "conclusion": conclusion}
+
+    def gate_run(run_id: int, *jobs: dict, head: str = HEAD, prs: tuple = ("7",)) -> dict:
+        """A review-gate run of a pull request at `head`. No jobs: not listed yet."""
+        return {"id": run_id, "head_sha": head, "jobs": list(jobs),
+                "pull_requests": [{"number": int(n)} for n in prs]}
+
+    def ci_run(run_id: int, *, status: str = "completed", event: str = "pull_request",
+               head: str = HEAD, prs: tuple = ("7",), audits: str | None = "success",
+               build: str | None = "success", probes: str | None = "success") -> dict:
+        jobs = [job(run_id * 10 + 1, "completed", audits, "static-audits"),
+                job(run_id * 10 + 2, "completed", build, "build-test"),
+                job(run_id * 10 + 3, "completed", probes, "behavior-probes")]
+        return {"id": run_id, "event": event, "status": status, "head_sha": head,
+                "jobs": jobs, "pull_requests": [{"number": int(n)} for n in prs]}
 
     class Gate:
-        """A `gh` whose review-gate answers advance one snapshot per poll.
+        """A `gh` over scripted review-gate and ci.yml runs.
 
-        A snapshot is the list of review-gate runs for the head at that
-        moment, each with the jobs GitHub lists for it. `pull` is the live
-        pull request; `snapshots=None` makes the Actions API unreadable.
+        Review-gate answers advance one snapshot per poll (a snapshot is the
+        list of that workflow's runs for the branch at that moment).
+        `snapshots=None` makes the Actions API unreadable. `ci` is the static
+        list of ci.yml runs; `pull` the live pull request.
         """
 
-        def __init__(self, *snapshots: list, pull: str | None = None) -> None:
+        def __init__(self, *snapshots: list, pull: str | None = None,
+                     ci: list | None = None, ci_unreadable: bool = False) -> None:
             self.snapshots = list(snapshots) if snapshots else None
-            self.pull = pull
+            self.pull, self.ci, self.ci_unreadable = pull, ci or [], ci_unreadable
             self.polls = -1
             self.order: list[str] = []
+            self.cancelled: list[int] = []
 
         def current(self) -> list:
             return self.snapshots[min(self.polls, len(self.snapshots) - 1)]
 
         def __call__(self, *args: str) -> tuple[int, str, str]:
             text = " ".join(args)
-            if "review-gate.yml/runs" in text:
+            if "workflows/review-gate.yml/runs" in text:
                 self.order.append("dismissal")
                 if self.snapshots is None:
                     return 1, "", "boom"
                 self.polls += 1
                 return 0, json.dumps({"workflow_runs": [
-                    {"id": run_id} for run_id, _ in self.current()]}), ""
+                    {k: v for k, v in run.items() if k != "jobs"} for run in self.current()]}), ""
+            if "workflows/ci.yml/runs" in text:
+                if self.ci_unreadable:
+                    return 1, "", "boom"
+                runs = [{k: v for k, v in run.items() if k != "jobs"} for run in self.ci]
+                if "head_sha=" in text:
+                    runs = [r for r in runs if f"head_sha={r['head_sha']}" in text]
+                for status in ("in_progress", "queued"):
+                    if f"status={status}" in text:
+                        runs = [r for r in runs if r["status"] == status]
+                return 0, json.dumps({"workflow_runs": runs}), ""
             match = re.search(r"/actions/runs/(\d+)/jobs", text)
             if match:
-                if self.snapshots is None:
+                run_id = int(match.group(1))
+                if self.snapshots is None and not any(r["id"] == run_id for r in self.ci):
                     return 1, "", "boom"
-                jobs = dict(self.current())[int(match.group(1))]
-                return 0, json.dumps({"jobs": jobs}), ""
+                pool = list(self.ci) + (self.current() if self.snapshots else [])
+                return 0, json.dumps({"jobs": next(r["jobs"] for r in pool if r["id"] == run_id)}), ""
+            cancel = re.search(r"/actions/runs/(\d+)/cancel", text)
+            if cancel:
+                self.cancelled.append(int(cancel.group(1)))
+                return 0, "", ""
             self.order.append("pull")
             return (0, self.pull, "") if self.pull is not None else (1, "", "boom")
 
-    ticks = iter(range(10_000))
+    ticks = iter(range(100_000))
     fake_clock = lambda: float(next(ticks))  # noqa: E731
     nap = lambda _seconds: None  # noqa: E731
 
-    def wait(gate: Gate, *, require: bool, limit: float = 12):
-        return await_dismissal(gate, "o/r", HEAD, require=require, wait_seconds=limit,
-                               poll_seconds=1, sleep=nap, clock=fake_clock)
+    def wait(gate: Gate, *, require: bool, pr: str = "7", limit: float = 12):
+        return await_dismissal(gate, "o/r", pr, "topic", HEAD, require=require,
+                               wait_seconds=limit, poll_seconds=1, sleep=nap, clock=fake_clock)
 
     ok_job = job(10, "completed", "success")
     skip_job = job(20, "completed", "skipped")
-    gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
-                [gate_run(1, ok_job)])
+    opened_old = gate_run(1, skip_job, head=OLD)  # the PR was opened at an earlier head
+    gate = Gate([opened_old], [opened_old, gate_run(2)],
+                [opened_old, gate_run(2, job(10, "in_progress", None))], [opened_old, gate_run(2, ok_job)])
     check("await: delayed dismissal is waited for", wait(gate, require=True), (True, _OK))
     check("await: it kept polling until completed", gate.polls + 1, 4)
     gate = Gate([])
     check("await: a head with no review-gate run yet is pending, never absent",
           wait(gate, require=True), (True, Dismissal("queued", "")))
-    gate = Gate([])
     check("await: ... on a non-synchronize too",
-          wait(gate, require=False), (True, Dismissal("queued", "")))
-    gate = Gate([gate_run(1)])
+          wait(Gate([]), require=False), (True, Dismissal("queued", "")))
     check("await: a run whose jobs are not registered yet is pending",
-          wait(gate, require=False), (True, Dismissal("queued", "")))
-    # The race round 2 of #2928 found: the labeled/dispatch run polls while
-    # the synchronize's dismissal has not registered, then it appears.
+          wait(Gate([gate_run(1)]), require=False), (True, Dismissal("queued", "")))
+    # Round 2/3 of #2928: a labeled/dispatch run reads while the synchronize's
+    # run or dismissal has not registered, beside SKIPPED labeled/opened runs.
+    labeled_skip = gate_run(3, skip_job)
     for require in (False, True):
-        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))], [gate_run(1, ok_job)])
-        check(f"await: delayed registration is waited for (require={require})",
+        gate = Gate([opened_old, labeled_skip],
+                    [opened_old, labeled_skip, gate_run(2)],
+                    [opened_old, labeled_skip, gate_run(2, job(10, "in_progress", None))],
+                    [opened_old, labeled_skip, gate_run(2, ok_job)])
+        check(f"await: skipped-only evidence beside an earlier head is pending (require={require})",
               wait(gate, require=require), (True, _OK))
-        check(f"await: ... and was not read just once (require={require})", gate.polls > 0, True)
+        check(f"await: ... and was read more than once (require={require})", gate.polls >= 3, True)
+        gate = Gate([opened_old, labeled_skip])
+        check(f"await: ... and never accepted as absence (require={require})",
+              wait(gate, require=require), (True, Dismissal("queued", "")))
     gate = Gate([gate_run(1, skip_job)])
-    check("await: initial approval (only skipped dismissals) is accepted at once",
+    check("await: the INITIAL head (every PR run is for it, all skipped) is accepted at once",
           wait(gate, require=False), (True, None))
     check("await: ... without polling again", gate.polls + 1, 1)
-    gate = Gate([gate_run(1, skip_job)])
-    check("await: only skipped dismissals on a synchronize wait out as missing",
-          wait(gate, require=True), (True, None))
+    gate = Gate([gate_run(1, skip_job), gate_run(2, job(21, "completed", "skipped"))])
+    check("await: ... including its labeled runs", wait(gate, require=False), (True, None))
     gate = Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])
     check("await: a newer skipped run does not mask a successful synchronize",
           wait(gate, require=True), (True, _OK))
@@ -719,22 +887,30 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     gate = Gate([gate_run(1, job(10, "in_progress", None))])
     check("await: a run still pending at the deadline is returned pending",
           wait(gate, require=True), (True, Dismissal("in_progress", "")))
-    gate = Gate()
+    # Two pull requests sharing a commit keep their evidence apart.
+    shared = [gate_run(1, job(10, "completed", "failure"), prs=("7",)),
+              gate_run(2, job(11, "completed", "success"), prs=("8",))]
+    check("await: PR 7 sees its own failed dismissal, not PR 8's success",
+          wait(Gate(shared), require=True, pr="7"), (True, Dismissal("completed", "failure")))
+    check("await: PR 8 sees its own success", wait(Gate(shared), require=True, pr="8"), (True, _OK))
+    check("await: a PR's own initial head is not hidden by another PR's runs",
+          wait(Gate([gate_run(1, skip_job, prs=("7",)),
+                     gate_run(2, job(11, "completed", "failure"), prs=("8",), head=OLD)]),
+               require=False, pr="7"), (True, None))
     check("await: an unreadable API is reported unreadable, not absent",
-          wait(gate, require=True), (False, None))
-    gate = Gate()
+          wait(Gate(), require=True), (False, None))
     check("await: unreadable stays unreadable for a non-synchronize too",
-          wait(gate, require=False), (False, None))
+          wait(Gate(), require=False), (False, None))
 
     # -- run_admit end to end over scripted gh/git, outputs written --------
     def pull_json(**over: object) -> str:
         pr = _pull(**over)
-        return json.dumps({"state": pr.state, "head": {"sha": pr.head_sha},
+        return json.dumps({"state": pr.state, "head": {"sha": pr.head_sha, "ref": "topic"},
                            "base": {"sha": pr.base_sha, "ref": pr.base_ref},
                            "labels": [{"name": n} for n in sorted(pr.labels)]})
 
     def admit(event: Event, *, pull: str | None, gate: Gate | None = None,
-              freshness_rc: int = 0, fetch_rc: int = 0) -> Admission:
+              freshness_rc: int = 0, fetch_rc: int = 0, run_id: str = "900") -> Admission:
         gate = gate if gate is not None else Gate()
         gate.pull = pull
 
@@ -744,70 +920,106 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
             if args[0] == "cat-file":
                 return 0, "", ""
             return freshness_rc, "", ""
-        return run_admit(event, "o/r", cli=gate, run_git=run_git, wait_seconds=12,
-                         poll_seconds=1, sleep=nap, clock=fake_clock)
+        return run_admit(event, "o/r", run_id=run_id, cli=gate, run_git=run_git,
+                         wait_seconds=12, poll_seconds=1, sleep=nap, clock=fake_clock)
 
-    def done() -> Gate:
-        return Gate([gate_run(1, ok_job)], pull=None)
+    def done(**kw: object) -> Gate:
+        return Gate([gate_run(1, ok_job)], **kw)
 
+    sync = _event("pull_request", "synchronize")
     check("admit: synchronize kept and current",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done()).eligible, True)
+          admit(sync, pull=pull_json(), gate=done()).eligible, True)
     check("admit: ... but behind",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
-                freshness_rc=1).code, "behind-base")
+          admit(sync, pull=pull_json(), gate=done(), freshness_rc=1).code, "behind-base")
     check("admit: ... but the base fetch failed",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
-                fetch_rc=1).code, "freshness-unverified")
+          admit(sync, pull=pull_json(), gate=done(), fetch_rc=1).code, "freshness-unverified")
     check("admit: ... but git errored",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
-                freshness_rc=128).code, "freshness-unverified")
+          admit(sync, pull=pull_json(), gate=done(), freshness_rc=128).code, "freshness-unverified")
     check("admit: the dismissal strip (green) with the label gone",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(labels=frozenset()),
-                gate=done()).code, "not-approved")
+          admit(sync, pull=pull_json(labels=frozenset()), gate=done()).code, "not-approved")
     check("admit: unreadable pull request",
-          admit(_event("pull_request", "synchronize"), pull=None, gate=done()).code,
-          "pr-identity-unresolved")
+          admit(sync, pull=None, gate=done()).code, "pr-identity-unresolved")
     check("admit: checks API down on a synchronize",
-          admit(_event("pull_request", "synchronize"), pull=pull_json()).code,
-          "dismissal-unreadable")
+          admit(sync, pull=pull_json()).code, "dismissal-unreadable")
     approve = _event("pull_request", "labeled", label=APPROVAL_LABEL)
     check("admit: initial approval beside skipped dismissal jobs",
           admit(approve, pull=pull_json(),
                 gate=Gate([gate_run(1, skip_job), gate_run(2, job(21, "completed", "skipped"))])).eligible,
           True)
+    after_sync = [opened_old, gate_run(2, ok_job), gate_run(3, job(30, "completed", "skipped"))]
     check("admit: approval after a successful synchronize despite a newer skipped job",
-          admit(approve, pull=pull_json(),
-                gate=Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])).eligible,
-          True)
+          admit(approve, pull=pull_json(), gate=Gate(after_sync)).eligible, True)
     check("admit: dispatch recovery sees through a skipped job",
-          admit(_event("workflow_dispatch", ""), pull=pull_json(),
-                gate=Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])).eligible,
-          True)
+          admit(_event("workflow_dispatch", ""), pull=pull_json(), gate=Gate(after_sync)).eligible, True)
     for label, event in (("labeled", approve), ("dispatch", _event("workflow_dispatch", ""))):
         check(f"admit: a {label} head whose Actions API is unreadable is not admitted",
               admit(event, pull=pull_json()).code, "dismissal-unreadable")
-        # The round 2 race: the first read finds nothing registered, a
-        # synchronize dismissal then appears and finishes. Admission must
-        # wait for it, and read the label only afterwards.
-        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
-                    [gate_run(1, ok_job)])
-        result = admit(event, pull=pull_json(), gate=gate)
-        check(f"admit: {label} waits out a delayed synchronize dismissal", result.eligible, True)
+        delayed = [[opened_old, labeled_skip], [opened_old, labeled_skip, gate_run(2)],
+                   [opened_old, labeled_skip, gate_run(2, job(10, "in_progress", None))],
+                   [opened_old, labeled_skip, gate_run(2, ok_job)]]
+        gate = Gate(*delayed)
+        check(f"admit: {label} waits out a delayed synchronize dismissal",
+              admit(event, pull=pull_json(), gate=gate).eligible, True)
         check(f"admit: {label} polled more than once", gate.polls >= 3, True)
-        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
-                    [gate_run(1, ok_job)])
         check(f"admit: {label}, the delayed dismissal stripped the label",
-              admit(event, pull=pull_json(labels=frozenset()), gate=gate).code, "not-approved")
+              admit(event, pull=pull_json(labels=frozenset()), gate=Gate(*delayed)).code, "not-approved")
         check(f"admit: {label}, a dismissal that never finishes is not admitted",
               admit(event, pull=pull_json(),
-                    gate=Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))])).code,
+                    gate=Gate([opened_old], [opened_old, gate_run(2, job(10, "in_progress", None))])).code,
+              "dismissal-pending")
+        check(f"admit: {label}, a synchronize that never registers is not admitted",
+              admit(event, pull=pull_json(), gate=Gate([opened_old, labeled_skip])).code,
               "dismissal-pending")
         check(f"admit: {label}, a head review-gate never registered is not admitted",
               admit(event, pull=pull_json(), gate=Gate([])).code, "dismissal-pending")
         check(f"admit: {label}, a failed synchronize dismissal is not admitted",
-              admit(event, pull=pull_json(),
-                    gate=Gate([gate_run(1, job(10, "completed", "failure"))])).code,
+              admit(event, pull=pull_json(), gate=Gate([gate_run(1, job(10, "completed", "failure"))])).code,
               "dismissal-failed")
+        check(f"admit: {label}, another PR's success does not stand in for this PR's failure",
+              admit(event, pull=pull_json(), gate=Gate(shared)).code, "dismissal-failed")
+
+    # -- supersession and same-head duplicates (round 3 of #2928) ----------
+    live = [{**ci_run(41, status="in_progress", head=OLD), "pull_requests": [{"number": 7}]},
+            {**ci_run(42, status="queued", head=OLD), "pull_requests": [{"number": 7}]},
+            {**ci_run(43, status="in_progress", head=OLD), "pull_requests": [{"number": 9}]},
+            {**ci_run(44, status="in_progress", head=HEAD), "pull_requests": [{"number": 7}]}]
+    gate = done(ci=live)
+    admit(sync, pull=pull_json(), gate=gate)
+    check("supersede: this PR's runs for OTHER heads are cancelled, nothing else",
+          sorted(gate.cancelled), [41, 42])
+    gate = done(ci=live)
+    admit(_event("pull_request", "synchronize", head=OTHER), pull=pull_json(), gate=gate)
+    check("supersede: a run whose head is no longer the PR's cancels nothing",
+          gate.cancelled, [])
+
+    ran = ci_run(50)
+    check("duplicate: an earlier run that ran CI for this head is mirrored, not repeated",
+          (lambda r: (r.eligible, r.mode, r.code, r.mirror_build_test, r.mirror_probes))(
+              admit(approve, pull=pull_json(), gate=done(ci=[ran]))),
+          (False, MODE_DUP, "duplicate-head", "success", "success"))
+    r = admit(sync, pull=pull_json(), gate=done(ci=[ci_run(50, build="failure", probes="success")]))
+    check("duplicate: a failed earlier verdict is mirrored as failed",
+          (r.eligible, r.mirror_build_test, r.mirror_probes), (False, "failure", "success"))
+    for label, prior in (("an un-admitted run", ci_run(50, audits="skipped", build="failure", probes="failure")),
+                         ("a cancelled run", ci_run(50, audits="cancelled", build="cancelled", probes="cancelled")),
+                         ("a mirror", ci_run(50, audits="skipped", build="success", probes="success")),
+                         ("a run for another head", ci_run(50, head=OLD)),
+                         ("this run itself", ci_run(900))):
+        check(f"duplicate: {label} is not a prior CI run",
+              admit(approve, pull=pull_json(), gate=done(ci=[prior])).eligible, True)
+    check("duplicate: a still-running earlier run is never admitted over",
+          admit(approve, pull=pull_json(), gate=done(ci=[ci_run(50, status="in_progress")])).code,
+          "duplicate-in-flight")
+    check("duplicate: unreadable earlier runs fail closed",
+          admit(approve, pull=pull_json(), gate=done(ci_unreadable=True)).code, "prior-run-unreadable")
+    check("duplicate: the newest run that ran CI wins",
+          admit(approve, pull=pull_json(),
+                gate=done(ci=[ci_run(50, build="failure"), ci_run(51, build="success"),
+                              ci_run(52, audits="skipped", build="failure")])).mirror_build_test, "success")
+    check("duplicate: an explicit dispatch is never suppressed",
+          admit(_event("workflow_dispatch", ""), pull=pull_json(), gate=done(ci=[ran])).eligible, True)
+    check("duplicate: a head that is not admitted reports its own reason, not a mirror",
+          admit(approve, pull=pull_json(labels=frozenset()), gate=done(ci=[ran])).code, "not-approved")
     check("admit: master push needs no evidence",
           admit(_event("push", ""), pull=None).eligible, True)
     check("admit: unrelated label event reads nothing",
@@ -819,9 +1031,11 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
           admit(_event("workflow_dispatch", ""), pull=pull_json(head_sha=OTHER),
                 gate=done()).code, "dispatch-ref-not-pr-head")
     gate = done()
-    admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=gate)
-    check("admit: the dismissal is read before the live pull request",
-          gate.order[:1] + gate.order[-1:], ["dismissal", "pull"])
+    admit(sync, pull=pull_json(), gate=gate)
+    check("admit: the live pull request is read last, after the dismissal",
+          gate.order[-1], "pull")
+    check("admit: ... and the dismissal after the identity read",
+          [x for x in gate.order if x == "pull"][:1] + gate.order[1:2] == ["pull", "dismissal"], True)
     with tempfile.TemporaryDirectory(prefix="ci-admission-") as tmp:
         sink = Path(tmp) / "out"
         _emit({"eligible": "false", "reason": "[x] one\ntwo"}, str(sink))
@@ -963,25 +1177,32 @@ def _check_workflow(document: dict, decided: dict, check: Callable[[str, object,
 
     def route(**context: str) -> tuple[object, object]:
         base = {"github.event_name": "pull_request", "github.run_id": "900",
-                "github.ref": "refs/pull/7/merge", "github.sha": "m" * 40}
+                "github.ref": "refs/pull/7/merge", "github.sha": "m" * 40,
+                "github.event.pull_request.head.sha": "a" * 40}
         base.update(context)
+        cancel = concurrency.get("cancel-in-progress")
         return (_translate(str(concurrency.get("group")), base),
-                _translate(str(concurrency.get("cancel-in-progress")), base))
+                cancel if isinstance(cancel, bool)
+                else bool(_translate(str(cancel), base)))
 
     sync = route(**{"github.event.action": "synchronize"})
-    approve = route(**{"github.event.action": "labeled", "github.event.label.name": APPROVAL_LABEL})
+    approve = route(**{"github.event.action": "labeled", "github.event.label.name": APPROVAL_LABEL,
+                       "github.run_id": "901"})
     stray = route(**{"github.event.action": "labeled", "github.event.label.name": "tooling"})
-    other_head = route(**{"github.event.action": "synchronize", "github.run_id": "901"})
+    other_head = route(**{"github.event.action": "synchronize",
+                          "github.event.pull_request.head.sha": "b" * 40})
     dispatch_route = route(**{"github.event_name": "workflow_dispatch", "github.ref": "refs/heads/topic",
-                              "inputs.pr_number": "7", "github.event.action": ""})
+                              "inputs.pr_number": "7", "github.event.action": "", "github.sha": "a" * 40})
     push_a = route(**{"github.event_name": "push", "github.sha": "1" * 40})
     push_b = route(**{"github.event_name": "push", "github.sha": "2" * 40})
-    check("routing: approval and synchronize of one PR share a group", sync[0], approve[0])
-    check("routing: an admitting event cancels what it supersedes", (sync[1], approve[1]), (True, True))
-    check("routing: a newer head supersedes the older one", other_head[0], sync[0])
+    check("routing: approval and synchronize of ONE head share a group", sync[0], approve[0])
+    check("routing: ... and a dispatch of that head joins it", dispatch_route[0], sync[0])
+    check("routing: same-head events never cancel each other's work",
+          (sync[1], approve[1], dispatch_route[1]), (False, False, False))
+    check("routing: another head is another group (superseding is explicit)",
+          other_head[0] != sync[0], True)
     check("routing: an unrelated label gets a group of its own", stray[0] not in (sync[0], approve[0]), True)
     check("routing: ... and never cancels", stray[1], False)
-    check("routing: a dispatch shares the PR's group", dispatch_route[0], sync[0])
     check("routing: master pushes never share a group", push_a[0] != push_b[0], True)
     check("routing: master pushes never cancel", (push_a[1], push_b[1]), (False, False))
 
@@ -996,10 +1217,12 @@ def _check_workflow(document: dict, decided: dict, check: Callable[[str, object,
         return
 
     def build_env_for(admission: Admission | None, *, results: dict | None = None,
-                      eligible: str | None = None, mode: str | None = None) -> dict:
+                      eligible: str | None = None, mode: str | None = None,
+                      mirror: str = "") -> dict:
         values = {"ADMITTED": eligible if eligible is not None else ("true" if admission and admission.eligible else "false"),
                   "ADMISSION_MODE": mode if mode is not None else (admission.mode if admission else ""),
                   "ADMISSION_REASON": admission.reason if admission else "",
+                  "MIRROR_RESULT": mirror,
                   "EVENT_NAME": "pull_request",
                   "TESTS_RESULT": "skipped", "AUDITS_RESULT": "skipped",
                   "LANES_RESULT": "skipped", "PROBES_RESULT": "skipped",
@@ -1045,6 +1268,17 @@ def _check_workflow(document: dict, decided: dict, check: Callable[[str, object,
             check(f"verdict: {lane} {bad} fails build-test",
                   passes(build_script, build_env_for(
                       pr_ok, results={**all_ok, "PROBES_RESULT": "success", lane: bad})), False)
+    # A duplicate head mirrors the earlier run's verdicts, and only a pass.
+    dup = Admission(False, MODE_DUP, "duplicate-head", "run 50 already ran CI for this head")
+    for mirror, want in (("success", True), ("failure", False), ("cancelled", False), ("", False)):
+        check(f"verdict: a duplicate mirroring {mirror or '(nothing)'} on build-test",
+              passes(build_script, build_env_for(dup, mirror=mirror)), want)
+        check(f"verdict: a duplicate mirroring {mirror or '(nothing)'} on behavior-probes",
+              passes(probe_script, build_env_for(dup, mirror=mirror)), want)
+    check("verdict: a mirror cannot rescue a head that is not a duplicate",
+          passes(build_script, build_env_for(decided["unapproved head"], mirror="success")), False)
+    check("verdict: a mirror cannot rescue a crashed admission",
+          passes(build_script, build_env_for(None, eligible="", mirror="success")), False)
     push = decided["master push"]
     check("verdict: a master push with the probe worker skipped passes build-test",
           passes(build_script, build_env_for(push, results=all_ok)), True)
@@ -1062,7 +1296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="the ci.yml the self-test pins (default: this checkout's)")
     sub = parser.add_subparsers(dest="command")
     admit_parser = sub.add_parser("admit", help="decide a run's admission")
-    for flag in ("repo", "event-name", "action", "label", "run-sha", "pr-number",
+    for flag in ("repo", "event-name", "action", "label", "run-sha", "run-id", "pr-number",
                  "pr-head-sha", "pr-base-sha", "pr-base-ref"):
         admit_parser.add_argument(f"--{flag}", default="")
     admit_parser.add_argument("--github-output", default="")

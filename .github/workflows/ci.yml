@@ -196,20 +196,26 @@ on:
         required: true
         type: string
 
-# A pull_request run SHOULD supersede its own older runs -- that is what
-# cancel-in-progress is for, and it is kept: every admitting event of one PR
-# (and a dispatch for it) shares the group `ci-refs/pull/<N>/merge`, so a new
-# head cancels the superseded one's work. Overlapping admitting events for
-# the SAME head (a label re-added while a kept-label synchronize run is in
-# flight) therefore restart rather than duplicate: at most one run per PR is
-# ever live, and exactly one completes.
+# One run per pull-request HEAD at a time (#2927). Every admitting event of
+# one head (a kept-label synchronize, the approval label, a dispatch) shares
+# the group `ci-refs/pull/<N>/merge-<head sha>` with `cancel-in-progress:
+# false`, so they run one after another and never cancel each other's work:
+# an overlapping event cannot restart, or start a second copy of, the
+# expensive jobs. When the earlier run already RAN CI for that head, the
+# later run's `admission` finds it and mirrors its verdicts instead of
+# running anything (mode `dup`); an earlier run that admitted nothing does
+# not count, so the later one proceeds normally.
+#
+# Superseding a head is therefore explicit rather than a side effect of the
+# group: `admission` cancels this PR's live runs for any other head
+# (tools/ci_pr_admission.py cancel_superseded).
 #
 # An event that cannot admit anything -- an unrelated label such as `tooling`
-# -- is put in a group of its own (its run id) and never cancels, so it
-# cannot cancel an eligible run. Its jobs are all skipped; `name:` on the
-# required contexts below keeps those skipped check runs from ever carrying a
-# required name (GitHub reports a skipped required job as SUCCESS, and the
-# newest check run of a name wins).
+# -- is put in a group of its own (its run id), so it cannot queue behind or
+# disturb an eligible run. Its jobs are all skipped; `name:` on the required
+# contexts below keeps those skipped check runs from ever carrying a required
+# name (GitHub reports a skipped required job as SUCCESS, and the newest check
+# run of a name wins).
 #
 # A master PUSH must never cancel another master push (#1490). Keying
 # every push on its own SHA gives each master commit its own group, so
@@ -231,15 +237,11 @@ concurrency:
   group: >-
     ${{
     github.event_name == 'push' && format('ci-{0}', github.sha)
-    || github.event_name == 'workflow_dispatch' && format('ci-refs/pull/{0}/merge', inputs.pr_number)
-    || (github.event.action == 'synchronize' || (github.event.action == 'labeled' && github.event.label.name == 'reviewed:approve')) && format('ci-{0}', github.ref)
+    || github.event_name == 'workflow_dispatch' && format('ci-refs/pull/{0}/merge-{1}', inputs.pr_number, github.sha)
+    || (github.event.action == 'synchronize' || (github.event.action == 'labeled' && github.event.label.name == 'reviewed:approve')) && format('ci-{0}-{1}', github.ref, github.event.pull_request.head.sha)
     || format('ci-ignored-{0}', github.run_id)
     }}
-  cancel-in-progress: >-
-    ${{
-    github.event_name == 'pull_request'
-    && (github.event.action == 'synchronize' || (github.event.action == 'labeled' && github.event.label.name == 'reviewed:approve'))
-    }}
+  cancel-in-progress: false
 
 jobs:
   # PR admission (#2927). Decides whether this run may do expensive work.
@@ -258,6 +260,11 @@ jobs:
   # and a `reason`, resolve-image is gated on `eligible`, and so every worker
   # is skipped transitively. `build-test` and `behavior-probes` then turn a
   # not-admitted PR head into a FAILED required check carrying the reason.
+  # A run whose head an EARLIER run already ran CI for is admitted as mode
+  # `dup`: it does nothing and the two required contexts mirror that run's
+  # verdicts (`mirror_*`), so a duplicate event neither repeats the expensive
+  # work nor replaces a green result with a red one. Admission also cancels
+  # this PR's live runs for other heads (the group is per head).
   # The decision lives in tools/ci_pr_admission.py (self-tested), not here.
   #
   # `if:` is the admitting-event predicate (see the concurrency comment):
@@ -271,13 +278,15 @@ jobs:
       contents: read
       pull-requests: read
       checks: read
-      actions: read
+      actions: write
     outputs:
       eligible: ${{ steps.admit.outputs.eligible }}
       mode: ${{ steps.admit.outputs.mode }}
       reason: ${{ steps.admit.outputs.reason }}
       base_sha: ${{ steps.admit.outputs.base_sha }}
       head_sha: ${{ steps.admit.outputs.head_sha }}
+      mirror_build_test: ${{ steps.admit.outputs.mirror_build_test }}
+      mirror_probes: ${{ steps.admit.outputs.mirror_probes }}
     steps:
       # The exact PR head, full history: ancestry is judged against this
       # commit. A dispatch and a push check out the run's own SHA.
@@ -294,6 +303,7 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           EVENT_LABEL: ${{ github.event.label.name }}
           RUN_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -305,6 +315,7 @@ jobs:
           --action "$EVENT_ACTION"
           --label "$EVENT_LABEL"
           --run-sha "$RUN_SHA"
+          --run-id "$RUN_ID"
           --pr-number "$PR_NUMBER"
           --pr-head-sha "$PR_HEAD_SHA"
           --pr-base-sha "$PR_BASE_SHA"
@@ -2083,12 +2094,17 @@ jobs:
           ADMITTED: ${{ needs.admission.outputs.eligible }}
           ADMISSION_MODE: ${{ needs.admission.outputs.mode }}
           ADMISSION_REASON: ${{ needs.admission.outputs.reason }}
+          MIRROR_RESULT: ${{ needs.admission.outputs.mirror_build_test }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probe-worker.result }}
           LANES_RESULT: ${{ needs.headless-lanes.result }}
         run: |
           if [ "$ADMITTED" != true ]; then
+            if [ "$ADMISSION_MODE" = dup ] && [ "$MIRROR_RESULT" = success ]; then
+              echo "::notice::mirroring the earlier run's passing verdict for this head: $ADMISSION_REASON"
+              exit 0
+            fi
             echo "::error::CI was not admitted for this head: ${ADMISSION_REASON:-the admission job produced no decision}"
             exit 1
           fi
@@ -2119,9 +2135,14 @@ jobs:
           ADMITTED: ${{ needs.admission.outputs.eligible }}
           ADMISSION_MODE: ${{ needs.admission.outputs.mode }}
           ADMISSION_REASON: ${{ needs.admission.outputs.reason }}
+          MIRROR_RESULT: ${{ needs.admission.outputs.mirror_probes }}
           WORKER_RESULT: ${{ needs.behavior-probe-worker.result }}
         run: |
           if [ "$ADMITTED" != true ]; then
+            if [ "$ADMISSION_MODE" = dup ] && [ "$MIRROR_RESULT" = success ]; then
+              echo "::notice::mirroring the earlier run's passing verdict for this head: $ADMISSION_REASON"
+              exit 0
+            fi
             echo "::error::behavior probes were not admitted for this head: ${ADMISSION_REASON:-the admission job produced no decision}"
             exit 1
           fi
