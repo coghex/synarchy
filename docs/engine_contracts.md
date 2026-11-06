@@ -450,6 +450,92 @@ exemption list, so this enumeration cannot go stale silently.
 Environment preparation and cache actions are not part of the audited
 gate set.
 
+### When pull-request CI runs (#2927)
+
+The expensive jobs (`resolve-image`, `test-and-audits`, `headless-lanes`,
+`static-audits`, `behavior-probe-worker`) do not run on every pull-request
+push. Owner decision: CI does not run until the branch is up to date and the
+review is approved at that head. `ci.yml`'s `admission` job decides, through
+`tools/ci_pr_admission.py`, and every worker is gated behind it.
+
+**Workflow for a change.** Each commit runs only a few focused local checks
+for what it changed, never the full suite; this is ordinary iteration policy
+and leaves the mandatory validation CLAUDE.md names (worldgen-output changes
+need the full tier; `make ci` on explicit request) as it was. Once the work is
+wrapped up and approved at an up-to-date head, CI runs once. If CI fails, the
+solver fixes it, runs only the relevant targeted local checks and probes, and
+goes back to rereview. CI runs again only after that fix is approved at an
+up-to-date head. "Once" means one automatic run for an eligible head while its
+base stays put: freshness is checked when the run is admitted, so a base that
+moves afterwards can still require a branch update and a further run under
+`strict` branch protection, which is unchanged.
+
+**Admission.** A pull-request head is admitted only when all of these hold:
+
+1. the pull request is open and its live head is the head the run is for;
+2. it carries a live `reviewed:approve` label, read from GitHub after the
+   stale-approval outcome is known, never taken from the event payload;
+3. on a `synchronize`, `review-gate.yml`'s `dismiss-stale-approval` run for
+   that exact head has completed and succeeded (the run is waited for, up to
+   15 minutes). A successful strip is green too, which is why the live label
+   is also required;
+4. the exact head SHA contains the base branch's current tip after a fresh
+   fetch. The default `pull_request` checkout is a synthetic merge that
+   contains the base even when the branch is behind, so ancestry is never
+   judged against that checkout's `HEAD`.
+
+Anything missing, failed, still pending after the wait or unverifiable is not
+admitted. A master push is always admitted and runs the full pipeline as
+before. A `workflow_dispatch` run (`gh workflow run ci.yml --ref <head-branch>
+-f pr_number=<N>`) must name a pull request whose head is the dispatched ref
+and passes the same rules; it is not a bypass.
+
+**Triggers.** `pull_request` runs start on `labeled` and `synchronize` only,
+and only an event that can create an admissible state does anything: a
+`labeled` event for `reviewed:approve`, or a `synchronize` whose label
+survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
+concurrency group of its own, never cancels, and skips every job. Admitting
+events of one pull request share one group with `cancel-in-progress`, so a
+newer head cancels a superseded run, and two admitting events for the same
+head restart rather than duplicate.
+
+**A gated-out run never counts as passing.** GitHub reports a skipped required
+job as success, and the newest check run of a name wins. So the required
+contexts cannot live on jobs that skip:
+
+- `build-test` and `behavior-probes` always run on an admitting event and
+  fail, naming the admission's reason, for a head that was not admitted. The
+  required name `behavior-probes` sits on a small gate over
+  `behavior-probe-worker`, which is skipped by design on master pushes and on
+  un-admitted heads.
+- Their `name:` is an expression that changes on an event that admits nothing,
+  so the skipped check runs of an unrelated label event never carry a required
+  name.
+- `review-approved` is also red for an approved head that is behind its base
+  (`review_gate_label_policy.py --gate --base-freshness`), independent of
+  KEEP/STRIP. It recovers when the branch update (a label-keeping
+  `synchronize`) makes the head current.
+
+Opening a pull request, and every push before approval, therefore start no
+expensive job and leave the required contexts red or pending.
+
+**Gates.** `python3 tools/ci_pr_admission.py --self-test` pins the decision
+(unapproved, behind, approved and current, a synchronize that kept or stripped
+the label, delayed dismissal, master push, dispatch and its identity
+failures), runs the real verdict scripts of `build-test` and `behavior-probes`
+for every gated-out case, and checks `ci.yml`'s trigger, routing and
+concurrency wiring. It runs in `static-audits` and `make ci`.
+`tools/ci_parity_audit.py` models the new topology: every worker needs
+`admission` and the image, the required contexts keep `always()`, and the
+probe gate carries the required name.
+
+**Merge flow.** `merge-pr` already updates a behind branch and waits for
+checks. The expected sequence is: approval at head X while behind, so
+`review-approved` and `build-test` are red with "behind base"; the branch
+update to Y keeps the label; `review-approved` goes green and `ci-admission`
+admits Y; one full run; merge. The kanban scripts are not part of this
+change.
+
 Mechanics: it uses the prod profile and your warm `dist-newstyle`.
 `-Werror` is checked into `synarchy.cabal`'s warning policy (not
 injected by this gate), so `tools/ci-local.sh` only scopes a temporary
