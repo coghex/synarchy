@@ -3,8 +3,7 @@
 
 CI's `test-and-audits` worker spends ~22 minutes on a cabal build plus the
 headless hspec suite. Neither can be affected by a plain documentation
-change: no Haskell target compiles those docs, and documentation-shaped
-save-compatibility inputs are excluded below. A qualifying change may
+change: no Haskell target compiles those docs, and the current compiled-schema record is excluded below. A qualifying change may
 therefore skip the Haskell half while retaining every engine-free Python
 audit -- which is the half a documentation change CAN break.
 
@@ -22,8 +21,7 @@ decision arranges: the engine-free audits live in their own
 `static-audits` job that carries no condition at all, so this selector's
 answer cannot reach them. What it still decides is the Cabal half of
 `test-and-audits` -- the build, the test suites, the headless suite,
-world_check, and (with the save-compat selector) that job's save
-audit. Widening eligibility here therefore no longer risks skipping an
+world_check, and the current-save schema guard. Widening eligibility here therefore no longer risks skipping an
 audit, but it does still risk skipping a real build.
 
 Eligibility is deliberately conservative -- it fails CLOSED, because the
@@ -34,15 +32,9 @@ of a wrong "not eligible" is one slow-but-correct run:
   * The change status of every path must be ADD or MODIFY. A delete, a
     rename, a copy or a type change reverts to the full job even when
     both endpoints are documentation.
-  * `docs/save_compat/*` is EXCLUDED however it is touched. The manifest
-    is read by the Haskell save-compat suite, and the directory's other
-    machine-readable contracts select a Python audit that decodes real
-    fixtures through the compiled `exe:synarchy-save-codec` (#2273).
-    Calling these files documentation does not make them Cabal-free: that
-    audit still needs the real Haskell codec, and resolving the helper
-    builds it. (The fixture blobs live under
-    `test-headless/data/`, which is outside `docs/` and already forces the
-    full job.)
+  * `docs/save_compat/current_schema.json` is EXCLUDED however it is
+    touched. It is code-gated base evidence for the compiled schema guard;
+    treating it as ordinary prose could skip the candidate comparison.
   * An empty or unreadable range is NOT eligible.
 
 The caller supplies `git diff --no-renames --name-status BASE AFTER`
@@ -58,7 +50,7 @@ import argparse
 import sys
 
 # Documentation-shaped compatibility inputs whose checks invoke Cabal.
-SAVE_COMPAT_PREFIX = "docs/save_compat/"
+CURRENT_SCHEMA_RECORD = "docs/save_compat/current_schema.json"
 
 DOCS_PREFIX = "docs/"
 
@@ -109,7 +101,7 @@ def is_docs_only(records: list[tuple[str, str]]) -> bool:
     for status, path in records:
         if status not in ELIGIBLE_STATUSES:
             return False
-        if path.startswith(SAVE_COMPAT_PREFIX):
+        if path == CURRENT_SCHEMA_RECORD:
             return False
         if not path.startswith(DOCS_PREFIX):
             return False
@@ -124,8 +116,8 @@ def explain(records: list[tuple[str, str]]) -> str:
         if status not in ELIGIBLE_STATUSES:
             return (f"{path} has status {status} (not a plain add/modify); "
                     "running the full job")
-        if path.startswith(SAVE_COMPAT_PREFIX):
-            return (f"{path} requires the Cabal-backed save-compat gate; "
+        if path == CURRENT_SCHEMA_RECORD:
+            return (f"{path} is committed schema evidence for the current-save guard; "
                     "running the full job")
         if not path.startswith(DOCS_PREFIX):
             return f"{path} is outside docs/; running the full job"
@@ -151,15 +143,11 @@ def _self_test() -> int:
     check("an added doc", verdict("A\tdocs/new_report.md"), True)
     check("a doc in a nested directory",
           verdict("M\tdocs/history/claude_md_2026-08-20_pretrim.md"), True)
-    # -- save-compat docs are executable compatibility inputs --
-    manifest = f"{SAVE_COMPAT_PREFIX}manifest.json"
-    enum_baseline = f"{SAVE_COMPAT_PREFIX}enum_baseline.json"
-    check("the save-compat manifest alone",
-          verdict(f"M\t{manifest}"), False)
-    check("the manifest beside an ordinary doc",
-          verdict(f"M\tdocs/a.md\nM\t{manifest}"), False)
-    check("an added manifest", verdict(f"A\t{manifest}"), False)
-    check("the enum baseline", verdict(f"M\t{enum_baseline}"), False)
+    # -- compiled current-schema evidence cannot take the docs-only path --
+    record = CURRENT_SCHEMA_RECORD
+    check("the current schema record", verdict(f"M\t{record}"), False)
+    check("the current schema record beside prose",
+          verdict(f"M\tdocs/a.md\nM\t{record}"), False)
 
     # -- anything outside docs/ reverts to the full job --
     check("a source file", verdict("M\tsrc/World/Types.hs"), False)
@@ -207,9 +195,9 @@ def _self_test() -> int:
 
     # -- explain() names the offender, so a full run says why --
     reason = explain(parse_name_status(
-        f"M\tdocs/a.md\nM\t{manifest}"))
-    if manifest not in reason:
-        failures.append(f"explain() should name the manifest, got {reason!r}")
+        f"M\tdocs/a.md\nM\t{record}"))
+    if record not in reason:
+        failures.append(f"explain() should name the current record, got {reason!r}")
     reason = explain(parse_name_status("M\tdocs/a.md\nM\tsrc/World/Types.hs"))
     if "src/World/Types.hs" not in reason:
         failures.append(f"explain() should name the source file, got {reason!r}")

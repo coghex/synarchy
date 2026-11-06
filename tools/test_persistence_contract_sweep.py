@@ -633,44 +633,21 @@ def _drive_sweep(argv, *, outcome=codec.COMPARE_OK, fail_slot=None,
                     destination=destination)
 
 
-def test_save_compat_migration_is_opt_in_not_default() -> None:
-    print("\n-- #2912: save_compat_migration is selectable but never in the default")
-    # Literal expectation, not derived from DEFAULT_CROSS_REFERENCED_PROBE_KEYS,
-    # so an accidental reintroduction is detected.
+def test_current_cross_probe_selection() -> None:
+    print("\n-- persistence sweep selects only current behavioral probes")
     expected_default = ["chop", "till", "crop", "plant", "construction", "power",
                         "transactional_load", "save_barrier", "save_storage",
                         "persistence_integrity"]
     expect(sweep.DEFAULT_CROSS_REFERENCED_PROBE_KEYS == expected_default,
-           "default selection is exactly the ten always-on keys")
-    expect("save_compat_migration" not in sweep.DEFAULT_CROSS_REFERENCED_PROBE_KEYS
-           and "craft_bill" not in sweep.DEFAULT_CROSS_REFERENCED_PROBE_KEYS,
-           "neither opt-in key is defaulted")
-    expect("save_compat_migration" in sweep.SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
-           and "save_compat_migration" in sweep.OPT_IN_CROSS_REFERENCED_PROBE_KEYS
-           and "save_compat_migration" not in sweep.FLAKY_CROSS_REFERENCED_PROBE_KEYS
+           "default selection is exactly the ten current behavioral probes")
+    expect("save_compat_migration" not in sweep.SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
            and sweep.FLAKY_CROSS_REFERENCED_PROBE_KEYS == ["craft_bill"],
-           "still selectable, in its own opt-in list, craft_bill's flaky list unchanged")
+           "historical migration has no sweep route")
     result = _drive_sweep([])
     argv = result["child"].call_args.args[0]
-    keys = argv[argv.index("--only") + 1].split(",")
-    expect(result["code"] == 0 and keys == expected_default
-           and "save_compat_migration" not in result["text"].split("(not run:")[0],
-           "a default run forwards the ten keys and still passes")
-    expect("save_compat_migration -- optional" in result["text"]
-           and "NOT covered" in result["text"],
-           "a default run reports that the migration baselines were not covered")
-    result = _drive_sweep(["--cross-probe-keys", "save_compat_migration"])
-    argv = result["child"].call_args.args[0]
-    expect(result["code"] == 0 and argv[argv.index("--only") + 1] == "save_compat_migration"
-           and "--exact" in argv and "(not run: save_compat_migration" not in result["text"],
-           "explicit opt-in forwards exactly that key with --exact")
-    result = _drive_sweep(["--cross-probe-keys", "save_compat_migration"], child_exit=7)
-    expect(result["code"] == 1 and "exit code 7" in result["text"],
-           "the opted-in child's failure still fails the sweep")
-    result = _drive_sweep(["--cross-probe-keys", "chop,save_compat_migration,craft_bill"])
-    argv = result["child"].call_args.args[0]
-    expect(argv[argv.index("--only") + 1] == "chop,save_compat_migration,craft_bill",
-           "opt-in keys combine with others in request order")
+    expect(result["code"] == 0
+           and argv[argv.index("--only") + 1].split(",") == expected_default,
+           "default run forwards the current selection and passes")
 
 
 def test_retry_cli_and_default_capture_behavior() -> None:
@@ -876,7 +853,7 @@ def main() -> int:
     test_every_failed_check_survives_outside_the_retained_tail()
     test_sweep_failure_records_are_not_consumed_by_phase_attribution()
     test_the_failure_records_are_removed_from_the_ordinary_tail()
-    test_save_compat_migration_is_opt_in_not_default()
+    test_current_cross_probe_selection()
     test_retry_cli_and_default_capture_behavior()
     test_full_capture_and_same_comparison_verdict()
     test_partial_interrupted_and_failed_capture_cleanup()

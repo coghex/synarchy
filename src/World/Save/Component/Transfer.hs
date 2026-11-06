@@ -98,7 +98,8 @@ orderedPages = L.sortOn pgsPageId ∘ HM.elems ∘ snapPages
 
 -- | Frozen mirror of 'Unit.Transfer.TransferReason'. Positional by
 --   constructor tag (cereal's 'Generic' encoding), so it is APPEND-ONLY
---   and guarded as such by @tools\/enum_append_only_audit.py@ — the
+--   and protected by the owning component's current version under the
+--   current-save schema policy (#2919) — the
 --   constructor ORDER here is the wire format and deliberately matches
 --   the live enum's declaration order so the two conversions below stay
 --   readable side by side.

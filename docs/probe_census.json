@@ -2161,23 +2161,6 @@
         "outcomes": []
       },
       "classification": "manual-only",
-      "key": "save_compat_migration",
-      "protocol": "legacy",
-      "script": "save_compat_migration_probe.py"
-    },
-    {
-      "census": {
-        "acceptable_failures": 0,
-        "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
-        "deferred": null,
-        "estimated_worst_case_seconds": null,
-        "history": [],
-        "outcomes": []
-      },
-      "classification": "manual-only",
       "key": "autosave",
       "protocol": "legacy",
       "script": "autosave_probe.py"

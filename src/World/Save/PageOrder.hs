@@ -10,7 +10,7 @@
 --   It lives here, OUTSIDE @src\/World\/Save\/Component\/@, deliberately.
 --   Three @make ci@ gates glob that directory as their component-source
 --   discovery set — @tools\/save_compat_audit_common.py@,
---   @tools\/enum_append_only_audit_model.py@ and
+--   @tools\/current_save_schema_audit.py@ and
 --   @tools\/persistence_inventory_audit.py@ — and every file they find is
 --   read as a component owner. A helper that declares no DTO and no codec
 --   is not one, so it is kept out of their read set rather than added to

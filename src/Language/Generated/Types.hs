@@ -317,7 +317,7 @@ data Profile = Profile
 --
 --   No 'Generic'\/'Serialize' instance, deliberately: this type never
 --   rides into a save, so adding a constructor is outside
---   @tools/enum_append_only_audit.py@'s append-only rule.
+--   @the current save-schema policy@'s append-only rule.
 data GeneratorError
     = UnsupportedGeneratorVersion Int
     | InsufficientRootSpace !GeneratorVersion !LangSeed !Int !Int

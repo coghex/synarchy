@@ -34,8 +34,8 @@
 --   reloaded from @data\/locations\/*.yaml@ on every boot and saves
 --   reference definitions by id only, so this type deliberately derives
 --   no 'Serialize' instance and its constructor ORDER carries no wire
---   meaning — unlike the append-only enums
---   @tools\/enum_append_only_audit.py@ guards. The order below is the
+--   meaning — unlike positionally serialized save enums, whose changed
+--   carrier versions are guarded by the current-save schema policy. The order below is the
 --   canonical presentation order the derived 'Bounded'\/'Enum'
 --   enumeration and every derived list ('allLocationAnchors',
 --   'locationAnchorTags') report in.

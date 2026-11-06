@@ -15,7 +15,7 @@
 --   - 'NameExprDTO' and 'EtymologySourceDTO' — the generated-name
 --     expression and the language it was rendered from (#1104).
 --     'NameExprDTO' is the one append-only guarded sum in the worldgen
---     graph ('docs/save_compat/enum_baseline.json'); its constructor
+--     graph ('the compiled current-schema record'); its constructor
 --     order is the wire contract.
 --   - 'AbsBoundsDTO' — the inclusive tile box a location occupies.
 --   - 'LocationEncounterDTO' / 'LocationEncounterOccupantDTO' (#916).

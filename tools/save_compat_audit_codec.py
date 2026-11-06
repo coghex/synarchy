@@ -9,8 +9,6 @@ protocol behind them. It imports only the shared definitions owner.
 
 It owns the five operations, and the one binary that serves them:
 
-  - fixed-timestamp rewriting (`set_fixture_timestamp`, and its
-    in-place `normalize_fixture_timestamp` form);
   - decoded fixture-descriptor dumping (`dump_fixture_descriptors`);
   - canonical-summary dumping (`dump_canonical_summary`);
   - structural session comparison (`compare_session_snapshots`);
@@ -57,8 +55,7 @@ Moving it here leaves no Python surface in this repository that starts
 GHCi to reach the save codec.
 
 Requirement 8's operational shape is preserved across that conversion:
-each operation keeps its own success marker (`NORMALIZE_OK` /
-`DESCRIPTOR_DUMP_OK` / `DUMP_OK` / `COMPARE_OK`), a 60-line diagnostic
+each operation keeps its own success marker (`DESCRIPTOR_DUMP_OK` / `DUMP_OK` / `COMPARE_OK`), a 60-line diagnostic
 tail on failure, and guaranteed temporary-file cleanup. These are still
 NOT interchangeable with save_compat_audit_register's
 `_run_real_codec_validation`, which is a different invocation entirely
@@ -114,9 +111,6 @@ Resolving the binary (requirement 6)
      persistence probes prepare this helper up front, before they boot
      anything, the same way `probe_engine.prepare_executable` prepares
      the engine (#1913) -- inside an EXCLUSIVE `cabal-build` hold, and
-     outside the clock that times probe work. `save_compat_migration`
-     still declares `cabal-build` exclusively, so its own reach into
-     this module is inside a hold either way.
 
      On a tree where `cabal build all` has already run -- CI, `make ci`,
      and any ordinary local invocation -- the build is a plan check that
@@ -273,24 +267,6 @@ def _run_codec(args: list[str], marker: str) -> tuple[bool, str]:
     return True, ""
 
 
-def set_fixture_timestamp(fixture_path: Path, timestamp: str,
-                          output_path: Path | None = None) -> tuple[bool, str]:
-    """Rewrite ONLY `fixture_path`'s metadata component's smTimestamp to
-    `timestamp`, writing the result to `output_path` (default: in place).
-
-    Every other component's version/required/payload bytes are re-encoded
-    verbatim through the real envelope codec -- see
-    `app-save-codec/Main.hs`'s `set-timestamp` for why that is a decode/
-    re-encode rather than a binary patch. Returns
-    (ok, diagnostic-tail-on-failure).
-    """
-    args = ["set-timestamp", "--fixture", str(fixture_path),
-            "--timestamp", timestamp]
-    if output_path is not None:
-        args += ["--output", str(output_path)]
-    return _run_codec(args, "NORMALIZE_OK")
-
-
 def seed_fixture_tags(fixture_path: Path, spec_path: Path,
                       output_path: Path,
                       only: str | None = None) -> tuple[bool, str]:
@@ -316,19 +292,6 @@ def seed_fixture_tags(fixture_path: Path, spec_path: Path,
     if only is not None:
         args += ["--only", only]
     return _run_codec(args, "SEED_OK")
-
-
-def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
-    """Overwrite fixture_path's metadata smTimestamp with
-    common.FIXED_GENERATED_TIMESTAMP, in place.
-
-    The reproducibility guarantee `--generate-session` depends on:
-    `engine.saveWorld` stamps the current wall-clock time into
-    smTimestamp, so without this two generation runs over identical
-    inputs differ in bytes and sha256 purely from when they ran.
-    Returns (ok, diagnostic-tail-on-failure).
-    """
-    return set_fixture_timestamp(fixture_path, common.FIXED_GENERATED_TIMESTAMP)
 
 
 def dump_fixture_descriptors(

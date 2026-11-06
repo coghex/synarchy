@@ -7,8 +7,8 @@ opens by RELATIVE path. Nothing checked it, and it had already drifted:
 on `bbda7d122` the tarball omitted the eight compiled unit atlas indexes
 (`Unit.Atlas.Load` refuses a whole unit whose `atlas/index.json` is
 missing, and there is no per-frame fallback, so an sdist-built binary
-boots with no animated units), the entire `test-headless/data/`
-fixture corpus, the two `docs/save_compat/*.json` documents, and the one
+boots with no animated units), the tracked `test-headless/data/`
+fixtures, the current `docs/save_compat/current_schema.json` record, and the one
 `tools/playtest/` module a headless example reads. #635/#666 made
 `cabal sdist --list-only` merely SUCCEED; a glob that matches nothing
 still succeeds, so success never meant completeness.
@@ -16,15 +16,13 @@ still succeeds, so success never meant completeness.
 The failure mode is silent by construction. Every one of those files is
 present in a git checkout, so the whole test suite and every probe pass
 against the repository while the tarball they describe cannot build a
-catalogue, register a unit, or run its own save-compatibility gate. The
-only thing that can see the gap is a comparison against what git tracks.
+catalogue, register a unit, or run its own headless examples. The only
+thing that can see the gap is a comparison against what git tracks.
 
 What this compares
 ------------------
 Two sides, both derived at run time -- there is no frozen file count
-anywhere in this module, because the corpus grows (the save-compat
-fixture set gained a pair between this issue's verification point and
-its review, which is exactly how a constant would rot):
+anywhere in this module, because the tracked fixture corpus changes over time:
 
 * **Expected** -- every file `git ls-files` reports that matches one of
   `REQUIRED_FAMILIES`, the resource families a shipped runtime path or
@@ -137,21 +135,14 @@ REQUIRED_FAMILIES: tuple[tuple[str, str], ...] = (
     ("scripts/**/*.lua",
      "the Lua game logic the scripting thread loads from the resource "
      "root"),
-    ("test-headless/data/**/*.bin",
-     "the save-compatibility fixture envelopes Test.Headless.World.Save"
-     ".Compat decodes"),
     ("test-headless/data/**/*.json",
-     "save-compat expected state and deterministic audio fixture provenance"),
+     "the audio fixture manifest and remaining headless expected state"),
     ("test-headless/data/audio/*.wav", "lossless sample decoder and native upload fixtures"),
     ("test-headless/data/audio/*.flac", "FLAC decode and budget fixtures"),
     ("test-headless/data/audio/*.mp3", "MP3 one-shot decode fixture"),
     ("test-headless/data/**/*.txt",
      "Test.Headless.World.FloraOrder's golden and pre-canonical "
      "reference orderings"),
-    ("docs/save_compat/*.json",
-     "manifest.json drives the suite's \"manifest-declared fixtures\" "
-     "describe; enum_baseline.json is tools/enum_append_only_audit.py's "
-     "maintained baseline"),
     ("tools/playtest/critic_click.py",
      "Test.Headless.UI.InteractiveBounds reads the module that DEFINES "
      "widget_at for its playtest-oracle example (#2069 moved it out of "
@@ -358,6 +349,7 @@ FIXTURE_TRACKED = {
     "tools/test_audio_build_dependencies.py",
     "tools/generate_audio_fixtures.py",
     "test-headless/data/audio/README.md",
+    "test-headless/data/audio/manifest.json",
     "docs/audio_authoring.md",
     "docs/audio_runtime.md",
     "test-headless/data/audio/tone.wav",
@@ -371,11 +363,7 @@ FIXTURE_TRACKED = {
     "assets/textures/units/acolyte/atlas/index.json",
     "assets/textures/units/tiller/atlas/index.json",
     "scripts/hud.lua",
-    "test-headless/data/save-compat/b1-initial-session.bin",
-    "test-headless/data/save-compat/b1-initial-session.expected.json",
     "test-headless/data/flora-order/seed42-w64-golden.txt",
-    "docs/save_compat/manifest.json",
-    "docs/save_compat/enum_baseline.json",
     "tools/playtest/critic_click.py",
     "config/keybinds_default.yaml",
     "config/pathing.yaml",
@@ -459,27 +447,14 @@ def self_test() -> int:
                  "config/audio_runtime.yaml", "test-headless/cbits/audio_native_test.c",
                  "test-headless/cbits/audio_test_helpers.h", "tools/test_audio_native.py",
                  "tools/test_audio_build_dependencies.py", "tools/generate_audio_fixtures.py",
-                 "test-headless/data/audio/README.md", "docs/audio_authoring.md", "docs/audio_runtime.md"):
+                 "test-headless/data/audio/README.md", "test-headless/data/audio/manifest.json",
+                 "docs/audio_authoring.md", "docs/audio_runtime.md"):
         check("a missing audio build/runtime/fixture input", FIXTURE_LISTING - {path},
               FIXTURE_TRACKED, clean=False, needle=path)
 
     check("a missing expected resource",
           FIXTURE_LISTING - {"assets/textures/units/tiller/atlas/index.json"},
           FIXTURE_TRACKED, clean=False, needle="atlas/index.json")
-
-    check("a missing save-compat fixture",
-          FIXTURE_LISTING - {
-              "test-headless/data/save-compat/b1-initial-session.bin"},
-          FIXTURE_TRACKED, clean=False, needle="b1-initial-session.bin")
-
-    check("a family shipped by nothing at all",
-          {p for p in FIXTURE_LISTING if not p.startswith("docs/save_compat/")},
-          FIXTURE_TRACKED, clean=False, needle="docs/save_compat/*.json")
-
-    check("a family whose tracked files are gone (stale pattern)",
-          {p for p in FIXTURE_LISTING if not p.startswith("docs/save_compat/")},
-          {p for p in FIXTURE_TRACKED if not p.startswith("docs/save_compat/")},
-          clean=False, needle="matches no tracked file")
 
     check("a forbidden config inclusion",
           FIXTURE_LISTING | {"config/video.local.yaml"},

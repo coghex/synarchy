@@ -110,29 +110,10 @@ import save_compat_audit_codec
 # Cabal command at all and runs beside the rest of a `--jobs 2` sweep
 # instead of alone after it.
 #
-# Two registered probes still take it EXCLUSIVELY, for two different
-# reasons; conflating them is how this comment goes stale again:
-#
-#   * `save_compat_migration` calls
-#     `save_compat_audit.dump_canonical_summary`. Under the aggregate
-#     runner that execs the handed-down helper like any other probe, but
-#     the probe is also documented as directly runnable, where
-#     `save_compat_audit_codec.resolve_codec_exe` freshness-builds the
-#     helper itself. A `cabal build` writes the same package database a
-#     `cabal repl` does, so the interest is real on that path.
-#   * `persistence_contract_sweep` RETAINS the hold although its own
-#     Cabal contact is gone with the repl, and requirement 3 of #2274
-#     asks for the reason to be recorded here. The sweep is a probe that
-#     runs a NESTED `tools/run_probes.py`, and its selectable nested
-#     keys include `save_compat_migration` (opt-in since #2912, not in
-#     the default selection) — an exclusive holder.
-#     `descendant_hold_env` below exports both interests, but an ancestor's
-#     SHARED hold cannot cover a nested EXCLUSIVE request. A sweep holding
-#     `cabal-build` merely shared would still let its nested runner
-#     request the resource exclusively for its `save_compat_migration`
-#     child and wait forever on its own ancestor's shared hold. The
-#     sweep is manual-only and long, so it loses nothing by staying
-#     exclusive, and it stops being self-blocking by construction.
+# `persistence_contract_sweep` keeps its existing exclusive declaration.
+# This is conservative scheduling policy retained by PSP-5; no nested
+# exclusive child remains after the historical migration probe's retirement.
+
 #: The shared Cabal build state, named once so the preflight below, the
 #: two declaration tables, and the direct path's own preparation (#1913)
 #: cannot drift apart. The name is `probe_engine`'s, because that module
@@ -145,7 +126,6 @@ EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
     "config_migration": ("repo-config",),
     "config_state": ("repo-config",),
     "persistence_contract_sweep": (BUILD_RESOURCE,),
-    "save_compat_migration": (BUILD_RESOURCE,),
 }
 
 
@@ -412,7 +392,7 @@ def preflight_hold(namespace, *, announce=None, environ=None):
     resolving an executable outside the exclusion would leave exactly the
     race this issue is about, one level up: two aggregate runs
     preflighting at once, or one runner's build landing inside another
-    runner's `save_compat_migration` helper build. Nothing
+    runner's direct Cabal build. Nothing
     inside a single run can see that; only the cross-process lock can.
 
     Taken once per preflight TARGET (#2274), which is two short
@@ -468,8 +448,8 @@ def codec_preflight(namespace=None, environ=None, *, announce=None) -> str:
     """The same, for the compiled save codec (#2274).
 
     `exe:synarchy-save-codec` is what `persistence_contract` decodes its
-    four generations through, and what `save_compat_migration` and the
-    sweep dump canonical summaries through. Resolving it HERE — once, for
+    four generations through and what the sweep uses for its comparison.
+    Resolving it HERE — once, for
     the whole run, before any probe exists — is what lets
     `persistence_contract` stop holding `cabal-build` exclusively: a
     probe that execs a handed-down binary is a reader of the build

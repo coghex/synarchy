@@ -7,9 +7,7 @@
 #                     image every worker below runs in (#784).
 #   - test-and-audits everything that needs a Cabal build product: the
 #                     library + executable + test suites, the headless hspec
-#                     suite, both save-compatibility steps (each execs the
-#                     compiled `exe:synarchy-save-codec` this job built,
-#                     #2273), world_check --quick and the headless lane
+#                     suite, current-save policy, world_check --quick and the headless lane
 #                     coverage check (#2744). It writes the dependency
 #                     cache, and the cache-outcome report lives here.
 #   - headless-lanes  the headless hspec suite, one matrix leg per lane
@@ -201,8 +199,8 @@ jobs:
       contents: read
       packages: write
 
-  # The Cabal-backed worker: the build, hspec, the two save-compatibility
-  # steps and world_check. Every gate here needs a build product; the
+  # The Cabal-backed worker: the build, hspec, current-save policy and
+  # world_check. Every gate here needs a build product; the
   # engine-free ones live in static-audits below (#2272). The stable
   # `build-test` context is the aggregate job at the end; keeping the workers
   # separate lets them overlap each other and the real-engine behavior probes
@@ -409,8 +407,6 @@ jobs:
               sed 's/^/worldgen=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
               sed 's/^/graphical=/'
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
-              sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
 
       # plan.json exists after --dry-run; its hash keys the store cache.
@@ -590,63 +586,27 @@ jobs:
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: python3 tools/headless_lanes.py
 
-      # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
-      # tracked save-compatibility fixture drifts, goes missing, or the
-      # frozen-DTO/envelope-framing fingerprints recorded in
-      # docs/save_compat/manifest.json disagree with the current source.
-      # See tools/save_compat_audit.py's module docstring for exactly
-      # what this does and does not guarantee.
-      #
-      # Both commands here stay blocking on every non-docs-only change,
-      # and on every save-compat input change. --without-reproducibility
-      # (#1360) removes exactly ONE
-      # member of the self-test module -- the one that builds two
-      # timestamp variants to prove fixture generation is reproducible --
-      # which the next step runs path-selectively instead. Every other
-      # member still runs, and so does the whole real audit.
-      #
-      # Neither command starts GHCi any more (#2273). Both still need the
-      # REAL Haskell codec -- save_compat_audit.py's real-manifest run
-      # decodes the tracked fixtures' envelope descriptors
-      # (verify_fixture_descriptors -> dump_fixture_descriptors), and
-      # test_real_manifest_passes_the_audit runs that same audit -- but
-      # they reach it by exec'ing the compiled `exe:synarchy-save-codec`
-      # the `cabal build all` step above already produced, instead of
-      # loading the 348-module test suite into `cabal repl` once per
-      # operation. That is what took these two steps from 2.6-3.7 minutes
-      # a run to seconds.
-      - name: Save compatibility audit
-        if: >-
-          steps.docs-fast-path.outputs.docs_only != 'true'
-          || steps.expensive-gates.outputs.save-compat == 'true'
+      # Current-only policy activation (PSP-5): compile and compare the
+      # candidate's committed schema record against the exact PR base or
+      # complete master-push before revision. This runs on every
+      # non-docs-only code change, so every merged code revision receives
+      # a fresh compiled-extraction check. The current audit, its
+      # compiled-codec tests, and the independent save-schema Hspec group
+      # remain blocking beside it. Historical migration machinery is
+      # retired; unsupported saves are checked by the runtime refusal
+      # and transaction tests.
+      - name: Current save policy
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
-          python3 tools/test_save_compat_audit.py --without-reproducibility
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE_REF='${{ github.event.pull_request.base.sha }}'
+          else
+            BASE_REF='${{ github.event.before }}'
+          fi
+          python3 tools/current_save_schema_audit.py --self-test
+          python3 tools/current_save_schema_audit.py --base-ref "$BASE_REF"
+          python3 tools/test_save_compat_audit.py
           python3 tools/save_compat_audit.py
-
-      # The fixture-generation member of that module, split out and
-      # selected by changed paths (#1360). It proves --generate-session's
-      # output is independent of when the command ran, by encoding two
-      # envelopes differing only in smTimestamp and showing
-      # normalize_fixture_timestamp collapses them to identical bytes.
-      # That exercises fixture GENERATION, which only a save-format,
-      # fixture, save-tooling or Cabal change can move.
-      #
-      # It cost ~26 s when it built those variants through its own
-      # `cabal repl`; since #2273 it writes them through the compiled
-      # `exe:synarchy-save-codec` like every other real-codec operation,
-      # so the split now selects on which inputs can move the result
-      # rather than on cost. The step itself stays, because
-      # tools/ci_parity_audit.py pins both command spellings.
-      #
-      # Path-selective on PRs and docs-only master pushes. Every other
-      # master push feeds the selector all tracked files, retaining the
-      # post-merge backstop. The gate's own --self-test pins both
-      # directions, and
-      # tools/ci_parity_audit.py pins that `make ci` selects it from the
-      # same decision.
-      - name: Save compatibility fixture reproducibility
-        if: steps.expensive-gates.outputs.save-compat == 'true'
-        run: python3 tools/test_save_compat_audit.py --only-reproducibility
 
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
@@ -775,8 +735,6 @@ jobs:
               sed 's/^/worldgen=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
               sed 's/^/graphical=/'
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
-              sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
 
       - name: Restore dependency cache
@@ -926,9 +884,8 @@ jobs:
   # restores no cache and saves none. The project cache's one writer is
   # `project-cache`, after the aggregate (#2745).
   #
-  # What deliberately did NOT move: the headless hspec suite, both
-  # save-compatibility steps (each execs the compiled
-  # `exe:synarchy-save-codec`, #2273) and world_check --quick (it drives
+  # What deliberately did NOT move: the headless hspec suite,
+  # current-save policy and world_check --quick (it drives
   # the built executable). All three read a build product, which is the
   # criterion — a step that decodes fixtures through a compiled helper
   # belongs with the job that builds it, not with the engine-free
@@ -1257,8 +1214,6 @@ jobs:
       # can drift from either side.
       - name: Enum append-only audit
         run: |
-          python3 tools/enum_append_only_audit.py --self-test
-          python3 tools/enum_append_only_audit.py
 
       # Cheap, no-engine guard (issue #972, CH-28): fails if a
       # `src/**/*.hs` module is missing from synarchy.cabal's explicit

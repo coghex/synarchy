@@ -8,8 +8,8 @@
 --   save carries: a unit's per-system override (S3, #2829), keyed by
 --   system id in @uiPhysioOverrides@. It is a positional @Generic
 --   Serialize@ enum, so it is append-only: @PhysioNominal@ is tag 0 and
---   @PhysioSimulated@ tag 1, and @tools/enum_append_only_audit.py@
---   guards it through @docs/save_compat/enum_baseline.json@ (a pure
+--   @PhysioSimulated@ tag 1, and @the current save-schema policy@
+--   guards it through @the compiled current-schema record@ (a pure
 --   append is recorded with @--update-baseline@, never by hand).
 --   'ResolvedMode' is deliberately NOT serialized: Unsupported is a
 --   resolver verdict about a definition, never an override a unit can

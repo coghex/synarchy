@@ -421,7 +421,7 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
     expect("repo-config" in foreign_child_shared,
            "a shared hold from another namespace is ignored")
     nested_exclusive, _ = probe_runner_resources.cross_process_interests(
-        "save_compat_migration", namespace, env)
+        "persistence_contract_sweep", namespace, env)
     expect(not nested_exclusive,
            f"and out of an exclusive request too "
            f"(got {sorted(nested_exclusive)})")
@@ -429,7 +429,7 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
     # The in-process ledger keeps the FULL declarations, so a nested sweep
     # still serializes its own probes against each other.
     expect("cabal-build" in probe_runner_resources.exclusive_resources(
-               "save_compat_migration"),
+               "persistence_contract_sweep"),
            "the declaration itself is untouched")
 
     # A DIFFERENT namespace inherits nothing: a resource name means
@@ -613,7 +613,7 @@ def test_a_nested_preflight_does_not_wait_on_its_ancestor() -> None:
 def test_the_hold_environment_names_what_a_probe_holds() -> None:
     print("\n-- a probe is told what its runner holds for it")
     namespace = "selftest-hold-env"
-    env = probe_runner_resources.descendant_hold_env("save_compat_migration", namespace)
+    env = probe_runner_resources.descendant_hold_env("persistence_contract_sweep", namespace)
     expect(env.get(probe_runner_resources.ENV_HELD_EXCLUSIVE) == "cabal-build",
            f"an exclusive holder exports its resource (got {env!r})")
     expect(env.get(probe_runner_resources.ENV_HELD_SHARED) == "repo-config",
@@ -631,7 +631,7 @@ def test_the_hold_environment_names_what_a_probe_holds() -> None:
            and nested_env.get(probe_runner_resources.ENV_HELD_SHARED)
            == "repo-config",
            f"a second nesting level keeps both holds (got {nested_env!r})")
-    expect(probe_runner_resources.descendant_hold_env("save_compat_migration", None) == {},
+    expect(probe_runner_resources.descendant_hold_env("persistence_contract_sweep", None) == {},
            "and without a namespace there is nothing to export")
 
 

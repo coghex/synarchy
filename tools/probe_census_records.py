@@ -606,6 +606,28 @@ def target_row(document, probe: str, what: str) -> dict:
     return matches[0]
 
 
+def retire_inventory_row(document, probe: str) -> dict:
+    """Remove one named row after its key has left the live registry.
+
+    This is deliberately not part of ordinary reconciliation: only the
+    explicit retirement command may delete a census row.
+    """
+    if probe in _registered_keys():
+        raise CensusError(
+            f"cannot retire probe {probe!r} while it is still registered")
+    rows = document.get("probes")
+    if not isinstance(rows, list):
+        raise CensusError("census probes must be a list for retirement")
+    matches = [row for row in rows if isinstance(row, dict)
+               and row.get("key") == probe]
+    if len(matches) != 1:
+        raise CensusError(
+            f"expected exactly one census row for {probe!r}, found {len(matches)}")
+    result = dict(document)
+    result["probes"] = [row for row in rows if row is not matches[0]]
+    return result
+
+
 def result_target(result) -> tuple[str, str]:
     """The two fields `--record` dispatches on, from a VALIDATED result.
 

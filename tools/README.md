@@ -208,8 +208,8 @@ mirror, but a gate run by both CI jobs is work CI pays for twice and the
 union alone cannot see it. The audit also pins `static-audits`'s topology
 (`needs: resolve-image` alone, no job-level condition, the same resolved CI
 image as `test-and-audits`) and the unit-asset gate's guard-to-selector
-wiring in its new home; the save-compatibility wiring checks still inspect
-`test-and-audits`, which is where those Cabal-backed commands stayed.
+wiring in its new home; the current save-policy wiring checks still inspect
+`test-and-audits`, which owns the compiled schema guard and fixture audit.
 
 `cabal build`/`cabal test` steps are outside the COMPARED gate set by that
 scope, so their verbosity gets a pin of its own (#1920): every direct
@@ -248,8 +248,7 @@ probe job topology. `ci_parity_save_compat.py` owns the #1360 wiring check.
 `test_ci_parity_audit.py` holds every fixture and case, reached only through
 `--self-test`; it also pins the split itself -- no owner imports the facade,
 the facade holds no implementation body, each re-export is the canonical
-object, and every parity module still selects the save-compat gate it
-decides the timing of.
+object, and the current save-policy guard remains live on both sides.
 
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
@@ -923,7 +922,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `multiworld_save_probe.py` | #214, #219, #365, #2707, #2708 | worldgen + arena | Multi-world save → quit → restart → load; cross-page entity survival. `--arena` adds the arena pages: base reconstruction and expansion past the footprint (#2707), and a FINITE 100×40 arena (#2708) — rectangle, corner edits, a unit ordered off the map, edge water kept inside, outside chunks refused, save bytes untouched. |
 | `offscreen_probe.py` | #650 | offscreen (needs a GPU) | `--offscreen` render mode end to end: windowless Vulkan boot + real UI flow, non-blank screenshot capture, F2 input injection driving the UI, parallel instances on separate ports, and (unless `--skip-worldgen`) a full click-to-generate-world path to the in-game HUD. The generated world is **pinned** (#2166): seed, world size and plate count are set through the create-world screen's own controls before Generate World is clicked, `world.getSeed` confirms the world that came out, `--seed` overrides the default, and every run prints a one-line `FIXTURE` identity. A bounded search that finds no buildable position prints every candidate it rejected (resolved tile, `canPlaceAt` verdict and reason, full `remoteCheck` classification) and is reported as a `[SETUP]` fixture failure — counted separately from product assertions in the closing summary, still non-zero at exit. `--force-search-miss` exercises that path without editing the file. |
 | `persistence_contract_probe.py` | #767 | worldgen (size 8, four real engine boots, isolated resource root) | Compact fresh-process persistence contract smoke: three real fresh-process save → load → save cycles (four engine boots -- one to create the initial save, three more each loading the prior generation and saving the next), each save/load tied to its own `engine.getSaveStatus()`/`getLoadStatus()` request id reaching its terminal phase (not just the file appearing on disk), compared structurally (`SessionSnapshot` `Eq` + `lua.*` payload byte-equality, via `tools/persistence_snapshot.compare_session_files`) through the real production codec, plus reset-policy (seeded with a real unit/building/tile selection + non-default tool mode beforehand, each verified immediately after it's set), a pre-load-only throwaway page proving a load replaces rather than merges, paused-stability-dwell checks, and (#2515) a unit of every legacy faction -- player, legacy-hostile, wildlife, neutral, debug -- whose `unit.getFaction` answer is re-checked after each load, plus a player spawned after the last load reading as the same local controller. |
-| `persistence_contract_sweep.py` | #767 | worldgen (size 64, four real engine boots, isolated resource root) | Broader persistence contract sweep: the SAME three-cycle/four-boot fresh-process structural comparison against a real generated-world representative scenario (a built craft station running a bill, an acolyte_portal roster + a real unit_ai attack for non-vacuous Lua state, a mine designation, a world identity, a SECOND real saved page with its own identity/visibility — round-6 review — and a pre-load-only throwaway page proving a load replaces rather than merges — round-5 review); actually RUNS (via `run_probes.py --only ... --exact --retries 1`) a DEFAULT set of 10 of the 12 cross-referenced probes and propagates any failure. Two are opt-in, listed explicitly in `--cross-probe-keys`: `craft_bill` (independently flaky per `ci_probes.py --status`) and `save_compat_migration` (optional since #2912: about an hour per run and not needed for pre-release saves; a default sweep prints that the migration baselines were not covered, and omitting it never fails the sweep). All 12 are isolated (round-6 review retrofitted `--resource-root` support into `chop`/`till`/`crop`/`plant`/`construction`/`power`/`transactional_load`/`save_barrier`, which previously wrote into this repo's real `saves/` directory), so `--cross-probe-keys` only ever accepts one of the 12 registered keys. |
+| `persistence_contract_sweep.py` | #767 | worldgen (size 64, four real engine boots, isolated resource root) | Broader persistence contract sweep: the SAME three-cycle/four-boot fresh-process structural comparison against a real generated-world representative scenario (a built craft station running a bill, an acolyte_portal roster + a real unit_ai attack for non-vacuous Lua state, a mine designation, a world identity, a SECOND real saved page with its own identity/visibility — round-6 review — and a pre-load-only throwaway page proving a load replaces rather than merges — round-5 review); actually RUNS (via `run_probes.py --only ... --exact --retries 1`) a DEFAULT set of 10 of the 11 cross-referenced probes and propagates any failure. `craft_bill` remains opt-in because it is independently flaky per `ci_probes.py --status`. All 11 are isolated (round-6 review retrofitted `--resource-root` support into `chop`/`till`/`crop`/`plant`/`construction`/`power`/`transactional_load`/`save_barrier`, which previously wrote into this repo's real `saves/` directory), so `--cross-probe-keys` only ever accepts one of the 11 registered keys. |
 | `persistence_integrity_probe.py` | #764, #1484 | worldgen (isolated resource root) | Shared save/load integrity graph: a unit's `attackTargetUid` pointing at a destroyed unit survives a real save → quit → restart → load round trip as a non-blocking diagnostic naming the component/kind/id, and a truncated save is rejected with `LoadFailed` while leaving the already-loaded live session's active page/unit state and paused status completely unchanged. Also the converse (#1484): an acolyte's cached `buildTarget` whose construction site was destroyed is cleared by the AI's own next ticks, so the same save carries no `lua.unit_ai` `dangling-reference` diagnostic for that unit/building pair. |
 | `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
 | `plant_probe.py` | #335 | worldgen (isolated resource root) | Plant-designation layer: `world.getPlantSuitability` lists both shipped crops sorted best-first, designation refused on an untilled tile / for an unregistered crop name, succeeds on a tilled tile (row_crop and groundcover_crop names both accepted), replace-on-redesignate semantics, save/load. |
@@ -941,7 +940,6 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `retaliation_swap_probe.py` | #1483, #1578 | arena | Mid-fight retaliation target swap in `attack_target`'s shared execute. Every check is graded from ONE atomic console chunk that re-establishes the branch's preconditions and then drives a single `unitAi.update(dt)` under `pcall`, so nothing drifts between the precondition and the grade: `scripts.unit_ai_combat` exports one 3 s window the consumer module can see; a REAL hit from a third live unit makes it the recorded recent attacker; with that attacker live, non-collapsed, not a technomule and inside `unit.getAttackRange(subject) + 0.5`, the subject retargets onto it, its own tick reaches a post-execute completion point (`nextActionAt` advances), and a SENTINEL unit ordered after it — the order forced by wrapping `unit.getAllIds`, which the engine builds from `HashMap.keys` with no spawn-order contract — is reached by that same invocation, with no `Lua error in update()` logged across a window of natural ticks either; and a hit staged far outside the window swaps nothing while still completing its tick (asserting only the unchanged target would pass on the aborting code). `mental_state_probe.py`'s collapsed-attacker case cannot reach this comparison — `attPose ~= "collapsed"` short-circuits first. Each window owns its OWN quartet and stages its OWN real hit (#1578), so the stale case no longer inherits what the fresh case's combat cost a shared subject; the staging leg's damage is bounded on both axes — `neuter` writes `strength_base`, the one strength input neither the body recompute nor `starvation.refreshStrength` overwrites, and the staging wrap stops `combat.attack` at the first swing that lands — and each window then dresses the bleeding, watches its units back onto their feet, and captures the subject's POSE AND BLOOD FRACTION inside the same atomic pre-grade chunk, refusing to grade below the 50 % rise threshold. Every check is declared up front, so a fixture failure reports the ones it left unreached as `NOT RUN` (exit 2) instead of omitting them; `--self-test` drives that accounting with no engine. |
 | `river_naming_probe.py` | #1102 | worldgen (size 16, three boots) | River identity + naming through the real Lua table: every river carries its `GeoFeatureId` as `id`, a second `world.getRivers()` returns the identical id→geometry association, a language-bearing world names every river with a non-empty `name`/`gloss` whose head morpheme recurs, the same seed with a CUSTOM name leaves both keys absent, and every id/name/gloss survives save → fresh process → load and is reproduced by regenerating the same seed + language. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
-| `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. A fixture whose load is not accepted, or does not publish, stops there (#1486): that failure is the last check reported for it, the stages it made unreachable are listed as `[SKIP]` diagnostics (never a pass, never a failure), its cleanup and the rest of the sweep are unaffected, and `--self-test` drives both prerequisite branches through injected doubles. |
 | `autosave_probe.py` | #913 | worldgen (size 32, isolated resource root with a COPIED `config/`) | Interval autosave end to end in one boot: the shipped default-off config produces neither a request nor a slot across a dwell longer than one configured interval; enabled, a REAL one-minute interval fires and hands an unpaused world back at its exact prior fast-forward time scale, while one that began paused stays paused and zero-scaled; a player pause/resume during the request window suppresses restoration even though the final pause boolean is unchanged (the time scale is the discriminator); an accepted autosave whose storage write fails stays paused and zero-scaled with `engine.getSaveStatus()` carrying the rendered `StoragePhase`; a deadline outside `uiManager.isGameplayView()` skips silently (no request, no failure event, cadence uninterrupted); a `save_load` category configured to pause wins over the restoration; a pre-existing MANUAL save on an `autosave-<n>` name — as a slot directory OR a pre-#762 legacy flat file a published directory would shadow — fails the attempt through `save_load` with nothing overwritten or partially rotated; rotation keeps `autosave-1` newest across generations that all stay classified autosave, a failed write against a FULL family discards and renumbers nothing (publish-then-rotate), a rotation that fails part-way leaves every generation on disk and retries cleanly (retire-by-rename, delete last), and one interrupted AFTER a partial shift resumes without ageing out a second generation; and reducing `rotation_depth` or disabling autosave retains every excess generation untouched. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `scene_primitives_probe.py` | #2192 | offscreen (main menu only, needs a GPU) | **Scene primitives reach the frame.** `engine.spawnText` and a UI-layer `engine.spawnSprite` over the real main menu, each attributed to its OWN bounded screenshot region (a single changed frame holding both would pass with one primitive missing), after two idle captures prove those regions static; then every mutation verb on its own frame — `setText`, `setVisible` off/on (the hidden region returns to the baseline while the other stays drawn), `setPos` (the sprite leaves one region and appears in another), `setSize`, `setColor`, and `destroy` for each — proving the route is rebuilt every frame. The exact per-layer merge and equal-layer order the recorder consumes is the CI-gated pure hspec group `frame layer assembly`. |
@@ -1192,9 +1190,7 @@ default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
 `probe_runner_registry.PROBE_TIMEOUT_OVERRIDES`; the runner prints each
 probe's effective
-budget when it starts or completes. `save_compat_migration` uses 5400 seconds
-because its manifest-wide two-process/two-real-codec-dump path took 3657 seconds
-with every manifest fixture loading after #2893/#2894. Passing
+budget when it starts or completes. Passing
 `--timeout SECONDS` explicitly
 overrides both the ordinary and key-specific defaults for every selected probe,
 including solo retries. Keep short explicit values available for deliberate
@@ -1297,25 +1293,12 @@ whole allowance for a holder blocked on it. Preparing first removes that
 by ordering, and the resolved path is installed as the runner's
 executable, which is also what stops each of the ten runs rebuilding.
 
-Two registered probes legitimately still drive Cabal themselves, and
-they are not engine boots. `save_compat_migration` reaches the real codec
-through `save_compat_audit.dump_canonical_summary`; run BY HAND, with no
-runner to hand it the helper, that resolution freshness-builds
-`exe:synarchy-save-codec` itself. `persistence_contract_sweep` drives no
-Cabal command of its own any more, and RETAINS the hold for a different
-reason: it is a probe that runs a nested `run_probes.py`, its default
-nested selection can include `save_compat_migration` (opt-in since #2912, via
-`--cross-probe-keys save_compat_migration`), and
-`probe_runner_resources.descendant_hold_env` exports both interests, but
-an ancestor's shared hold cannot cover an exclusive child — so a sweep
-holding `cabal-build` merely shared would leave its nested runner waiting
-forever on its own ancestor. Both therefore declare the
-`cabal-build` resource EXCLUSIVELY in the reader/writer tables below,
-while every other probe holds it SHARED. They cannot overlap
-each other, nor a probe reading the binary they may be relinking — the
-same scheduling mechanism `repo-config` already used, with no new one
-invented.
-
+The `persistence_contract_sweep` probe drives a nested `run_probes.py` and
+keeps its exclusive `cabal-build` hold so its nested runner cannot deadlock
+against its ancestor. It selects the default probe set plus explicitly chosen
+opt-ins such as `craft_bill`; it has no historical migration child. Ordinary
+probes use a shared build interest, and `persistence_contract` uses the
+compiled codec passed in by the runner.
 `persistence_contract` was the third until #2274. It held the resource
 because `persistence_snapshot.compare_session_files` ran `cabal repl
 test:synarchy-test-headless`, so the compact probe ran ALONE, after every
@@ -3809,499 +3792,20 @@ so "exactly one issue" is a counted fact; `--only issue` runs these cases
 alone. Like #1437's and #1439's cases, it
 is deliberately not wired into `make ci` or GitHub CI.
 
-### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
+### `ci_expensive_gates.py` — conditional worldgen/graphics/unit-asset gates
 
-Selects the four expensive gates that are conditional on pull requests:
-quick worldgen-output regression checking, graphical test-suite compilation,
-the unit-asset inventory pair (`test_pack_atlas.py` +
-`pack_atlas.py --validate-only --strict`, #1257), and the save-compat
-fixture-reproducibility test (`test_save_compat_audit.py
---only-reproducibility`, #1360 — it spawned a `cabal repl` of its own
-until #2273 replaced every GHCi program in that family with the compiled
-`exe:synarchy-save-codec`). All four run unconditionally after a merge
-to master. The mapping is intentionally explicit; add a relevant glob when
-introducing a new worldgen output, graphics entry point, unit-asset input, or
-save-format/fixture/save-tooling path.
-
-Patterns are matched with `fnmatch`, where `*` crosses `/` and `**` carries no
-special meaning — write `dir/*` for a whole subtree. `--gate` names are
-cross-checked against the pattern table by `--self-test`, so an unknown gate
-raises instead of silently inheriting another gate's globs.
+Selects three expensive gates that CI skips on pull requests when their inputs
+are untouched: quick worldgen-output checking, graphical test-suite
+compilation, and strict unit-asset validation. All three run after a merge to
+master. The current-save schema guard is a separate blocking check on every
+code revision and is not path-selected by this tool. The selector accepts only
+`worldgen`, `graphical` and `unit-assets`; unknown gate names fail.
 
 ```bash
 python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
 python3 tools/ci_expensive_gates.py --changed data/units/acolyte.yaml --gate unit-assets
-python3 tools/ci_expensive_gates.py --changed src/World/Save/Envelope/Codec.hs --gate save-compat
 python3 tools/ci_expensive_gates.py --self-test
 ```
-
-**`save-compat` is the one gate `make ci` also selects with** (#1360), so it
-is the one that needs a LOCAL notion of "what changed":
-
-```bash
-python3 tools/ci_expensive_gates.py --local-changed-paths \
-  | python3 tools/ci_expensive_gates.py --stdin --gate save-compat
-```
-
-`--local-changed-paths` prints every TRACKED path differing from the merge
-base with the checked-out default branch — commits on the branch, staged and
-unstaged edits alike — which is the local counterpart of CI's
-`git diff --name-only <pr-base> HEAD`. If no default branch or merge base
-resolves, it prints a conservative sentinel that selects EVERY gate: a local
-gate that cannot tell what changed runs the coverage rather than skipping it.
-
-`tools/ci-local.sh` calls it at the **top** of the script, before writing its
-own temporary `cabal.project.local`, and that order is load-bearing rather than
-incidental: that file is not gitignored, so a change can track one and cabal
-applies it in CI (hence `cabal.project*` in the gate's table) — resolving after
-the write would report this gate's own scratch edit as the candidate's.
-`ci_parity_audit.py` checks the ordering. The decision itself still goes
-through the same
-`--stdin --gate` command CI runs, so there is one matcher and one answer;
-`tools/ci_parity_audit.py` fails if the two files stop agreeing about which
-gate decides the reproducibility member or which command it guards, and it
-proves the local half by EXECUTING `ci-local.sh`'s marked selection block
-against a positive and a negative sample rather than reading it.
-
-### `ci_timing_report.py` — where a CI run's time went (#2277)
-
-An on-demand report over CI history, run from a developer machine on the
-`gh` authentication already there. It adds **no CI step and no secret**,
-and it is deliberately absent from `.github/workflows/ci.yml` and
-`tools/ci-local.sh` — `docs/ci_runtime_reduction_design.md` CIR-1 forbids
-turning a timing band into a failing check without a maintainer decision,
-so this is a diagnostic, not a gate. `ci_parity_audit.py` therefore needs
-no exemption entry for it.
-
-It replaces the dozen ad-hoc `gh run view --json jobs` / `jq` / `grep`
-commands that produced #2272–#2275's "on the PR's own CI run" figures, so
-the next agent can re-derive them in one command instead of reinventing
-them.
-
-```bash
-python3 tools/ci_timing_report.py --run 33666483367
-python3 tools/ci_timing_report.py --run 33666483367 --attempt 2
-python3 tools/ci_timing_report.py --last 10
-python3 tools/ci_timing_report.py --last 20 --event pull_request
-python3 tools/ci_timing_report.py --last 10 --branch master --threshold 60
-python3 tools/ci_timing_report.py --self-test
-```
-
-**Per run** it prints the attempt and tested revision, the event, the branch
-(or the pull request, when the head SHA resolves to one), the conclusion, the
-run's wall time, the jobs' own span (first job start to last job end), the
-**peak number of concurrent jobs** (the most job execution intervals that
-overlap, half-open, skipped jobs excluded), every headless-suite step
-whatever its duration (one per `headless-lanes` leg since #2745), every
-job's wall time with the **slowest job** marked, every step at or above
-`--threshold` seconds (default 30), the behavior-probe selection with each
-probe's observed attempts and durations, and every `CI_CACHE_REPORT`
-record the run emitted — normally one per cache, or the single
-`skipped=docs-only-fast-path` record on a docs-only run.
-
-**Across runs** it prints median and 95th-percentile wall time for the run
-and for each `(job name, step name)` pair, **separately for pull-request
-runs and master pushes**. Step names repeat across jobs (`Toolchain`,
-`Resolve dependency plan`, the cache-restore steps), so the job name is
-part of the key.
-
-Four rules are worth knowing before reading a number off it:
-
-* **"Slowest job", not "critical path".** The marked job is the
-  longest-duration non-skipped job, ties all marked. `gh run view --json
-  jobs` publishes no dependency edges, so timestamps alone cannot
-  reconstruct which job actually gated the run.
-* **Only successful runs are sampled.** Every other conclusion, and every
-  run still queued or in progress, is listed and counted in its own
-  category and contributes to no percentile — a cancelled run's truncated
-  jobs are exactly the samples that would make the figures lie. Each
-  aggregate row carries its own `n=`.
-* **A missing timestamp is `unavailable`, never `0`.** A step GitHub
-  published no endpoints for is named in the run block and excluded from
-  every aggregate. A *skipped* step is excluded too, for the different
-  reason that its equal endpoints are a real zero.
-* **One estimator, R-7.** Median and p95 both come from linear
-  interpolation between the two closest ranks — `numpy.percentile`'s
-  default and `statistics.quantiles(..., method='inclusive')`'s. The
-  self-test cross-checks against the standard library rather than
-  restating the formula.
-
-`--attempt N` (with `--run`) reports one attempt of a re-run run: a re-run
-keeps the run id, and each attempt has its own jobs and timings. Only a
-complete re-run gives an attempt-local job span, because a partial re-run
-reuses the earlier attempt's timestamps for the jobs it did not repeat.
-
-`--last N` selects runs of the **`CI` workflow**, resolved by its file path
-`.github/workflows/ci.yml`, before any `--event`/`--branch` filter is
-applied; the repository also runs `review-gate` and `ntfy-notify` on pull
-requests, so an event filter alone would mix three workflows into one
-table. An explicit `--run` naming another workflow is refused by name.
-
-A cancelled, expired or still-running run has no downloadable log. Its
-metadata and job/step timings are still real, so the block prints with its
-probe and cache sections marked unavailable and the batch continues.
-
-`--self-test` is network-free: it drives five recorded runs in
-`tools/fixtures/ci_timing/` (a retried probe, a step with no timestamps, a
-run with no probe job, a cancelled run with no log, and a runner killed
-mid-attempt), cross-checks the estimator, round-trips the probe-attempt
-identity against `probe_runner_diagnostics.attempt_identity`, and
-statically verifies the three headless `--test-options` command sites
-below.
-
-Layers: `tools/ci_timing_model.py` (every pure rule — timestamp endpoints,
-log framing, probe/cache diagnostics, the estimator, the aggregates),
-`tools/ci_timing_report.py` (this facade — `gh`, the CLI, rendering),
-`tools/test_ci_timing_report.py` (every check, reached through
-`--self-test`).
-
-### The headless suite's CI test options (#2277, #1916)
-
-Both of the conditional headless invocations in `.github/workflows/ci.yml`'s
-`Headless lane` step (full and base tier, one lane per `headless-lanes` leg,
-#2745) and `tools/ci-local.sh`'s full-tier one pass the same two Hspec flags
-through cabal's `--test-options`. CI's put the executable's own `--lane`
-flag first:
-
-```bash
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
-```
-
-CI's two lane lines also end in `2>&1 | tee "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}.log"`
-(#2748, below): the step's `shell: bash` pipefail keeps a failing
-`cabal test` failing through it, and nothing in the options changes.
-
-Both are **Hspec's** flags, not cabal's, so `--test-options` is the only
-way either reaches the runner.
-
-`--print-slow-items=20` (#2277) ends every one of those steps' logs with
-the twenty slowest spec items and their durations, just before cabal's
-own footer — which is what names the handful of world generations that
-account for about four of the headless suite's five minutes, without
-diffing log timestamps by hand. It is a diagnostic: no threshold here
-fails a run. Hspec applies it around whichever formatter is selected, so
-it is unaffected by the flag below.
-
-`--format=failed-examples` (#1916) replaces Hspec's default `specdoc`
-formatter, which prints a description for every example that PASSES —
-over five thousand of them under `test-headless/`, all forwarded into the
-job log by `--test-show-details=direct`. `failed-examples` prints nothing
-per example, neither a description nor a progress mark, so a passing
-run's formatter output is bounded by a constant instead of by the example
-count. It costs no failure detail: a failing run still prints the full
-`Failures:` block — each failing example's `describe`/`it` path, source
-location and expectation diff — plus the seed, and both runs still end
-with `Finished in …` and `N examples, M failures`, which is what keeps a
-passing run distinguishable from one that executed nothing.
-`--test-show-details=direct` is retained at every site precisely so that
-footer reaches the log.
-
-The formatter is selected on the two CI **command lines** and nowhere
-else. Neither the suite's runner (`test-headless/Spec.hs` hands the suite
-to `Test.Headless.Lanes.runLanes`, which runs Hspec's default
-configuration and only *offers* one extra formatter, `inventory`, below)
-nor a repo-root `.hspec` (which does not exist) selects one, so a
-developer running `cabal test synarchy-test-headless --test-options='--match "…"'`
-still gets the default per-example output.
-
-`ci_parity_audit.py` cannot police these three sites: it compares
-`python3 tools/*.py` commands and deliberately ignores every `cabal test`
-line. `test_ci_timing_report.py`'s `headless test-options wiring` check
-does, reading all three statically — a PR's own CI run executes only ONE
-of the workflow's two conditional branches — and reads them against one shared
-constant, so a site left on the default formatter fails the check rather
-than quietly emitting five thousand success lines on half the runs. The
-same check asserts that no `.hspec` file and no `Spec.hs` formatter
-selection has appeared to leak the compact presentation into local runs.
-
-### Headless lane time budgets (#2748)
-
-`tools/ci_lane_report.py` writes, into each `headless-lanes` leg's run
-summary, that lane's headless step duration, example count and twenty
-slowest items with their durations, so a PR that grows a lane shows it
-without reading a raw log. Each lane has an advisory budget; a lane over it
-is flagged in the summary and with a workflow `warning` annotation. **The
-result never depends on it**: the epic's twenty-minute median run is a
-target, not a gate. The report step is `continue-on-error`, runs under
-`always()` (so a lane whose examples failed still reports its duration and
-count), and the tool exits 0 on every outcome and on its own runtime errors;
-`build-test` passes or fails exactly as the `Headless lane` step decides.
-
-* **Where the budgets live.** `LANE_BUDGET_SECONDS` in
-  `tools/ci_lane_report.py`, one entry per lane of the `headless-lanes`
-  matrix. Both start from the 853 s per-lane budget of
-  `docs/headless_suite_lane_measurement.md` §6 (twenty minutes minus a lane's
-  347 s fixed cost at the median build). `--self-test` fails when a matrix
-  lane has no budget or a budget names a lane the matrix does not run.
-* **What is measured.** The wall time of the lane's `cabal test`
-  invocation: from the `Mark headless lane start` step, which sits directly
-  before it, to the end of the `Headless lane` step. Cache restoration and
-  the separate `cabal build synarchy-test-headless` happen before the mark
-  and are excluded; cabal's own wrapper (about 34 s at the #2743 median) is
-  inside, so the figure runs a little above Hspec's own `Finished in`, which
-  the summary prints beside it. It is not the summed example durations and
-  not the job's total time. The count is Hspec's footer
-  (`--test-show-details=direct` puts it in the log).
-* **Missing data is named.** A leg whose step never started, was cancelled
-  or timed out shows an unavailable or "at least" figure, a footer-less log
-  shows the count as unavailable (never zero), a missing slow-item list is
-  said to be missing, and a lane that did not return, or whose Hspec output is not
-  a complete run, keeps its measured duration and whatever count and rows
-  parsed but is never judged against its budget. "Complete" is one strict
-  grammar: `Finished in`, the examples footer, a blank line and `Slow spec
-  items:` once each and in that order, then exactly twenty well-formed rows
-  (a lane with fewer than twenty items over 1 ms therefore gets no verdict);
-  every way a log can be cut short fails it, which the self-test proves by
-  truncating a log at every byte.
-* **When a lane goes over.** Read the summary's slowest items first. Then
-  either **rebalance the lanes** (move statements between lanes in
-  `test-headless/Spec.hs`, #2744's registration, and re-measure with
-  `tools/headless_lane_measurement.py`), **add a lane** (a new `Spec.hs`
-  lane, a `headless-lanes` matrix entry and a `LANE_BUDGET_SECONDS` entry,
-  which `headless_lanes.py` and the report's `--self-test` each check), or
-  **make the expensive example cheaper**. Raising a budget is a decision to
-  make against the twenty-minute target in the epic, not a way to silence the
-  warning.
-
-`ci_lane_report.py` is CI-only and listed in `ci_parity_config.py`'s
-`EXEMPT_COMMANDS`; its `--self-test` runs in CI (`static-audits`) and in
-`tools/ci-local.sh`. That self-test is a blocking correctness check, not
-advice: besides the rendering cases (an in-budget lane, an over-budget lane,
-a lane whose examples failed, and incomplete data) it re-reads `ci.yml` and
-runs the `Headless lane` step's own script against a stub `cabal` to prove a
-failing run still fails the step through the log capture and still reports
-its duration and count. Run it after any edit to the lane step.
-
-### Investigating a hung headless run (#2747)
-
-A headless lane that hangs until the 90-minute job timeout, or is
-cancelled, used to leave a log that ends at the last line the formatter
-printed. Under `--format=failed-examples` a passing example prints nothing,
-so that line named neither the example that stalled nor the one before it.
-
-**What a run now records.** `Test.Headless.Progress` wraps the spec tree's
-own examples and fixture cleanups. For a run whose environment sets
-`SYNARCHY_HEADLESS_PROGRESS_FILE` (CI sets it per lane), it keeps that file
-current with:
-
-```text
-headless-active-context v1
-lane: rest
-state: running
-completed examples: 2
-active example: Diag.Hang.Example / hangs here
-preceding completed example: Diag.Hang.Example / completes before the hang
-fixture boundary: none
-```
-
-* **Active example** is the full `describe`/`it` path, from before the
-  example's per-example setup (`around`, `before`) until after its
-  per-example teardown. An example is *complete*, and becomes the preceding
-  one, only when that teardown has finished. `none` before the first
-  completion.
-* **A shared fixture's one-time setup** (`aroundAll`) runs inside the first
-  example that needs it, so a hang there names that example, which is where
-  Hspec runs it.
-* **A shared fixture's teardown** is not any example's work: Hspec queues it
-  as its own job after the group's last example, and has already announced
-  the next example by then. It is recorded as a `fixture boundary` naming
-  the hook, the group(s) it closes and the group it sits in, with
-  `active example: none`, so the next example is not blamed.
-* `state: finished` is written when the run ends, by return or by failure,
-  so only a run that never got there reads `running`.
-
-It adds nothing to a passing run: no output, no timer, no change to
-scheduling, and `--print-slow-items=20 --format=failed-examples` and
-`--test-show-details=direct` are untouched. Unset, the suite's runner hands
-Hspec the spec untouched, so a developer's targeted run is unchanged.
-
-**Where it reaches the CI record.** The `Headless active context` step of
-each `headless-lanes` leg runs `if: always()` and prints the file when it
-still says `state: running`, so a cancelled run and a job-timeout run both
-leave the record in the job log. The file, not a signal, is the mechanism:
-a cancelling runner does not signal the test process (the first
-demonstration printed nothing from the process itself), so the process also
-printing the record to stderr on SIGINT/SIGTERM serves a local Ctrl-C only.
-The variable is set on the `cabal test` command from the shell's
-`$RUNNER_TEMP`, not as a step `env:` (its listing would add a line to a
-passing log) and not as `${{ runner.temp }}` (in a container job that is
-the host path, which the container cannot write; the first demonstration
-found exactly that). `test_ci_timing_report.py`'s `headless active-context
-wiring` check pins the variable, the step and the absence of timers and
-stdout output.
-
-**Procedure for a hung or suspect run.**
-
-1. *Rerun the same commit* (`gh run rerun <run-id> -R coghex/synarchy`, or
-   `--failed`) and record whether it completes or hangs again. This is an
-   unchanged rerun: it is the only thing that may be reported as one.
-2. *Retrieve the diagnostic context* when that revision supports it: read
-   the `Headless active context` step (or the `headless-active-context`
-   lines in the lane's log). A revision before this recorder has no such
-   step, and its log still ends at the formatter's last line; an unchanged
-   rerun cannot acquire instrumentation introduced later.
-3. *An instrumented historical replay* is a different experiment and is
-   labelled as one. Push the unmodified historical commit as a branch,
-   open a draft PR whose base is that branch and whose head adds only the
-   instrumentation (`pull_request` workflows run for any base branch, so
-   the run tests the historical tree plus the instrumentation, and no push
-   to `master` is involved). Retain the base SHA, the instrumentation diff,
-   the commands, the environment and the outcome, and never describe it as
-   an unchanged rerun.
-4. *Narrow locally* with Hspec's `--match`, repeated:
-   `cabal test synarchy-test-headless --test-options='--match "UI.ResponsiveMenus"'`
-   (add `--lane <lane>` for the lane that holds it, and set
-   `SYNARCHY_HEADLESS_PROGRESS_FILE=/tmp/progress.txt` to get the record for
-   a local hang). A local `not reproduced` on a different OS than the CI
-   container (Linux) is not evidence the hang is fixed; say which platform
-   each attempt ran on. A location that cannot be established is reported as
-   `location unknown`, not guessed.
-
-The first use of this procedure, on the ten recorded `UI.ResponsiveMenus`-area
-hangs of 2026-08 to 2026-09, ended in `location unknown / not reproduced`;
-its runs, commands and excerpts are in
-`docs/archive/ci_headless_hang_investigation_2747.md`.
-
-### `headless_lane_measurement.py` — per-group headless timing on CI (#2743)
-
-The collection and aggregation behind
-`docs/headless_suite_lane_measurement.md` (CIR-14). Like
-`ci_timing_report.py` it is a diagnostic run from a developer machine: it
-adds no CI step, and nothing in `.github/workflows/ci.yml` or
-`tools/ci-local.sh` invokes it.
-
-```bash
-# Rewrite a checkout's Spec.hs and harness into the TEMPORARY collection
-# form (never merged); push it on a draft PR and let CI run it.
-python3 tools/headless_lane_measurement.py instrument [--full-tier]
-python3 tools/headless_lane_measurement.py instrument --lane-match @G456,@G463
-python3 tools/headless_lane_measurement.py instrument --lane-skip @G456,@G463
-
-# Tabulate the resulting runs as Markdown.
-python3 tools/headless_lane_measurement.py aggregate --spec-commit <base> \
-    --run <id>:<attempt> ... [--full-run ...] [--lane-run ...] \
-    [--baseline-run <id> ...] [--master-run <id> ...] [--cache <dir>]
-python3 tools/headless_lane_measurement.py self-test
-```
-
-`instrument` wraps every top-level statement of `Spec.hs`'s `main` in
-`describe "@G<line>"` (and each statement of a top-level do-block in
-`@S<line>`), tees every Hspec `ItemDone` event to the log with its
-unrounded duration and source location, and makes the harness report
-shared-world generations/hits and engine boot/teardown times. `aggregate`
-downloads each run's `test-and-audits` job log with `gh`, refuses runs
-whose item records disagree with Hspec's footer or whose example order
-differs, and prints the report's tables. Only the report's
-collection commits ever carry the instrumented files.
-
-### Headless suite lanes (#2744) and `headless_lanes.py`
-
-The headless suite is split into **lanes** that together run every example
-exactly once (CIR-15; the partition is the one
-`docs/headless_suite_lane_measurement.md` §7 proposes). `test-headless/Spec.hs`
-registers the suite as an ordered list of named lanes:
-
-| Lane | Holds |
-|---|---|
-| `world` | every registration before `PagedMapArtifact`, including the whole shared-world block, so every consumer of every `sharedWorld` key — and the full tier — runs here, in one engine |
-| `rest` (default) | everything else, and any top-level group added later without an explicit lane |
-
-Run one lane by passing `--lane` through cabal's `--test-options`; with no
-`--lane` the executable runs every lane in order, which is exactly the suite
-it was before (same examples, same order, same descriptions). Any other
-Hspec flag combines with it as usual, including CI's:
-
-```bash
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane world'
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane rest --print-slow-items=20 --format=failed-examples'
-SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane world'
-cabal run -v0 test:synarchy-test-headless -- --list-lanes
-```
-
-`--list-lanes` prints the lane names in suite order, the default marked
-`(default)`. An unknown lane name fails before anything runs and names the
-known lanes. `--lane-self-test` runs the lane machinery's own regression
-(`Test.Headless.LaneSelection`, on synthetic lanes) instead of the suite; it
-is in no lane, so the suite's examples are exactly those it had before
-lanes. Lanes are blocks of `Spec.hs`'s registrations, not `--match`
-patterns, so they need no description prefix and survive renames.
-
-**Adding a group.** Register it in `restLane` (the default) unless it consumes
-a `sharedWorld` key, in which case it belongs in `worldLane` beside that key's
-other consumers: a shared world is generated once per process, so splitting
-its consumers across lanes would generate it twice.
-
-**The coverage check.** `tools/headless_lanes.py` proves the lanes partition
-the suite without running a single example. It asks the built executable for
-its lanes (`--list-lanes`) and for the inventory of every example the whole
-suite and each lane would run (`--dry-run --format=inventory`: one JSON path
-per example and a total line), then compares complete example paths with
-their multiplicity. It fails, naming each example, on one in no lane, one
-run more often across the lanes than in the whole suite (including twice in
-one lane), one in more than one lane, and one a lane runs that the whole
-suite does not; a failed command, a malformed or truncated inventory or a
-total that disagrees with the listing fails it too. It runs the comparison
-with `SYNARCHY_FULL_TESTS` unset and set to `1`, keeps inherited `HSPEC_*`
-variables and `.hspec` files out of every inventory, checks that an
-unknown lane is refused, and runs `--lane-self-test`. Its output lists each
-lane's example count and the whole suite's.
-
-```bash
-cabal build synarchy-test-headless
-python3 tools/headless_lanes.py              # finds the executable with `cabal list-bin`
-python3 tools/headless_lanes.py --exe PATH   # or names it
-python3 tools/test_headless_lanes.py         # self-test: synthetic input, no build
-```
-
-**In CI (#2745, CIR-16).** `.github/workflows/ci.yml` runs each lane as
-one leg of the `headless-lanes` matrix job (`lane: [world, rest]`). Every leg
-needs only `resolve-image`, so all lanes start together; each restores the
-same dependency and project caches as `test-and-audits`, builds
-`synarchy-test-headless` itself (no artifact is handed between jobs) and runs
-exactly its lane with CI's flags:
-
-```bash
-cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane <lane> --print-slow-items=20 --format=failed-examples'
-```
-
-Its selection and cache-restore steps are copies of `test-and-audits`' steps
-of the same names (`ci_parity_audit.py` keeps them identical), it saves no
-cache, and it keeps `test-and-audits`' 90-minute timeout. `fail-fast` is off,
-so one failing lane cannot cancel the others before they report, and
-`build-test` requires the matrix result `success`, which only every lane
-succeeding produces. No CI job runs the unpartitioned suite any more;
-`tools/ci-local.sh` still does, in one process, after the coverage check.
-
-The coverage check runs in `test-and-audits` (step `Headless lane coverage`,
-on that job's build) and in `tools/ci-local.sh`. It also reads the
-workflow's `headless-lanes` matrix and fails unless it names exactly the
-lanes the executable declares, so a lane added to `Spec.hs` without a CI leg
-fails CI instead of never running (`--no-workflow` skips this; `--workflow
-PATH` reads another file).
-
-**The full tier in CI.** `SYNARCHY_FULL_TESTS=1` rides the same worldgen
-selector as `world_check --quick`, as it did when the suite ran in one
-process: each leg sets it exactly when the worldgen gate fired, so the lane
-holding the full-tier examples (today `world`) runs them on exactly those
-runs. A full-tier example registers in every tier and reads the variable at
-run time, so a lane without one is unaffected by it. When the gate did not
-fire, the variable is absent from the test process. It is never set to an
-empty value, because the test's guard treats any present value as enabled.
-
-**The project cache's one writer.** With the suite split across parallel
-jobs, no worker can tell whether the others succeeded, so the
-`dist-newstyle` save moved out of `test-and-audits` into the `project-cache`
-job. That job needs `build-test` and runs only on a master push whose
-aggregate succeeded (an expected master-push skip of `behavior-probes`
-included) and whose change was not docs-only. It keeps the old save guards:
-no save when the exact plan/epoch key was already restored, and none under an
-empty key. When it does save, it rebuilds the tree it saves (library,
-executables, both test suites) from the same restore. That costs master
-pushes only, after their verdict. Pull requests stay restore-only.
-`ci_cache_report.py --self-test` checks that this is the only dist-newstyle
-save in the workflow and that every job restoring the project cache uses
-`test-and-audits`' exact key and prefixes.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
@@ -4667,7 +4171,7 @@ tools/
 ├── test_audit_content_hash.py      (its baseline content-hash gate owner)
 ├── test_audit_strict_capture.py    (its strict baseline-capture owner)
 ├── test_audit_missing_baseline.py  (its missing-baseline exit-policy owner)
-├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
+├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets gates)
 ├── ci_timing_report.py     (on-demand CI lane/step timing report — the façade, #2277)
 ├── ci_timing_model.py          (its pure timings, log framing, diagnostics, estimator)
 ├── test_ci_timing_report.py    (its fixture checks, reached through --self-test)
@@ -4758,35 +4262,33 @@ fallback or skipped recovery remains distinguishable from physical acceptance.
 An invocation without an explicit mode exits before launching anything; use the
 direct command, since the aggregate runner does not choose an audible mode.
 
-## Current save-compatibility selection (#2917)
+## Current save policy (#2919)
 
-`save_compat_audit.py` keeps its existing no-mode historical audit until PSP-5
-activates the new gate. The separate current selection reads only
-`tools/save_compat_current/record.json` and its listed fixtures; those files are
-outside the historical manifest and fixture-discovery paths. It checks the live
-Haskell and Lua registrations, framing version, fixture checksums and nonempty
-summaries, then decodes the recorded current fixtures with the compiled codec
-and compares their descriptors with the independent record.
+The current-schema guard and its behavioral checks run on every code
+revision; they are never selected by a path matcher. The guard compares the
+validated schema record at the PR base or full master-push before revision
+against freshly compiled candidate evidence. Local `make ci` compares against
+the `origin/master` merge base, including tracked working edits.
 
 ```bash
 cabal build all
-python3 tools/save_compat_audit.py --mode current
-python3 tools/test_save_compat_audit.py --mode current
+python3 tools/current_save_schema_audit.py --self-test
+python3 tools/current_save_schema_audit.py --base-ref origin/master
+cabal test synarchy-test-headless --test-options='--match "current save schema"'
+python3 tools/test_save_compat_audit.py
+python3 tools/save_compat_audit.py
 ```
 
-The current self-test selection contains 7 members. The existing selection
-function is unchanged: its bare, `--without-reproducibility` and
-`--only-reproducibility` forms still select 104, 102 and 2 members respectively
-(measured from the selection function before and after this change). Current
-tests are separate until PSP-5. The `--mode current` self-test rejects either
-legacy reproducibility flag.
+The compiled schema guard proves declared generic wire shape and live accepted
+versions, with explicit treatment for custom serializers, Lua tables and
+framing. It is not a behavioral save/load proof. The current fixture audit
+checks a committed nonempty fixture and independent expectations. The
+`persistence_contract` probe exercises three fresh-process cycles through the
+real engine. Unsupported saves fail before publication, preserve the old
+paused session and are not rewritten; an incompatible authoritative generation
+does not fall back to `.prev`.
 
-To replace a current fixture, decode and re-encode a real session through
-`exe:synarchy-save-codec`, write its committed summary once, update its
-checksums and provenance in the current record, and hand-maintain the expected
-descriptor table independently. The audit never regenerates fixture summaries.
-It refuses fixtures whose framing, component versions, required flags or
-descriptors no longer match the live current schema. This slice does not boot
-the engine or run a migration probe.
-See [current audit details](../docs/save_compat_current_mode.md) for fixture
-replacement and validation behavior.
+Before public release, freeze the first supported format, capture real
+nonempty fixtures with independent expectations, and build supported-baseline
+tracking, migrations, historical verification, restart coverage and release
+gates afresh. No pre-release historical mode or corpus is retained.

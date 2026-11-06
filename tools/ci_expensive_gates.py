@@ -3,9 +3,9 @@
 
 On pull requests, this retains the full blocking Hspec suite while skipping
 the graphical test-suite compilation, the quick worldgen-output check, the
-unit-asset inventory validation, and the save-compat fixture
-reproducibility test when their inputs were untouched. Pushes to master run
-all of them as a post-merge backstop.
+unit-asset inventory validation when their inputs were untouched. Pushes to
+master run all of them as a post-merge backstop. The current save-schema
+guard runs separately on every code revision.
 
 Patterns are matched with ``fnmatch``, where ``*`` crosses ``/`` and
 ``**`` carries no special meaning — write ``dir/*`` for a whole subtree.
@@ -111,7 +111,6 @@ UNIT_ASSET_GLOBS = [
     # (shared, image, declarations, inventory, compiler, index, budget),
     # and a change to any owner has to select this gate exactly as a
     # change to the façade does. That family is matched by prefix, unlike
-    # SAVE_COMPAT_GLOBS' explicit per-module list below: nothing
     # unrelated under tools/ shares the `pack_atlas_` prefix, and a
     # future owner module must not be able to escape the gate by being
     # left off a list. `tools/pack_atlas_*.py` does not match the
@@ -166,139 +165,12 @@ UNIT_ASSET_GLOBS = [
     "tools/preview/units.py",
 ]
 
-# The save-compat gate (#1360): the ONE member of
-# tools/test_save_compat_audit.py reached by `--only-reproducibility` --
-# test_normalize_fixture_timestamp_makes_generation_reproducible.
-# Everything else in that module, and the whole of
-# tools/save_compat_audit.py, stays unconditional on every pull request;
-# only this member is selected here.
-#
-# The test decodes a tracked fixture through the real envelope codec,
-# rewrites its `metadata` payload's smTimestamp, re-encodes, and proves
-# normalize_fixture_timestamp collapses the two variants to identical
-# bytes. So the inputs that can move its result are: the audit tooling
-# that owns normalize_fixture_timestamp, the fixture corpus and manifest
-# it reads, the compiled codec helper that performs the re-encode and the
-# Haskell modules it imports, and the build definition that decides what
-# `cabal build all` produces.
-#
-# It cost a `cabal repl test:synarchy-test-headless` of its own until
-# issue #2273 replaced every GHCi program in this family with that
-# helper; the selection stays because these inputs are still the ones
-# that can move the result, and because tools/ci_parity_audit.py pins
-# both command spellings.
-#
-# NB these are fnmatch patterns, not globs: `*` crosses `/`.
-SAVE_COMPAT_GLOBS = [
-    # The audit and its self-test. The reproducibility member lives in
-    # the self-test; normalize_fixture_timestamp -- the very thing that
-    # member covers -- lives in the codec bridge since issue #2049 split
-    # the tool into owner modules, so EVERY owner is named here. Explicit per-module patterns, not a blanket
-    # `tools/save_compat*`: that would newly capture the unrelated
-    # tools/save_compat_migration_probe.py, whose negative case sits
-    # beside save_storage_probe.py's below.
-    #
-    # The self-test side is a PREFIX pattern instead, because issue
-    # #2073 split it into a façade plus sibling modules (issue #2273
-    # added the codec-bridge owner) and a future owner must not be able
-    # to escape this gate by being left off a list. `tools/test_save_compat_audit*.py` matches the façade
-    # (`*` matches empty) and every sibling, and nothing else under
-    # tools/ carries that prefix -- the production modules are named
-    # `save_compat_audit_*`, without the `test_`.
-    "tools/save_compat_audit.py", "tools/test_save_compat_audit*.py",
-    "tools/save_compat_audit_common.py",
-    "tools/save_compat_audit_components.py",
-    "tools/save_compat_audit_fingerprint.py",
-    "tools/save_compat_audit_codec.py",
-    "tools/save_compat_audit_manifest.py",
-    "tools/save_compat_audit_register.py",
-    "tools/save_compat_audit_generate.py",
-    # The bridge's one consumer outside the save-compat tool (#2274):
-    # the persistence-contract comparison surface. Its `diff_pair` and
-    # `compare_session_files` are exercised by
-    # tools/test_save_compat_audit_compare.py against the real corpus,
-    # so an edit to it faces that coverage the way an edit to an owner
-    # above does.
-    "tools/persistence_snapshot.py",
-    # The manifest the audit reads, and the tracked fixture corpus the
-    # test decodes. `_CURRENT_FORMAT_FIXTURE_PATH` points into the
-    # second, and is re-pointed whenever the metadata component's
-    # version is bumped, so the whole directory is in scope rather than
-    # one file that would silently stop being the current one.
-    "docs/save_compat/*", "test-headless/data/save-compat/*",
-    # The save format itself. Whole subtree plus any future
-    # src/World/Save.hs facade: the codec helper imports
-    # World.Save.Envelope.Codec/.Types, World.Save.Envelope,
-    # World.Save.Component and World.Save.Types directly, and the
-    # frozen compat mirrors under Compat/ decide which fixtures still
-    # decode at all.
-    "src/World/Save*",
-    # The codec helper itself (#2273): the compiled program that performs
-    # every real-codec operation this coverage exercises. Its own source
-    # is the most direct input of all, so an edit to it faces the member
-    # that proves its re-encode is reproducible.
-    "app-save-codec/*",
-    # The build definition. `cabal build all` resolves the helper's
-    # module set, dependency bounds and options from the cabal file and
-    # EVERY cabal.project file cabal applies, so any of them can change
-    # whether it builds or what it builds against.
-    # `cabal.project*` covers the whole family on purpose, including
-    # `.local`: that file is NOT gitignored, so a change can legitimately
-    # track one, and cabal would then apply it in CI. What keeps
-    # tools/ci-local.sh's own TEMPORARY cabal.project.local from
-    # selecting the gate is not this pattern but the ORDER over in that
-    # script -- it resolves its changed-path list before it writes the
-    # scratch file -- plus local_changed_paths listing tracked paths
-    # only.
-    "synarchy.cabal", "cabal.project*",
-    # The CI toolchain image: the GHC/cabal versions and the pinned
-    # index snapshot the codec helper is actually compiled against. BOTH
-    # files that define it -- the image tag is a hash of the reusable
-    # workflow's own bytes concatenated with the Dockerfile's, so an edit
-    # to the build recipe alone (context, options, validation) mints a
-    # new image just as a Dockerfile edit does, and can move what the
-    # helper runs under.
-    ".github/ci/Dockerfile", ".github/workflows/ci-image.yml",
-    # The wiring that selects and runs this gate on both sides, and the
-    # audit that keeps those two sides honest. An edit to any of them
-    # can change WHEN the coverage runs, so it has to face the coverage
-    # itself.
-    #
-    # Issue #2159 split that audit into a facade plus four production
-    # owners and a self-test owner, and the save-compat wiring the
-    # facade used to hold is now a module of its own -- so EVERY one of
-    # them is named here. Dropping any would silently narrow this
-    # selector: the module that decides when the reproducibility member
-    # runs would stop selecting the member it decides about. Explicit
-    # per-module patterns rather than a blanket `tools/ci_parity*`,
-    # matching the form used for the #2049 owners above, so a future
-    # `tools/ci_parity_*_probe.py` cannot be swept in unexamined; the
-    # parity audit's own self-test enumerates `tools/ci_parity_*.py`
-    # from the filesystem and fails if one of them stops selecting here.
-    "tools/ci_expensive_gates.py", "tools/ci_parity_audit.py",
-    "tools/ci_parity_shell.py", "tools/ci_parity_config.py",
-    "tools/ci_parity_workflow.py", "tools/ci_parity_save_compat.py",
-    "tools/test_ci_parity_audit.py",
-    "tools/ci-local.sh", "Makefile", ".github/workflows/ci.yml",
-]
-
-
-# Every selectable gate. A dict rather than a chain of conditionals on
-# purpose: the previous two-way `A if gate == "worldgen" else B` made an
-# unrecognised gate name silently inherit GRAPHICAL_GLOBS, so a new gate
-# could look wired up while actually running on the graphical patterns.
 GATE_GLOBS: dict[str, list[str]] = {
     "worldgen": WORLDGEN_GLOBS,
     "graphical": GRAPHICAL_GLOBS,
     "unit-assets": UNIT_ASSET_GLOBS,
-    "save-compat": SAVE_COMPAT_GLOBS,
 }
-
-
-# The names the CLI accepts. Kept beside GATE_GLOBS and cross-checked in
-# the self-test so the two can never drift apart.
-GATE_CHOICES = ("worldgen", "graphical", "unit-assets", "save-compat")
-
+GATE_CHOICES = ("worldgen", "graphical", "unit-assets")
 
 #: Emitted by ``--local-changed-paths`` when no merge base with the
 #: default branch can be established, and understood by ``selected`` as
@@ -434,9 +306,9 @@ def _local_changed_paths_cases(
         run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
         run(["checkout", "--quiet", "-b", "feature"], tmp)
         Path(tmp, "tools").mkdir()
-        Path(tmp, "tools/save_compat_audit.py").write_text("x\n",
+        Path(tmp, "tools/current_save_schema_audit.py").write_text("x\n",
                                                            encoding="utf-8")
-        run(["add", "tools/save_compat_audit.py"], tmp)
+        run(["add", "tools/current_save_schema_audit.py"], tmp)
         run(["commit", "--quiet", "--no-verify", "-m",
              "committed branch edit"], tmp)
         # An unstaged edit to a TRACKED file, and an UNTRACKED scratch
@@ -445,7 +317,7 @@ def _local_changed_paths_cases(
         Path(tmp, "cabal.project.local").write_text("scratch\n",
                                                     encoding="utf-8")
         paths = local_changed_paths(tmp)
-        if "tools/save_compat_audit.py" not in paths:
+        if "tools/current_save_schema_audit.py" not in paths:
             failures.append(
                 "--local-changed-paths missed a path committed on the "
                 f"branch: {paths}")
@@ -458,36 +330,11 @@ def _local_changed_paths_cases(
                 "--local-changed-paths listed an UNTRACKED scratch file; "
                 "tools/ci-local.sh's own cabal.project.local would then "
                 f"select gates: {paths}")
-        if not selected("save-compat", paths):
-            failures.append(
-                "a save-touching local change did not select the "
-                f"save-compat gate: {paths}")
-        if selected("worldgen", paths):
-            failures.append(
-                "a save-only local change selected the worldgen gate: "
-                f"{paths}")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        new_repo(tmp)
-        Path(tmp, "scripts").mkdir()
-        Path(tmp, "scripts/unit_ai.lua").write_text("-- base\n",
-                                                    encoding="utf-8")
-        run(["add", "scripts/unit_ai.lua"], tmp)
-        run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
-        run(["checkout", "--quiet", "-b", "feature"], tmp)
-        Path(tmp, "scripts/unit_ai.lua").write_text("-- edited\n",
-                                                    encoding="utf-8")
-        paths = local_changed_paths(tmp)
-        if selected("save-compat", paths):
-            failures.append(
-                "an unrelated local change selected the save-compat gate, "
-                f"so `make ci` would still run the reproducibility member: "
-                f"{paths}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # cabal.project.local is not gitignored, so a change CAN track
-        # one -- and cabal applies it, so CI's save-compat gate selects
-        # on it. A TRACKED edit to it must therefore be listed here too.
+        # one -- and cabal applies it in CI. A TRACKED edit to it must
+        # therefore be listed here too.
         # This is exactly why tools/ci-local.sh resolves its changed
         # paths BEFORE writing its own scratch copy: after the write,
         # this listing could not tell the candidate's edit from the
@@ -505,10 +352,6 @@ def _local_changed_paths_cases(
             failures.append(
                 "--local-changed-paths dropped a TRACKED cabal.project.local "
                 f"edit, which cabal would apply in CI: {paths}")
-        if not selected("save-compat", paths):
-            failures.append(
-                "a tracked cabal.project.local edit did not select the "
-                f"save-compat gate: {paths}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # No commits at all, and therefore no default branch to diff
@@ -519,10 +362,7 @@ def _local_changed_paths_cases(
             failures.append(
                 "an unresolvable base did not yield the conservative "
                 f"sentinel: {paths}")
-        elif not selected("save-compat", paths):
-            failures.append(
-                "the conservative sentinel did not select the save-compat "
-                "gate")
+
 
     return failures
 
@@ -722,158 +562,19 @@ def self_test() -> int:
         ("graphical", ["src/World/Thread/Command/Init.hs"], False),
         ("unit-assets", ["src/Sim/Thread.hs"], False),
         ("unit-assets", ["src/World/Thread/Command/Init.hs"], False),
-        # save-compat (#1360). Requirement 8: both directions pinned --
-        # a save-touching change selects the reproducibility member, an
-        # unrelated change does not. The positives walk the whole
-        # trigger-path table, so narrowing any entry fails here.
-        ("save-compat", ["tools/save_compat_audit.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit.py"], True),
-        # Issue #2073's self-test owner modules, each reached through the
-        # `tools/test_save_compat_audit*.py` prefix rather than a literal
-        # of its own. A case per module all the same: the prefix is what
-        # makes them select, and a case per module is what proves the
-        # prefix still spans the family after one is renamed or another
-        # is added.
-        ("save-compat", ["tools/test_save_compat_audit_support.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_manifest.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_envelope.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_register.py"], True),
-        ("save-compat",
-         ["tools/test_save_compat_audit_reproducibility.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_codec.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_compare.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_discovery.py"], True),
-        ("save-compat", ["tools/test_save_compat_audit_coverage.py"], True),
-        # Issue #2049's owner modules. Each is named individually, so a
-        # PR touching only one of them still pays for the coverage that
-        # exercises it -- the codec bridge in particular owns
-        # normalize_fixture_timestamp, which is exactly what the
-        # reproducibility member proves.
-        ("save-compat", ["tools/save_compat_audit_common.py"], True),
-        ("save-compat", ["tools/save_compat_audit_components.py"], True),
-        ("save-compat", ["tools/save_compat_audit_fingerprint.py"], True),
-        ("save-compat", ["tools/save_compat_audit_codec.py"], True),
-        ("save-compat", ["tools/save_compat_audit_manifest.py"], True),
-        ("save-compat", ["tools/save_compat_audit_register.py"], True),
-        ("save-compat", ["tools/save_compat_audit_generate.py"], True),
-        # The bridge's one non-save-compat consumer (#2274): the
-        # persistence-contract comparison surface, whose `diff_pair` and
-        # `compare_session_files` the comparison owner above exercises
-        # against the real corpus. Editing it must select the gate that
-        # covers it, exactly as editing an owner does.
-        ("save-compat", ["tools/persistence_snapshot.py"], True),
-        # The compiled codec helper (#2273): the program every one of
-        # those owners now execs in place of a `cabal repl`.
-        ("save-compat", ["app-save-codec/Main.hs"], True),
-        ("save-compat", ["docs/save_compat/manifest.json"], True),
-        ("save-compat", ["docs/save_compat/enum_baseline.json"], True),
-        ("save-compat",
-         ["test-headless/data/save-compat/f1-autosave-classification.bin"],
-         True),
-        ("save-compat",
-         ["test-headless/data/save-compat/k1-new-fixture.expected.json"],
-         True),
-        # The Haskell the codec helper imports: the envelope codec and
-        # its types, the component registry, the metadata DTO, and the
-        # frozen compat mirrors. A facade module added beside the
-        # directory later must match too, which is why the pattern is
-        # `src/World/Save*` rather than `src/World/Save/*`.
-        ("save-compat", ["src/World/Save/Envelope/Codec.hs"], True),
-        ("save-compat", ["src/World/Save/Envelope/Types.hs"], True),
-        ("save-compat", ["src/World/Save/Envelope.hs"], True),
-        ("save-compat", ["src/World/Save/Component.hs"], True),
-        ("save-compat", ["src/World/Save/Component/Session.hs"], True),
-        ("save-compat", ["src/World/Save/Types.hs"], True),
-        ("save-compat", ["src/World/Save/Compat/SessionV90.hs"], True),
-        ("save-compat", ["src/World/Save.hs"], True),
-        # The build definition the codec helper is built from.
-        ("save-compat", ["synarchy.cabal"], True),
-        ("save-compat", ["cabal.project"], True),
-        ("save-compat", ["cabal.project.freeze"], True),
-        # cabal.project.local is not gitignored, so a change CAN track
-        # one, and cabal applies it in CI -- it has to select. The gate
-        # this script's own scratch copy would otherwise trip is closed
-        # by tools/ci-local.sh capturing its changed-path list BEFORE it
-        # writes that file, not by excluding the path here.
-        ("save-compat", ["cabal.project.local"], True),
-        ("save-compat", [".github/ci/Dockerfile"], True),
-        # The reusable image workflow is the OTHER half of the image
-        # identity hash, so a PR editing only it still changes the
-        # toolchain the codec helper is compiled with.
-        ("save-compat", [".github/workflows/ci-image.yml"], True),
-        # The wiring on both sides, and the parity audit over it.
-        ("save-compat", ["tools/ci_expensive_gates.py"], True),
-        ("save-compat", ["tools/ci_parity_audit.py"], True),
-        # Issue #2159's owner modules. Each is named individually in
-        # SAVE_COMPAT_GLOBS, so a PR touching only one still pays for the
-        # coverage whose selection that module decides -- the save-compat
-        # owner most of all, since it IS the wiring check.
-        ("save-compat", ["tools/ci_parity_shell.py"], True),
-        ("save-compat", ["tools/ci_parity_config.py"], True),
-        ("save-compat", ["tools/ci_parity_workflow.py"], True),
-        ("save-compat", ["tools/ci_parity_save_compat.py"], True),
-        ("save-compat", ["tools/test_ci_parity_audit.py"], True),
-        ("save-compat", ["tools/ci-local.sh"], True),
-        ("save-compat", ["Makefile"], True),
-        ("save-compat", [".github/workflows/ci.yml"], True),
-        # ...and the negatives, so the gate cannot be trivially
-        # always-true. An unrelated PR -- gameplay Lua, worldgen, unit
-        # art, a doc -- must not run the reproducibility member.
-        ("save-compat", ["scripts/unit_ai.lua"], False),
-        ("save-compat", ["src/World/Geology/Timeline.hs"], False),
-        ("save-compat", ["src/World/Thread/Command/Init.hs"], False),
-        ("save-compat", ["src/Unit/Atlas/Digest.hs"], False),
-        ("save-compat", ["data/units/acolyte.yaml"], False),
-        ("save-compat", ["docs/persistence_contract.md"], False),
-        ("save-compat", ["docs/code_health_findings.md"], False),
-        ("save-compat", ["tools/world_check.py"], False),
-        # ...and the workflows that are NOT the toolchain: naming
-        # ci-image.yml exactly rather than .github/workflows/* keeps
-        # these out.
-        ("save-compat", [".github/workflows/ntfy-notify.yml"], False),
-        ("save-compat", [".github/workflows/review-gate.yml"], False),
-        ("save-compat", ["tools/pack_atlas.py"], False),
-        ("save-compat", ["tools/pack_atlas_shared.py"], False),
-        ("save-compat", ["tools/pack_atlas_image.py"], False),
-        ("save-compat", ["tools/pack_atlas_declarations.py"], False),
-        ("save-compat", ["tools/pack_atlas_inventory.py"], False),
-        ("save-compat", ["tools/pack_atlas_compiler.py"], False),
-        ("save-compat", ["tools/pack_atlas_index.py"], False),
-        ("save-compat", ["tools/pack_atlas_budget.py"], False),
-        # The save-adjacent Haskell that is NOT the format: the world
-        # thread's save command and the barrier live outside
-        # src/World/Save, and a save PROBE is not the fixture corpus.
-        ("save-compat", ["src/World/Thread/Command/Save.hs"], False),
-        ("save-compat", ["src/Engine/Save/Barrier.hs"], False),
-        ("save-compat", ["tools/save_storage_probe.py"], False),
-        # ...and a save-compat-PREFIXED probe is still not the tool: the
-        # patterns above name each owner module exactly, so this stays
-        # unselected. A blanket `tools/save_compat*` would capture it.
-        ("save-compat", ["tools/save_compat_migration_probe.py"], False),
         # A path selecting one gate must not drag in the others, in
         # either direction.
-        ("worldgen", ["tools/test_save_compat_audit.py"], False),
-        ("worldgen", ["tools/test_save_compat_audit_coverage.py"], False),
-        ("worldgen", ["tools/save_compat_audit_codec.py"], False),
         ("worldgen", ["app-save-codec/Main.hs"], False),
         ("unit-assets", ["app-save-codec/Main.hs"], False),
-        ("unit-assets", ["tools/save_compat_audit_manifest.py"], False),
-        ("unit-assets",
-         ["tools/test_save_compat_audit_discovery.py"], False),
         ("worldgen", ["src/World/Save/Envelope/Codec.hs"], False),
         ("unit-assets", ["src/World/Save/Envelope/Codec.hs"], False),
-        ("unit-assets", ["docs/save_compat/manifest.json"], False),
-        ("save-compat", ["assets/textures/units/acolyte/atlas/idle.png"],
-         False),
         # The unresolved-base sentinel selects EVERY gate (#1360): a
         # local gate that cannot tell what changed runs the coverage.
-        ("save-compat", [CONSERVATIVE_SENTINEL], True),
         ("worldgen", [CONSERVATIVE_SENTINEL], True),
         ("graphical", [CONSERVATIVE_SENTINEL], True),
         ("unit-assets", [CONSERVATIVE_SENTINEL], True),
         # ...and it is a sentinel, not a pattern: a path that merely
         # resembles it must not select anything.
-        ("save-compat", ["!!ci-expensive-gates:something-else!!"], False),
     ]
     failures = []
     for gate, files, expected in cases:

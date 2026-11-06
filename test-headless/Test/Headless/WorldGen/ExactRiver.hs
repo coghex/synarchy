@@ -4,10 +4,7 @@ module Test.Headless.WorldGen.ExactRiver (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
-import qualified Data.ByteString as BS
-import World.Save.Envelope (decodeSessionEnvelope)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Fluid.Exact
@@ -29,13 +26,10 @@ import World.Geology.Timeline.Types
 import World.Chunk.Types (ChunkCoord(..))
 import World.Save.Component.PageCore
 import World.Generate.Chunk.RiverBed (fitExactRiverBeds)
-import World.Save.Component.WorldGen (toWorldGenParamsDTOv9, toWorldGenParamsDTOv1)
+import World.Save.Component.WorldGen (toWorldGenParamsDTOv9)
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Component.Types (ComponentCodec(..))
-import Test.Headless.World.Save.Components.Fixture
-    (richSnapshot, minimalSaveDataV90, minimalSaveMetadataV90, minimalWorldPageSaveV90)
-import World.Save.Compat.SessionV90
-    (SaveDataV90(..), WorldPageSaveV90(..), migrateSessionV90)
+import Test.Headless.World.Save.Components.Fixture (richSnapshot)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Page.Types (WorldPageId(..))
@@ -221,34 +215,3 @@ spec = describe "WorldGen.ExactRiver" $ do
                         table `shouldBe` rivers [25,0,-15]
                         wgpExactRiverBeds (pgsGenParams (wpBase restored HM.! WorldPageId "river"))
                             `shouldBe` policy
-
-    it "scales the legacy complete-session path exactly once as well" $ do
-        let pid = WorldPageId "main_world"
-            oldPage = (minimalWorldPageSaveV90 pid)
-                { wp90GenParams = toWorldGenParamsDTOv1 (params [3,0,-2]) }
-            oldSession = minimalSaveDataV90 { sd90Worlds = [oldPage] }
-        case migrateSessionV90 minimalSaveMetadataV90 oldSession of
-            Left err → expectationFailure (show err)
-            Right restored → do
-                let table = gtWorldRivers . wgpGeoTimeline . pgsGenParams $
-                        snapPages restored HM.! pid
-                table `shouldBe` rivers [24,0,-16]
-
-    it "the tracked v13 session carries nonempty fractional generated rivers" $ do
-        bytes ← BS.readFile "test-headless/data/save-compat/z5-exact-generated-rivers.bin"
-        let luaNames = HS.fromList ["unit_ai", "building_spawn"]
-        case decodeSessionEnvelope luaNames luaNames bytes of
-            Left err → expectationFailure (show err)
-            Right (_, snapshot, _, _) → do
-                let tables = [gtWorldRivers (wgpGeoTimeline (pgsGenParams page))
-                             | page ← HM.elems (snapPages snapshot)]
-                    surfaces = [rcePerTileSurfZ entry VU.! i | table ← tables,
-                        entries ← HM.elems (wrByChunk table), entry ← V.toList entries,
-                        i ← [0..255], rceBitmask entry VU.! i]
-                surfaces `shouldSatisfy` any (\s → s `mod` fluidUnitsPerZ ≢ 0)
-                case ccDecode worldPagesCodec (ccVersion worldPagesCodec)
-                        (ccEncode worldPagesCodec snapshot) of
-                    Left err → expectationFailure (show err)
-                    Right restored →
-                        [gtWorldRivers (wgpGeoTimeline (pgsGenParams page))
-                        | page ← HM.elems (wpBase restored)] `shouldBe` tables

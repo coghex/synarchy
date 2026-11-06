@@ -33,7 +33,7 @@
 -- positional by constructor tag and rides into saves via
 -- "World.Save.Component.EntitySimulation"'s unit-sim component. Adding a
 -- constructor is a pure append; inserting or reordering silently
--- corrupts saved move targets (@tools/enum_append_only_audit.py@ guards
+-- corrupts saved move targets (@the current save-schema policy@ guards
 -- this).
 module Unit.Pathing.Hazard
     ( MoveHazardPolicy(..)

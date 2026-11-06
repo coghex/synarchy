@@ -63,7 +63,7 @@ commit. A run exits zero only when the live findings match that baseline
 exactly: a link not in it fails as NEW, and an entry no longer found
 fails as STALE, so the file can only shrink. `--update-baseline`
 regenerates it; the file is generated, never hand-edited, exactly like
-`docs/save_compat/enum_baseline.json`.
+`the compiled current-schema record`.
 
 The baseline is TEMPORARY, not a permanent exemption list. HLR-2 through
 HLR-4 drain it in bounded comment-only sweeps, and HLR-5 deletes both

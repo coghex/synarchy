@@ -50,13 +50,9 @@ def test_current_selection_does_not_read_historical_manifest_or_files() -> None:
         record = json.loads(json.dumps(source_record))
         with mock.patch.object(current, "CURRENT_RECORD_PATH", root / "current-record.json"), \
              mock.patch.object(common, "REPO_ROOT", root), \
-             mock.patch.object(common, "MANIFEST_PATH", root / "docs/save_compat/manifest.json"), \
-             mock.patch.object(common, "FIXTURE_DATA_DIR", root / "test-headless/data/save-compat"), \
              mock.patch.dict(os.environ, {"SYNARCHY_SAVE_CODEC_EXE": codec_exe or ""}), \
              mock.patch.object(fingerprint, "current_envelope_version", return_value=1):
-            # Deliberately do not create docs/save_compat or the historical fixture directory.
-            expect(not common.MANIFEST_PATH.exists(), "synthetic historical manifest is absent")
-            expect(not common.FIXTURE_DATA_DIR.exists(), "synthetic historical corpus is absent")
+            # Deliberately provide only the current record and fixture.
             expect(current.audit_record(record, root=root, registry=live_registry) == [],
                    "current selection must pass without opening historical inputs")
 
@@ -114,8 +110,8 @@ def test_empty_and_duplicate_current_selections_are_rejected() -> None:
     names = {fn.__name__ for fn in tests}
     expect(names == set(runner.REQUIRED_CURRENT_TEST_NAMES),
            "current registered tests must exactly match the required selection")
-    expect(not set(tests).intersection(runner.REPRODUCIBILITY_TESTS),
-           "current selection must never include historical reproducibility tests")
+    expect(not any("reproducibility" in fn.__name__ for fn in runner.ALL_TESTS),
+           "retired historical reproducibility tests must not be registered")
 
 
 def test_current_seed_and_comparison_outcomes_use_current_inputs() -> None:

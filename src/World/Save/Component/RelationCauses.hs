@@ -17,8 +17,7 @@
 --   @"transfer-orders"@ and #2512's @"portable-knowledge"@, and
 --   @docs\/persistence_contract.md@ §5 admits an optional one only when
 --   ABSENCE has an honest default rather than an invented one. It does
---   here: every baseline in @docs\/save_compat\/manifest.json@ predates
---   the store, so a session written before this slice had nowhere to
+--   here: older layouts predate the store, so a session written before this slice had nowhere to
 --   record a cause and no cause existed. An absent payload therefore
 --   restores 'Unit.Faction.RelationStore.emptyRelationCauseStore' — "no
 --   cause exists" — which is TRUE of every earlier save rather than
@@ -71,7 +70,8 @@ import World.Save.Snapshot (SessionSnapshot(..))
 
 -- | Frozen mirror of 'Unit.Faction.FactionRelation'. Positional by
 --   constructor tag (cereal's 'Generic' encoding), so it is APPEND-ONLY
---   and guarded as such by @tools\/enum_append_only_audit.py@.
+--   and protected by the owning component's current version under the
+--   current-save schema policy (#2919).
 data RelationValueDTO
     = RvdAlly
     | RvdNeutral

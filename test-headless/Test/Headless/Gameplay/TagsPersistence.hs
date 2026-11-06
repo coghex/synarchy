@@ -22,7 +22,6 @@ module Test.Headless.Gameplay.TagsPersistence (spec) where
 import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
@@ -725,22 +724,6 @@ wireSpec = describe "the component wire" $ do
                 -- The table itself survived: only its tags are new.
                 sum [ instancesCount (wgpLocationInstances (pgsGenParams p))
                     | p ← HM.elems (wpBase wp) ] `shouldBe` 2
-
-    it "tracked pre-tag fixtures decode with no general assignments — \
-       \faction tags included — and re-encode at the new versions" $ \_ →
-        forM_ [ "z6-unit-faction-profile", "z8-units-v4-physiology-overrides" ] $
-            \name → do
-                bytes ← BS.readFile ("test-headless/data/save-compat/" <> name <> ".bin")
-                let luaNames = HS.fromList ["unit_ai", "building_spawn"]
-                case decodeSessionEnvelope luaNames luaNames bytes of
-                    Left err → expectationFailure (T.unpack err)
-                    Right (_, snap, _, _) → do
-                        (name, sessionAssignments snap) `shouldBe` (name, [])
-                        -- z6's units DO carry faction tags; none of
-                        -- them may become a general tag.
-                        (name, sum (HM.size . usnInstances . pgsUnits
-                                      <$> HM.elems (snapPages snap)))
-                            `shouldSatisfy` ((> 0) . snd)
 
     it "refuses a malformed tag list in each component, naming it" $ \_ → do
         let page = WorldPageId "wire_page"

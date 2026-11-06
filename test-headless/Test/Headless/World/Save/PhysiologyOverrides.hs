@@ -113,8 +113,6 @@ meta = snapshotSaveMetadata
     (SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts"
                      , srmAutosave = False })
 
-luaNames ∷ HS.HashSet T.Text
-luaNames = HS.fromList ["unit_ai", "building_spawn"]
 
 luaCid ∷ T.Text → ComponentId
 luaCid n = ComponentId ("lua." <> n)
@@ -169,7 +167,6 @@ spec = describe "physiology override persistence" $ do
     v4WireSpec
     liveRestoreSpec
     legacyWireSpec
-    fixtureSpec
     beforeAll readShippedPhysiologyRegistry $ do
         rejectionSpec
         declarationsSpec
@@ -364,51 +361,6 @@ legacyWireSpec = describe "historical units shapes (requirement 2)" $ do
             Right snap → map (HM.null ∘ uisPhysioOverrides)
                              (HM.elems (unitsOf snap mainPage))
                 `shouldBe` [True]
-
------------------------------------------------------------------------
--- Requirement 5: the retained fixtures
------------------------------------------------------------------------
-
-fixtureSpec ∷ Spec
-fixtureSpec = describe "retained fixtures (requirement 5)" $ do
-    forM_ [ ("z6-unit-faction-profile", 3 ∷ Word32, False)
-          , ("z7-units-v3-salt-store", 3, True) ] $ \(name, ver, reserve) →
-        it (T.unpack name ⧺ " is a real units-v" ⧺ show ver
-            ⧺ " session: it decodes through the frozen v3 graph, yields \
-              \empty overrides and re-encodes as the current version") $ do
-            bytes ← BS.readFile ("test-headless/data/save-compat/"
-                                 ⧺ T.unpack name ⧺ ".bin")
-            -- the envelope really declares units at the old version, so
-            -- this is not a current payload under a forged number
-            unitsVersion ["unit_ai", "building_spawn"] bytes
-                `shouldBe` Right ver
-            case decodeSessionEnvelope luaNames luaNames bytes of
-                Left err → expectationFailure (show err)
-                Right (md, snap, lua, _) → do
-                    let allUnits = concat
-                            [ HM.elems (usnInstances (pgsUnits p))
-                            | p ← HM.elems (snapPages snap) ]
-                    allUnits `shouldSatisfy` (not ∘ null)
-                    all (HM.null ∘ uisPhysioOverrides) allUnits
-                        `shouldBe` True
-                    when reserve $ do
-                        let reserves = [ HM.lookup "salt_store" (uisStats u)
-                                       | p ← HM.elems (snapPages snap)
-                                       , (UnitId n, u) ←
-                                           HM.toList (usnInstances (pgsUnits p))
-                                       , n ≤ 2 ]
-                        reserves `shouldMatchList` [Just 0, Just 12.5]
-                    -- v5 since #2701 (page gameplay tags), which leaves
-                    -- the v4 instance shape this group pins untouched.
-                    let again = encodeSessionSnapshot md snap lua
-                    unitsVersion ["unit_ai", "building_spawn"] again
-                        `shouldBe` Right (ccVersion unitsCodec)
-                    -- re-encoding is reproducible, and the v4 bytes decode
-                    -- to the same session
-                    again `shouldBe` encodeSessionSnapshot md snap lua
-                    fmap (\(_, s, _, _) → s)
-                         (decodeSessionEnvelope luaNames luaNames again)
-                        `shouldBe` Right snap
 
 -----------------------------------------------------------------------
 -- Requirement 3: rejection

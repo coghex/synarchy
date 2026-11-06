@@ -136,9 +136,8 @@ import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
 import qualified Test.Headless.World.Save.Components as SaveComponents
 import qualified Test.Headless.World.Save.CurrentSchema as CurrentSaveSchema
-import qualified Test.Headless.World.Save.Compat as SaveCompat
 import qualified Test.Headless.World.Save.Compat.TagTargets as SaveCompatTagTargets
-import qualified Test.Headless.World.Save.Compat.Historical as SaveCompatHistorical
+import qualified Test.Headless.World.Save.CurrentPageCore as CurrentPageCore
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
@@ -1094,16 +1093,9 @@ restLane = do
     describe "save envelope" SaveEnvelope.spec
     describe "save components" SaveComponents.spec
     describe "current save schema" CurrentSaveSchema.spec
-    describe "save migrations" SaveCompat.spec
-    SaveCompatHistorical.currentPageCoreSpec
-    -- #2894: every tracked fixture's tile and occurrence tags through the
-    -- real load staging, against the shipped materials and flora.
-    describe "save migrations" $
-        aroundAll SaveCompatTagTargets.withShippedContentEngine
-                  SaveCompatTagTargets.tagTargetsSpec
+    CurrentPageCore.spec
     aroundAll SaveCompatTagTargets.withShippedContentEngine
         (describe "current tag targets" SaveCompatTagTargets.currentTagAdmissionSpec)
-    describe "save migrations" SimExactFluid.saveSpec
     SimExactFluid.currentSaveSpec
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "persistence reference integrity" LuaSaveBridge.spec

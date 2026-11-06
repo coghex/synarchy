@@ -510,12 +510,11 @@ by earlier builds:
   bytes are identical after a load (`tools/multiworld_save_probe.py --arena`
   hashes it). Explicit saves and autosaves publish as before.
 
-Evidence retained with the change: the fixture `z14-arena-legacy-shallow`
-(captured on the pre-change build; commit and commands in its manifest
-provenance and in `docs/pr-proofs/issue-2707-capture-legacy-arena.py.txt`),
-the hspec group `arena generation consistency` (which loads it and asserts
-the uniform foundation with both edits replayed), and the fresh-process
-round trip in `tools/multiworld_save_probe.py --arena`.
+The current behavior is covered by the Hspec group `arena generation
+consistency`, which checks the uniform foundation with edits replayed, and
+the fresh-process round trip in `tools/multiworld_save_probe.py --arena`.
+The pre-release captured fixture is retired with the historical corpus and
+remains only in git history.
 `currentSaveVersion` was bumped to 107 as the worldgen-output bookkeeping
 marker `src/World/CLAUDE.md` requires; it does not gate on-disk
 compatibility.
@@ -553,13 +552,11 @@ the closed fluid edge are all derived from it on load.
   identical bounds with no scenario file.
 - **Loading never rewrites the file**, exactly as for expandable arenas.
 
-Evidence retained with the change: the fixture `z15-arena-finite` (a
-20 × 10 arena with two corner edits, captured by
-`docs/pr-proofs/issue-2708-capture-finite-arena.py.txt`; its canonical summary
-records `arenaBounds`), the legacy `z14-arena-legacy-shallow` migrating to
-expandable, the hspec group `arena finite bounds` (real-codec round trips,
-staged restoration, the movement snapshot of a hidden page) and the
-fresh-process finite arena in `tools/multiworld_save_probe.py --arena`.
+The current behavior is covered by the Hspec group `arena finite bounds`
+(real-codec round trips, staged restoration and the movement snapshot of a
+hidden page) and the fresh-process finite arena in
+`tools/multiworld_save_probe.py --arena`. The pre-release captured fixtures
+are retired with the historical corpus and remain only in git history.
 `currentSaveVersion` was bumped to 108 as the worldgen-output bookkeeping
 marker; the bump does not replace the component migration above.
 `currentSaveVersion` was bumped to 109 for #2548's new optional
@@ -571,230 +568,95 @@ change (`wpsCropPlots` values gain the optional condition); as above, the
 
 ## 5. Format-version policy
 
-- B1 (#759) landed the new tagged envelope (`World.Save.Envelope`) with
-  an independent framing version
-  (`World.Save.Envelope.currentEnvelopeVersion`, which B1 assigned and
-  B2 leaves unchanged — the framing contract did not change). Since B2
-  (#760) each GAMEPLAY component carries its OWN independent schema
-  version (`World.Save.Component.Types`), so ordinary component
-  evolution no longer bumps any global save version. `currentSaveVersion`
-  (`src/World/Save/Types.hs`, bumped frequently — don't trust any number
-  written down here) now versions only the transitional `SaveData`/
-  `WorldPageSave` load bridge, which is not a wire contract; the
-  historical global-version meanings (e.g. v83 = #785, v84 = #811) are
-  preserved and never reassigned.
-- **Pre-B1 (v82 and earlier) positional saves remain unsupported** and
-  receive B1's clean-break diagnostic (an envelope-version/magic
-  mismatch, no heuristic positional decoding attempted). Migrating THOSE
-  is explicitly out of scope for every save-overhaul child, including
-  #766 below.
-- The **first completed new-format save (the B1 envelope, #759) is the
-  compatibility baseline** — i.e. the format was not required to be
-  stable *before* that point, only from it forward. Issue #766
-  (save-overhaul C4) implements the machinery that promise requires:
-  `World.Save.Compat.SessionV90` recognizes and migrates a real B1
-  envelope (a single required `"session"` component wrapping the
-  then-current `SaveData`/`WorldPageSave` shape) into the current,
-  fully-validated `SessionSnapshot` — reusing the SAME per-component
-  assembly helpers (`basePageSnapshots`/`applyWorldEdits`/etc.) the
-  modern registry-driven path uses, so a migrated B1 session is
-  reconstructed by identical code, not a parallel implementation.
-  `docs/save_compat/manifest.json` is the machine-readable record of
-  every baseline declared supported this way, its tracked fixtures, and
-  a frozen-DTO fingerprint guarding against silent drift;
-  `tools/save_compat_audit.py` (wired into `make ci`/CI) enforces it, and
-  `tools/save_compat_migration_probe.py` proves a tracked fixture
-  survives a real load→publish→resave→restart→reload round trip. That
-  probe is optional since #2912 (about an hour per run): run it on
-  request, e.g. `python3 tools/run_probes.py --only save_compat_migration
-  --exact`; it is not a required gate, a default persistence sweep does not
-  run it, and the lab does not schedule it.
-  The intervening #760-only transitional shape (Haskell already split
-  into components, but Lua state still the pre-#761 opaque blob map) IS
-  a declared compatibility baseline (`b2-split-haskell-lua-state`,
-  requirement 3): `World.Save.Envelope.decodeB2SessionEnvelope`
-  recognizes an envelope shaped exactly `{metadata, every REQUIRED
-  Haskell gameplay component, "lua-state"}` (every descriptor required,
-  at its genuine historical version — the same exact-shape precision
-  B1's own fallback uses). "Required" rather than "known" since #1087:
-  an OPTIONAL component post-dates that baseline by construction, so
-  folding one into this exact-set comparison would make every real B2
-  fixture stop being recognized the moment such a component shipped. and reuses `assembleSnapshot` UNCHANGED for the
-  Haskell side, since it's already the modern per-component registry.
-  The opaque `"lua-state"` blob (the documented pre-#761
-  `sdLuaModules`/`snapLuaModules` shape, a cereal-encoded `HashMap Text
-  Text`) is decoded and validated as that map: a genuinely EMPTY map
-  (the common real case) migrates cleanly, defaulting every current Lua
-  module the same way a migrated B1 session does; a well-formed but
-  NON-empty map, or genuinely malformed bytes, are both refused rather
-  than silently discarding or misinterpreting persisted Lua state — the
-  pre-#761 Lua deserializer that could honestly interpret non-empty
-  state was removed by #761 and never comes back.
-- From the B1 baseline on, every subsequent format change requires an
-  explicit per-component migration: translate changed fields, supply
-  deliberate defaults for new fields. No more silent breaks. The
-  raw-to-typed-reference transition (issue #764, save-overhaul C3;
-  `craft-bills`/`power-nodes`/`unit-sim` components v1→v2) is the first
-  real example of this machinery in the modern, already-split component
-  set — `docs/save_compat/manifest.json`'s `c3-raw-reference-v1` baseline
-  documents it as already supported without a new migration function
-  (the existing `ccInputVers`-dispatched decode already handles it),
-  backed by a tracked fixture proving the v1 payloads decode through the
-  real envelope/registry path. The first versioned Lua components
-  (issue #761, save-overhaul B3) are likewise documented as a
-  `b3-lua-versioned` manifest entry, backed by real tracked v1 payload
-  fixtures for both `unit_ai` and `building_spawn` (encoded through the
-  genuine `scripts/lib/data_codec.lua` via a real HsLua VM, not a
-  reimplementation of the wire format) that
-  `test-headless/Test/Headless/Lua/SaveModules.hs`'s "tracked v1
-  fixtures from disk" gate reads straight off disk and runs through the
-  real `saveModules.prepareLoad`/`applyAll` path — on top of, not
-  instead of, that same file's existing exhaustive synthesized-payload
-  coverage of the full v1/v2/v3 contract.
-- An unsupported or malformed save must fail clearly (a readable error
-  naming the expected vs. found version, mirroring the existing
-  `currentSaveVersion` mismatch behavior) without partially modifying
-  the live session — this is the same publish-after-validate rule from
-  §1 applied to the format layer specifically.
-- **A NEW component may be declared OPTIONAL** when a save predating it
-  has an honest, non-guessing default — the reader then treats an
-  ABSENT payload as that default instead of failing the load. Four
-  components in the static Haskell registry qualify so far, and each
-  states its own justification in its module header. #1087's
-  `container-knowledge` (the player's last-known container contents)
-  was the first: every tracked baseline legitimately lacks it, and
-  "absent" means exactly "no container has ever been inspected", which
-  is true rather than invented. #1246's `transfer-orders` (the per-page
-  queue of durable transfer orders) is the second, on identical terms:
-  "absent" means "no order is queued", which is true of every session
-  that predates the component because there was nowhere for an order to
-  be stored at all. #2512's `portable-knowledge` (what the player
-  remembers about each PORTABLE container, keyed by the item's own
-  `iiInstanceId`) is the third, again on identical terms: "absent"
-  means "no crate has ever been hefted or opened", which is true of
-  every session that had nowhere to record either. It is also the first
-  optional component that is SESSION-scoped rather than page-scoped — a
-  crate is carried between pages and owners, so its memory is keyed by
-  the crate and written once for the whole session — which changes
-  nothing about the optionality rule itself. #2548's `relation-causes`
-  (every live DIRECTED relation cause, keyed by its ordered tag pair and
-  its owner's `RelationCauseId`) is the fourth, again on identical terms:
-  "absent" means "no cause exists", which is true of every session that
-  predates the component because nothing could hold one. It is
-  session-scoped too — a cause relates two TAGS, which no page owns — and
-  its owner is the global `relationCauseStoreRef`, captured and replaced
-  on the texture palette's seam: a load REPLACES the live store (an absent
-  component clears it, a failure before publication leaves it), and Exit
-  to Menu empties it while an ordinary page transition never does. Its
-  relation value rides the wire as the frozen `RelationValueDTO`, never as
-  `FactionRelation`. (On the Lua side
-  `lua.tutorial_progress` is separately optional under the same rule —
-  §7 — so the count here is of the static Haskell registry, not of the
-  envelope as a whole.) This is a
-  narrow exception to the rule above, not a general escape hatch — the
-  decision is made ONCE, from `ccRequired`, in
-  `World.Save.Component.Types.registerComponent`, and only the
-  MANIFEST-level absence is tolerated: a component that IS declared but
-  whose payload is malformed, truncated, or at an unsupported version
-  still fails exactly as a required one would. A FIFTH optional
-  component has to justify itself against
-  `Test.Headless.World.Save.Components`' explicit required/optional
-  split assertion, which names every one of them.
-- **Unknown optional components** (an id present in a save's manifest
-  that this build does not recognize, and which the writer itself
-  marked optional) must never be silently discarded on the next save to
-  the SAME slot. Rather than threading opaque payload bytes through live
-  session state, `World.Save.Storage`'s publish transaction inspects the
-  slot's existing generations before ever writing a new candidate: BOTH
-  the authoritative `world.synworld` AND the retained
-  `world.synworld.prev`, because a corrupt-authoritative recovery leaves
-  the generation a load actually reads sitting at `.prev`, where an
-  ordinary publish would stage it aside and sweep it away. If either
-  carries a component this build doesn't recognize, the whole publish is
-  refused (`PhaseForeignOptionalData`) — the original files, and
-  whatever they contain, are simply never overwritten. A different
-  save-slot name remains unaffected.
-- **An existing generation that cannot be READ refuses the publish**
-  (`PhaseExistingGenerationRead`, issue #2227). A file that is present
-  but unreadable — a permission refusal, an I/O error, a file something
-  else holds open — is neither absent nor proven free of unknown
-  optional data, so it does not pass the guard above: the publish is
-  refused before any candidate file is created, naming that exact
-  generation path and carrying the underlying I/O error, and both
-  generations are left byte-for-byte as they were. Only genuine absence
-  (a first publish, or a previous-only recovery state) is treated as
-  nothing to protect. Bytes that read successfully but do not
-  structurally decode are unchanged by this rule: they report no
-  unknown components, and #1203's corrupt-versus-incompatible topology
-  split still decides what the transaction does with them.
+Before the first public release, this repository accepts the current save
+format only. Pre-release saves are not a compatibility promise. A persisted
+shape or meaning change advances every affected carrier version and disables
+its prior-version route. Do not add historical DTOs, migrations, fixture
+baselines, or acceptance paths for pre-release saves.
 
-## 6. Existing save/load test & probe disposition
+`tools/current_save_schema_audit.py` compiles the candidate and compares its
+current schema record with the record in the committed base. The check runs for
+every merged code revision, independent of path selection. Pull requests use
+their base commit; push builds use the event's `before` commit. Local checks
+compare against `origin/master` and include tracked working-tree edits. The
+candidate is freshly compiled; the base record comes from the base ref. A
+missing base record or an unavailable base fails closed. The tracked record is
+`docs/save_compat/current_schema.json`, so changes to it are code-gated and
+must not take a docs-only fast path.
 
-**Correction (#767):** the claim below that "no hspec suite exercises
-save/load" was accurate when A1 wrote it, but every subsequent child
-(A3, B2, B3, C3, C4) added extensive PURE hspec coverage for the parts
-of the pipeline that don't need a real multi-thread engine —
-`Test.Headless.Save.Snapshot`/`.Barrier`, `Test.Headless.World.Save.
-Components`/`.Compat`/`.Integrity`/`.Storage`, `Test.Headless.Lua.
-SaveModules`, and now (#767, save-overhaul D1)
-`Test.Headless.World.Save.Contract`'s "persistence contract" describe
-group — a representative multi-page session (every designation kind,
-nested items, a unit with wounds/skills/equipment, unit-sim state, a
-building, a craft bill, a power node, and an identity) round-tripped
-through the REAL production codec and compared via `SessionSnapshot`'s
-derived `Eq`. What genuinely still can't run under hspec is the actual
-multi-thread, multi-process, disk-touching FULL save/load transaction —
-that remains headless Python probes (`tools/*.py`), including the two
-new ones below.
+The guard checks compiled wire declarations, live versions and accepted
+dispatches. It cannot see custom serializers, external encoders, semantic changes, or Lua
+payload meaning. When those change, explicitly advance the owning component
+version, disable acceptance of the old version, and add current behavioral
+coverage. `currentSaveVersion` describes the in-memory load bridge; it does not
+protect the on-disk format. A compiled schema audit is not proof that serialization,
+validation, staging, publication, or restoration works.
 
-**Primary save/load probes** — their whole purpose is testing the
-persistence envelope itself:
+A component with an unsupported version, or a payload incompatible with its
+current schema, fails before the incoming session is published. The outgoing
+session remains intact and paused. Do not let `.prev` recovery turn an
+incompatible generation into a loadable save; recovery remains for corruption.
+The same boundary applies to Lua save modules. Keep required/optional component
+semantics honest: a newly optional component needs a real default for every
+current save that lacks it, and changing a required component to optional is a
+format decision requiring behavioral coverage.
 
-| Probe | Covers | Disposition | Responsible future child |
-|---|---|---|---|
-| `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Retained (updated by #763)**, save-file-shape changes untouched by #759 (B1) needed no changes there. #763 removed the active-page-to-`main_world` remap it exercised, so its two pages now stay under their own saved ids — the probe's assertions were updated to match, not its structure. | Done (#763) |
-| `tools/transactional_load_probe.py` | The genuinely new session-replacement-not-merge case, mutual exclusion, missing-def rejection, no-ghost-on-repeat (#763) | **Added by #763.** A same-process load test the multiworld probe structurally cannot be (that probe starts every run with zero pre-load pages): builds a live pre-load page never part of ANY save and proves it does not survive a real published load. **#1181** made its mutual-exclusion scenario deterministic — the in-flight window is held open by the test-only `debug.armLoadStageGate` staging gate and positively observed by request id, instead of being raced for and skipped when the race was lost. | Done (#763, #1181) |
-| `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
-| `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
-| `tools/save_compat_migration_probe.py` | Every tracked complete-session baseline's fixture(s) (B1, the #760-only B2 transitional shape, C3's typed-reference/multi-page/items variants, B3's Lua-versioned session) load→publish→resave→restart→reload round trip (#766) | **Added by #766.** The one thing the pure hspec "save components"/"save compatibility" gates cannot prove: a real fixture on disk survives the normal whole-session transaction and a genuine process restart. **Optional; run on request (#2912)** — not a required gate; excluded from the default `persistence_contract_sweep` selection and from the lab's own scheduling. | Done (#766); optional since #2912 |
-| `tools/persistence_contract_probe.py` | The compact, CI-eligible fresh-process end-to-end gate (#767): three real save→load→save cycles (a tiny worldSize-8 page) compared structurally (`SessionSnapshot` `Eq` + `lua.*` payload byte-equality) via `tools/persistence_snapshot.compare_session_files`, plus reset-policy and paused-stability-dwell checks | **Added by #767 (final Phase-4 child).** The final integration gate: proves the ASSEMBLED system (every A1-C4 piece together) honors the player-facing contract, not merely that each piece's own focused test passes. | Done (#767) |
-| `tools/persistence_contract_sweep.py` | The broader manual sweep (#767): the SAME three-cycle fresh-process comparison against a real generated-world representative scenario (craft bill, an acolyte_portal roster + a real unitAi.commandAttack for non-vacuous Lua-owned state, mine designation, identity) | **Added by #767.** Requirement 15's "broader" tier — real (not tiny) worldgen scale; actually RUNS (via `tools/run_probes.py --only ... --exact`) the domain-specific probes below and the assembled-failure-contract probes for requirement 11/13 coverage, propagating any failure. | Done (#767) |
+The routine current-save gates are:
 
-**Secondary probes** — domain probes whose own gate happens to include
-a save→quit→restart→load round trip as one assertion among several
-(`grep -l "saveWorld\|loadSave" tools/*.py` minus the three primary
-probes above — 13 as of this writing). Every one of these is
-**retained as-is**: none needs rewriting by THIS issue, and each gates
-its own domain's persistence classification, not the save envelope
-itself. A future envelope/format change breaking one is a signal that
-domain's classification needs re-checking, not a sign this contract's
-inventory is wrong.
+- `python3 tools/current_save_schema_audit.py --self-test`
+- `python3 tools/current_save_schema_audit.py --base-ref origin/master`
+- `python3 tools/test_save_compat_audit.py`
+- `cabal test synarchy-test-headless --test-options='--match "current save schema"'`
+- `persistence_contract` probe, which exercises three fresh-process save/load
+  cycles through the real engine and compiled codec
 
-Every row's "Responsible future child" is **B1** (the new save envelope):
-each probe's domain field is a `WorldPageSave`/`SaveData` member, so
-only a change to THAT field's wire representation — B1's job, by
-definition — could ever require touching these probes. None is A2's
-responsibility (the snapshot barrier changes *when*/*how atomically* a
-save happens, not what any individual field looks like), and none
-needs a domain-specific child of its own — unlike the three primary
-probes above, where the specific behavior under test (session
-replacement, sim-speed persistence) is itself changing.
+CI runs the compiled-schema audit on every code revision, using the actual
+committed base revision. The local `tools/ci-local.sh` gate includes the same
+check against `origin/master`, plus tracked edits. The selected Hspec group and
+the current audit self-tests do not require a live-probe slot; the
+`persistence_contract` engine probe uses the project's coordinated slot.
 
-| Probe | Domain gated (inventory row) | Disposition | Responsible future child |
-|---|---|---|---|
-| `tools/chop_probe.py` | `wsChopDesignationsRef`/`wpsChopDesignations` (§3/§4) | Retain — the save round-trip assertion here is "a chop designation survives save→load", unaffected by envelope-level decisions. | B1 (only if `wpsChopDesignations`'s representation changes) |
-| `tools/crop_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` (§3/§4) | Retain — same reasoning, crop plots. | B1 (only if `wpsCropPlots` changes) |
-| `tools/foraging_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` (§3/§4) | Retain — same reasoning, foraged-flora harvest state. | B1 (only if `wpsFloraHarvests` changes) |
-| `tools/item_instance_probe.py` | `wsGroundItemsRef`/`wpsGroundItems` + `sdNextItemInstanceId` (§1/§3/§4) | Retain — asserts item-instance identity survives save→load; the allocator restore rule (#67, a plain assignment since #763) it also covers is independent of envelope format. | B1 (only if `wpsGroundItems`/`sdNextItemInstanceId` changes) |
-| `tools/flora_growth_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` + the world date (`wpsDateYear`/`Month`/`Day`, §4) | Retain — asserts the growth clock survives save→load. | B1 (only if those fields change) |
-| `tools/farm_ai_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` + `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, farm-AI-driven plot/designation state. | B1 (only if either field changes) |
-| `tools/location_overlay_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure overlay rides the edit log) | Retain — asserts a placed structure's overlay survives save→load. | B1 (only if `wpsEdits` changes) |
-| `tools/location_stamp_idempotent_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure stamps) | Retain — asserts re-stamping is idempotent across a save→load boundary. | B1 (only if `wpsEdits` changes) |
-| `tools/location_content_probe.py` | `LocationRegistry.lrDefs` (§9, content) + `wsEditsRef`/`wpsEdits` for any spawned structure | Retain — mostly a content-loading gate; its save/load touch is incidental (spawned-structure persistence), unaffected by envelope decisions. | B1 (only if `wpsEdits` changes; content-loading itself has no format dependency) |
-| `tools/item_temp_probe.py` | item-instance temperature, riding the same `wsGroundItemsRef`/`wpsGroundItems`/unit-inventory item data as `item_instance_probe.py` | Retain — same reasoning. | B1 (only if `wpsGroundItems`/unit-inventory item representation changes) |
-| `tools/power_probe.py` | `wsPowerNodesRef`/`wpsPowerNodes` (§3/§4) | Retain — asserts power-node state (incl. battery charge, #360) survives save→load. | B1 (only if `wpsPowerNodes` changes) |
-| `tools/plant_probe.py` | `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, planting designations. | B1 (only if `wpsPlantDesignations` changes) |
-| `tools/till_probe.py` | `wsTillDesignationsRef`/`wpsTillDesignations` (§3/§4) | Retain — same reasoning, till designations. | B1 (only if `wpsTillDesignations` changes) |
+### Public-release checklist
+
+Before the first public release, freeze the first public format as the
+supported baseline. Capture real current-format fixtures, record the supported
+baseline and any migrations explicitly, and add tests for each accepted older
+format. Require the current-schema audit, fixture and migration checks, and
+fresh-process restart gates for release changes. Keep historical acceptance
+disabled until that release contract is reviewed and adopted. The pre-release
+current-only policy does not itself establish public backward compatibility.
+
+## 6. Current save/load test and probe gates
+
+The current-schema guard and codec audit are complementary. The compiled
+schema extraction checks declared wire shapes, versions, registrations and
+acceptance. `save_compat_audit.py` verifies the retained current fixture with
+the compiled codec. Neither replaces behavioral tests of round trips, refusal,
+reference integrity, transaction staging or publication.
+
+The focused headless suites are:
+
+- `current save schema` — compiled extraction, custom-boundary coverage and
+  current-format/refusal regressions;
+- `save components` and `save envelope` — current component and framing
+  behavior, including the still-useful runtime DTO conversions;
+- `persistence reference integrity`, `atomic save storage`, and `persistence
+  contract` — referential validity, generation publication and snapshot
+  reconstruction;
+- `Lua persistence components` — production Lua module registry and payload
+  behavior.
+
+The compact `persistence_contract` probe remains the required engine-level
+save/load gate for persistence changes. It saves and loads through three fresh
+processes, checks structural equality and Lua payload bytes, and covers reset
+policy and paused-session stability. The broader `persistence_contract_sweep`
+and feature-specific probes retain their own selection and ownership rules.
+
+No historical fixture corpus, migration replay probe, or historical
+audit/reproducibility gate is maintained before public release. Existing
+runtime DTO and conversion code can remain where useful, but pre-release shape
+changes do not require a new historical decoder, migration, or fixture. The
+public-release checklist in §5 defines the future support boundary.
 
 ## 7. The persistence-inventory audit
 
@@ -1201,7 +1063,6 @@ the audit.
   merge-preserving load behavior this contract's session-replacement
   target (§1) deliberately diverges from; see "Divergence: current
   loading merges, it does not replace" above.
-- #766 (save-overhaul C4) implements this contract's §5 compatibility
-  promise: component migrations, `docs/save_compat/manifest.json`,
-  `tools/save_compat_audit.py`, and
-  `tools/save_compat_migration_probe.py`.
+- #2919 activates the pre-release current-schema policy in §5. Historical
+  pre-release fixtures and migration auditing are retired; the public-release
+  checklist starts support from the first public save format.

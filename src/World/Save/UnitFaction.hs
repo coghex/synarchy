@@ -110,7 +110,7 @@ data ControllerDTO = ControllerDTO
     } deriving (Show, Eq, Generic, S.Serialize)
 
 -- | 'MembershipSource' on the wire. Append-only, like every positional
---   enum ('tools/enum_append_only_audit.py').
+--   enum ('the current save-schema policy').
 data MembershipSourceDTO
     = SourceDefinitionDefaultDTO
     | SourceRuntimeOwnerDTO !Text

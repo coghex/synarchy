@@ -48,8 +48,8 @@
 --   vocabulary can keep growing — which it is expected to — without
 --   silently reinterpreting bytes already on disk. Adding a constructor
 --   here is a deliberate, visible wire event: the frozen DTO must gain
---   the matching case, and @tools\/enum_append_only_audit.py@ guards the
---   constructor ORDER of both halves.
+--   the matching case, and the owning component must advance its version
+--   under the current-save schema policy (#2919).
 --
 --   This module is ADDITIVE. The pre-existing verbs
 --   ('unitTransferItemToUnitFn', 'unitDepositToCargoFn') keep their

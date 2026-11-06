@@ -124,7 +124,7 @@ def _first_diff(actual, expected, path: str = "") -> str:
     canonical-summary JSON values, recursing into nested dicts/lists -- or
     "" if they match. Diagnostic-only (never the pass/fail gate -- that's
     `compare_session_files`'s strict Eq/byte comparison via the real
-    codec); mirrors `save_compat_migration_probe.py`'s identical helper."""
+    codec); mirrors probe comparison's identical helper."""
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return f"{path}: expected an object, got {actual!r}"
@@ -157,7 +157,7 @@ def _first_diff(actual, expected, path: str = "") -> str:
 # Keys that legitimately differ between two independently-saved files even
 # when nothing gameplay-relevant changed (request metadata, contract
 # requirement 5's own exclusion list) -- excluded from the diagnostic diff
-# the same way `save_compat_migration_probe.py`'s comparison already does.
+# the same way the current persistence comparison does.
 _DIAGNOSTIC_EXCLUDED_KEYS = frozenset({"$comment", "luaComponentCount", "isMigratedLegacyBaseline"})
 
 

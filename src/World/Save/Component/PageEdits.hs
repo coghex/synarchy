@@ -128,7 +128,7 @@ data WorldEditDTO
       -- positionally serialized, so a sixth field on @WePlaceFloraD@
       -- would have reinterpreted tag 8 in every shipped v1 log; a new
       -- trailing constructor leaves all eleven older tags meaning exactly
-      -- what they meant (tools/enum_append_only_audit.py).
+      -- what they meant (the current save-schema policy).
     | WePlaceFloraWithIdD !Int !Int !FloraId !Int !Float !FloraInstanceId
       -- #2243: appended at the END on exactly the same terms. The
       -- species is now a durable 'FloraRef' — an authored name — so the
@@ -136,7 +136,7 @@ data WorldEditDTO
       -- one landed, and @world-edits@ v3 payloads carry only this tag
       -- for a planted crop. Retyping @WePlaceFloraWithIdD@'s 'FloraId'
       -- slot in place would have reinterpreted tag 11 in every shipped
-      -- v2 log (tools/enum_append_only_audit.py records each
+      -- v2 log (the current save-schema policy records each
       -- constructor's payload, not just its name).
     | WePlaceFloraRefD !Int !Int !FloraRef !Int !Float !FloraInstanceId
       -- #2711: appended at the END on the same terms. One plant's PHYSICAL

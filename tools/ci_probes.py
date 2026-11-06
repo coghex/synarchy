@@ -306,10 +306,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
         "locally"),),
     "power": (Reason(SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
                                      "day/night balance + save/restart/load round-trip scenario"),),
-    "save_compat_migration": (Reason(SCENARIO_HEAVY, "two real engine boots plus a real "
-                                                      "process restart exercising a tracked "
-                                                      "legacy-fixture load/publish/resave/"
-                                                      "reload round trip (#766)"),),
     "autosave": (Reason(SCENARIO_HEAVY, "#913: the validated 1-minute minimum for "
                         "interval_minutes forces multiple >60s wall-clock waits (the "
                         "default-off dwell and the one real-interval fire alone are "

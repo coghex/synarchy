@@ -117,7 +117,7 @@ saveComponentRegistry =
       -- #1087: the FIRST of the three OPTIONAL entries. Absent ⇒ every
       -- page keeps 'blankPageSnapshot''s empty knowledge map (every
       -- container never-inspected), which is what lets every pre-#1087
-      -- baseline in docs/save_compat/manifest.json keep loading.
+      -- older payloads that predate this optional component keep loading.
     , registerComponent containerKnowledgeCodec
         (\ver d snap → onPages snap (applyContainerKnowledge ver d))
       -- #1246: the SECOND OPTIONAL entry, on the same terms. Absent ⇒

@@ -3,10 +3,9 @@
 --   unit_ai_locations.lua@'s per-unit location memory — identity dedup,
 --   page-scoped nearest lookup, targeted forget, empty-state, the
 --   persisted wire form, awareness ingest, and the load-time scrub —
---   plus the @lua.unit_ai@ v3→v4 schema evolution that carries it. The
---   component's DECLARED version has moved on since (v5 as of #1291),
---   so the version case below tracks the current one while still
---   pinning that every historical input version, v4 included, decodes.
+--   plus the current @lua.unit_ai@ schema that carries it. The version
+--   case below pins the current output and verifies that its meaningful
+--   location-memory payload still validates.
 --
 --   Same standalone-Lua-VM pattern as "Test.Headless.Lua.SaveModules":
 --   each 'it' runs one self-contained chunk via 'Lua.dostring' in a
@@ -411,7 +410,7 @@ spec = describe "unit location knowledge" $ do
                 , "                  y = 2 }) > 0)"
                 ]
 
-    describe "lua.unit_ai current schema and historical migration" $ do
+    describe "lua.unit_ai current schema" $ do
         -- Capture the spec table the component registers, without an
         -- engine or a real save_modules registry behind it.
         -- The stub must cover BOTH registrations @register@ performs:
@@ -441,18 +440,6 @@ spec = describe "unit location knowledge" $ do
                 , "assert(accepted[11], 'current version 11 must be accepted')"
                 ]
 
-        it "keeps accepting every historical input version until PSP-5" $
-            runsOk $ lns
-                [ registered
-                , "local accepted = {}"
-                , "for _, v in ipairs(captured.inputVersions) do"
-                , "  accepted[v] = true end"
-                -- #915's location memory and the later unit_ai fields are
-                -- still accepted until the coordinated PSP-5 retirement.
-                , "for v = 1, 11 do assert(accepted[v], 'v' .. v"
-                , "  .. ' must still decode') end"
-                ]
-
         it "depends on world-pages, which owns the instance table its \
            \location references resolve against" $
             runsOk $ lns
@@ -460,26 +447,6 @@ spec = describe "unit location knowledge" $ do
                 , "local deps = {}"
                 , "for _, d in ipairs(captured.deps) do deps[d] = true end"
                 , "assert(deps['world-pages'])"
-                ]
-
-        it "decodes a v1/v2/v3 payload with the memory ABSENT — never \
-           \inferred from player-wide discovery" $
-            runsOk $ lns
-                [ registered
-                -- A v3 payload: already-wrapped fields plus __owner, and
-                -- no knownLocations, because the field did not exist.
-                , "local v3 = { [7] = { __owner = { __ref = 'unit', id = 7 },"
-                , "                     currentAction = 'idle' } }"
-                , "local out3 = captured.decode(3, v3)"
-                , "assert(out3[7].knownLocations == nil)"
-                -- v1 is a bare payload migrated straight through.
-                , "local v1 = { [7] = { currentAction = 'idle' } }"
-                , "local out1 = captured.decode(1, v1)"
-                , "assert(out1[7].knownLocations == nil)"
-                , "assert(out1[7].__owner.__ref == 'unit')"
-                , "local v2 = { [7] = { currentAction = 'idle' } }"
-                , "local out2 = captured.decode(2, v2)"
-                , "assert(out2[7].knownLocations == nil)"
                 ]
 
         it "accepts and preserves a current-version (v11) payload's \

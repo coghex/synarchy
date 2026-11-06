@@ -89,9 +89,8 @@ newtype ConceptId = ConceptId { conceptIdText ∷ Text }
 --   any other lexical role) from an English string.
 --
 --   Serialized positionally by constructor tag through @Generic
---   Serialize@ (#1104) — APPEND-ONLY, like every other enum reachable
---   from a save (see the enum schema policy in @CLAUDE.md@ and
---   @tools\/enum_append_only_audit.py@).
+--   Serialize@ (#1104). Changes to its serialized shape require a
+--   carrier version advance under the current-save schema policy (#2919).
 data GramNumber = Singular | Plural
     deriving (Show, Eq, Generic, NFData, Serialize)
 
