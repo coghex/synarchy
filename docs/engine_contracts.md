@@ -484,9 +484,10 @@ moves afterwards can still require a branch update and a further run under
    another head and newer than the PR's latest recorded force push (the PR
    timeline, any commit: a rewind to an ancestor and a fast-forward back
    leaves a force push of the ancestor). Timestamps have one-second precision,
-   so order is proven strictly, with no slack: a run counts only if created
-   after that push, or in the same second for the commit the push left as the
-   head. Run, job and timeline history is always read to the
+   so order is proven strictly, with no slack: the run must be created no
+   earlier than that push and the outcome is taken only from a job that
+   started strictly after it (a missing or unusable start time is no
+   evidence, so unprovable ordering stays pending). Run, job and timeline history is always read to the
    end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
