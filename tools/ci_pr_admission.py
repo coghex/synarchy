@@ -364,12 +364,14 @@ _FORCE_PUSHES = (
 
 
 def force_push_epoch(cli: Runner, repo: str, pr_number: str
-                     ) -> tuple[bool, float, frozenset]:
-    """The pull request's latest FORCE PUSH: (readable, epoch, transitions).
+                     ) -> tuple[bool, float, frozenset, int]:
+    """The pull request's latest FORCE PUSH: (readable, epoch, pairs, count).
 
-    `epoch` is its time in epoch seconds (0.0: never force-pushed) and
-    `transitions` the (before, after) head pairs of the push or pushes made in
-    that second. Any head that predates a force push can only be the current
+    `epoch` is its time in epoch seconds (0.0: never force-pushed), `pairs`
+    the (before, after) head pairs of the push or pushes made in that second,
+    and `count` HOW MANY pushes were made in it (pairs can repeat: X -> H,
+    H -> X, X -> H is three pushes and two pairs, so the pairs alone cannot
+    say how many review-gate runs there should be). Any head that predates a force push can only be the current
     head again through a push made after it: the force push left some commit
     as the head, and getting back to the one in question (by a second force
     push, or by an ordinary fast-forward after rewinding to an ancestor) is a
@@ -386,7 +388,7 @@ def force_push_epoch(cli: Runner, repo: str, pr_number: str
                      "-f", f"owner={owner}", "-f", f"name={name}",
                      "-F", f"number={pr_number}")
     if rc != 0:
-        return False, 0.0, frozenset()
+        return False, 0.0, frozenset(), 0
     try:
         nodes = json.loads(out)["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
         pushes = [(_timestamp(node["createdAt"]),
@@ -394,12 +396,16 @@ def force_push_epoch(cli: Runner, repo: str, pr_number: str
                    (node["afterCommit"] or {}).get("oid"))
                   for node in nodes if isinstance(node, dict) and node.get("createdAt")]
     except (ValueError, KeyError, TypeError):
-        return False, 0.0, frozenset()
+        return False, 0.0, frozenset(), 0
     if not pushes:
-        return True, 0.0, frozenset()
+        return True, 0.0, frozenset(), 0
     epoch = max(stamp for stamp, _, _ in pushes)
-    return True, epoch, frozenset((before, after) for stamp, before, after in pushes
-                                  if stamp == epoch and before and after)
+    latest = [(before, after) for stamp, before, after in pushes if stamp == epoch]
+    known = [(before, after) for before, after in latest if before and after]
+    # A push whose heads cannot be read has a run nobody can recognise, so
+    # the expected number of recognisable runs is unreachable: pending.
+    return (True, epoch, frozenset(known),
+            len(latest) if len(known) == len(latest) else 1 << 30)
 
 
 def _run_prs(run: dict) -> set[str]:
@@ -450,7 +456,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # is not its evidence, whatever branch it ran on (forks share branch
     # names), and an unattributable run leaves the head unverified.
     scoped = [run for run in runs if pr_number in _run_prs(run)]
-    readable, epoch, transitions = force_push_epoch(cli, repo, pr_number)
+    readable, epoch, transitions, pushes_made = force_push_epoch(cli, repo, pr_number)
     if not readable:
         return False, None
     # A head can be revisited (H, then X, then a force push back to H). Only
@@ -468,11 +474,17 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # (before, after); a run created in that second counts only if its id is
     # at or after that run's, i.e. it was created by or after the push. If the
     # push's own run is not listed yet, same-second runs stay pending.
+    #
+    # The anchor must be the LATEST push's run, and the latest visible run
+    # naming a push pair is not necessarily it: pairs repeat (X -> H, H -> X,
+    # X -> H), and a later push's run may not be listed yet. Each push made in
+    # that second has its own run, so the anchor is trusted only once a run is
+    # visible for EVERY one of them; otherwise the head stays pending.
     anchor = None
     if epoch:
         pushes = []
         for run in scoped:
-            if _timestamp(run.get("created_at")) != epoch:
+            if _timestamp(run.get("created_at")) < epoch:
                 continue
             jobs = _jobs(cli, repo, run["id"])
             if jobs is None:
@@ -480,7 +492,8 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
             names = {job.get("name") for job in jobs}
             if any(transition_name(before, after) in names for before, after in transitions):
                 pushes.append(run["id"])
-        anchor = max(pushes, default=None)
+        if pushes and len(pushes) >= pushes_made:
+            anchor = max(pushes)
 
     def after_push(run: dict) -> bool:
         if not epoch:
@@ -1325,6 +1338,32 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("await: ... a current failure beats the old success",
           wait(Gate([old_xh, f_run, failed_ff], force_pushes=rewind), require=True),
           (True, Dismissal("completed", "failure")))
+    # Round 12: X -> H, H -> X, X -> H, three force pushes in one second and
+    # two distinct pairs. A run is expected for each push, so the anchor is
+    # trusted only once all three are listed.
+    three = [(102, HEAD, OLD), (102, OLD, HEAD), (102, HEAD, OLD)]  # (sec, after, before)
+    r_one = gate_run(150, ok_job, transition=(OLD, HEAD), created=102)
+    r_two = gate_run(160, job(14, "completed", "skipped"), head=OLD, transition=(HEAD, OLD), created=102)
+    r_three = gate_run(170, job(13, "completed", "failure"), transition=(OLD, HEAD), created=102)
+    check("await: three same-second pushes, only the first run listed: pending, not its stale success",
+          wait(Gate([r_one], force_pushes=three), require=True), (True, Dismissal("queued", "")))
+    check("await: ... with two of the three runs listed: still pending",
+          wait(Gate([r_one, r_two], force_pushes=three), require=True), (True, Dismissal("queued", "")))
+    check("await: ... with all three listed, the latest push's run decides",
+          wait(Gate([r_one, r_two, r_three], force_pushes=three), require=True),
+          (True, Dismissal("completed", "failure")))
+    check("await: ... and a push whose pair cannot be read keeps it pending",
+          wait(Gate([r_one, r_two, r_three],
+                    force_pushes=[three[0], three[1], (102, HEAD, OLD, False)]), require=True),
+          (True, Dismissal("queued", "")))
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: {label}, three same-second pushes with only the first run listed is not admitted",
+              admit(event, pull=pull_json(), gate=Gate([r_one], force_pushes=three)).code,
+              "dismissal-pending")
+        check(f"admit: {label}, ... and with all three listed the latest push's failure denies",
+              admit(event, pull=pull_json(), gate=Gate([r_one, r_two, r_three], force_pushes=three)).code,
+              "dismissal-failed")
     # Push to H itself: same-second runs for H BEFORE the push's own run are old.
     old_h_tie = gate_run(199, job(90, "completed", "success"), transition=(OLD, HEAD), created=102)
     check("await: a same-second run with a lower id than the push's own run is old, whatever its job id",
