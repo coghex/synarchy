@@ -175,6 +175,12 @@
 # see tools/ci-local.sh's -fforce-recomp for the local gate's mitigation.
 name: CI
 
+# A dispatched run's API record carries no pull-request association, so its
+# title does: admission uses it to cancel a dispatched run once the PR moves
+# to another head (tools/ci_pr_admission.py DISPATCH_TITLE). Other events keep
+# their usual titles.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('CI dispatch PR {0}', inputs.pr_number) || github.event.pull_request.title || github.event.head_commit.message }}
+
 on:
   push:
     branches: [master]

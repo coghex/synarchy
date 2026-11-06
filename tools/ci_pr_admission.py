@@ -79,6 +79,11 @@ MODE_NONE = "none"
 #: run's verdicts (#2927).
 MODE_DUP = "dup"
 
+#: ci.yml's `run-name` for a workflow_dispatch run (its API record carries no
+#: pull-request association, so the title is how a superseded dispatch run is
+#: attributed to its PR).
+DISPATCH_TITLE = "CI dispatch PR {0}"
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -333,6 +338,8 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
 
     ABSENCE is accepted only for the initial head, and that is proved
     positively: every review-gate run of this pull request is for `sha`.
+    A head that was visited before and pushed back to is judged only on runs
+    newer than the latest run for another head.
     A synchronize needs a different head to move to, so any head that was
     ever pushed over another leaves a run for the earlier head behind. A head
     with other heads in the PR's history and no dismissal outcome yet is
@@ -342,8 +349,17 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     runs = _runs(cli, repo, "review-gate.yml", branch=head_ref, event="pull_request")
     if runs is None:
         return False, None
-    scoped = [run for run in runs if not _run_prs(run) or pr_number in _run_prs(run)]
-    mine = [run for run in scoped if run.get("head_sha") == sha]
+    # Positive association only: a run that does not NAME this pull request
+    # is not its evidence, whatever branch it ran on (forks share branch
+    # names), and an unattributable run leaves the head unverified.
+    scoped = [run for run in runs if pr_number in _run_prs(run)]
+    # A head can be revisited (H, then X, then a force push back to H). Only
+    # runs NEWER than the latest run for any other head belong to the current
+    # visit; an older success for H says nothing about this transition.
+    latest_other = max((run["id"] for run in scoped if run.get("head_sha") != sha),
+                       default=0)
+    mine = [run for run in scoped
+            if run.get("head_sha") == sha and run["id"] > latest_other]
     unsettled = Dismissal("queued", "")
     if not mine:
         return True, unsettled
@@ -364,7 +380,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
                              Dismissal("completed", str(job.get("conclusion") or ""))))
     if outcomes:
         return True, max(outcomes, key=lambda pair: pair[0])[1]
-    if any(run.get("head_sha") != sha for run in scoped):
+    if latest_other:
         return True, unsettled
     return True, None
 
@@ -426,14 +442,18 @@ class Prior(NamedTuple):
     probes: str
 
 
-def find_prior_run(cli: Runner, repo: str, sha: str,
-                   my_run_id: str) -> tuple[str, Prior | None]:
-    """An earlier ci.yml run that already RAN CI for this exact head.
+def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str, pr_number: str,
+                   base_ref: str, base_sha: str) -> tuple[str, Prior | None]:
+    """An earlier ci.yml run that already RAN CI for this head AND this PR.
 
-    Answers ("ok" | "unreadable" | "busy", prior). Same-head runs are
-    serialized by the workflow's concurrency group, so a prior run is normally
-    finished by the time this one is admitted; one still running is reported
-    "busy" and is never admitted over.
+    Answers ("ok" | "unreadable", prior). A run counts only when its own
+    record names this pull request with this base ref and base sha: the same
+    commit can head two pull requests, and probe selection, the expensive
+    gates and the save-schema comparison all depend on the base, so another
+    PR's (or another base's) green result is not this one's. A run that is
+    not finished is ignored: same-head admitting runs are serialized by the
+    workflow's concurrency group, so one still running is an unrelated-label
+    run in its own group, which skips every job and can start no CI.
 
     A run RAN CI when its `static-audits` job concluded success or failure;
     an un-admitted run, a mirror, or a cancelled one did not. The newest run
@@ -442,25 +462,26 @@ def find_prior_run(cli: Runner, repo: str, sha: str,
     runs = _runs(cli, repo, "ci.yml", head_sha=sha)
     if runs is None:
         return "unreadable", None
-    best: Prior | None = None
     for run in sorted(runs, key=lambda item: item["id"], reverse=True):
-        if str(run["id"]) == str(my_run_id) \
+        if str(run["id"]) == str(my_run_id) or run.get("status") != "completed" \
                 or run.get("event") not in ("pull_request", "workflow_dispatch"):
             continue
-        if run.get("status") != "completed":
-            return "busy", None
+        if not any(isinstance(entry, dict)
+                   and str(entry.get("number")) == pr_number
+                   and (entry.get("base") or {}).get("ref") == base_ref
+                   and (entry.get("base") or {}).get("sha") == base_sha
+                   for entry in run.get("pull_requests") or []):
+            continue
         jobs = _jobs(cli, repo, run["id"])
         if jobs is None:
             return "unreadable", None
         by_name = {job.get("name"): job for job in jobs}
-        audits = by_name.get("static-audits") or {}
-        if audits.get("conclusion") not in ("success", "failure"):
+        if (by_name.get("static-audits") or {}).get("conclusion") not in ("success", "failure"):
             continue
-        best = Prior(run["id"],
-                     str((by_name.get("build-test") or {}).get("conclusion") or ""),
-                     str((by_name.get("behavior-probes") or {}).get("conclusion") or ""))
-        break
-    return "ok", best
+        return "ok", Prior(run["id"],
+                           str((by_name.get("build-test") or {}).get("conclusion") or ""),
+                           str((by_name.get("behavior-probes") or {}).get("conclusion") or ""))
+    return "ok", None
 
 
 def cancel_superseded(cli: Runner, repo: str, pr_number: str, head_ref: str,
@@ -469,20 +490,29 @@ def cancel_superseded(cli: Runner, repo: str, pr_number: str, head_ref: str,
 
     The workflow's concurrency group is per head (so same-head events never
     cancel each other's expensive work), which makes superseding a head an
-    explicit act: a newer head makes every older head's run obsolete. Best
-    effort, and never decisive for this run's own admission.
+    explicit act: a newer head makes every older head's run obsolete. That
+    covers pull_request runs (attributed by their own PR list) and dispatched
+    runs (whose record names no pull request, so ci.yml's `run-name` carries
+    it). Best effort, and never decisive for this run's own admission.
     """
     cancelled: list[int] = []
-    for status in ("in_progress", "queued"):
-        runs = _runs(cli, repo, "ci.yml", branch=head_ref, event="pull_request",
-                     status=status) or []
-        for run in runs:
-            if run.get("head_sha") == head_sha or pr_number not in _run_prs(run):
-                continue
-            rc, _, _ = cli("api", "-X", "POST",
-                           f"repos/{repo}/actions/runs/{run['id']}/cancel")
-            if rc == 0:
-                cancelled.append(run["id"])
+    for event in ("pull_request", "workflow_dispatch"):
+        for status in ("in_progress", "queued", "pending", "waiting"):
+            runs = _runs(cli, repo, "ci.yml", branch=head_ref, event=event,
+                         status=status) or []
+            for run in runs:
+                if run.get("head_sha") == head_sha:
+                    continue
+                if event == "pull_request":
+                    ours = pr_number in _run_prs(run)
+                else:
+                    ours = run.get("display_title") == DISPATCH_TITLE.format(pr_number)
+                if not ours:
+                    continue
+                rc, _, _ = cli("api", "-X", "POST",
+                               f"repos/{repo}/actions/runs/{run['id']}/cancel")
+                if rc == 0:
+                    cancelled.append(run["id"])
     return cancelled
 
 
@@ -519,15 +549,12 @@ def run_admit(event: Event, repo: str, *, run_id: str = "", cli: Runner = gh,
     if not admitted.eligible or event.name != "pull_request":
         # An explicit dispatch is a deliberate re-run and is never suppressed.
         return admitted
-    state, prior = find_prior_run(cli, repo, run_head, run_id)
+    state, prior = find_prior_run(cli, repo, run_head, run_id, event.pr_number,
+                                  pull.base_ref if pull else "", admitted.base_sha)
     if state == "unreadable":
         return no(MODE_PR, "prior-run-unreadable",
                   "could not read the earlier CI runs for this head, so a duplicate "
                   "cannot be ruled out", admitted.head_sha, admitted.base_sha)
-    if state == "busy":
-        return no(MODE_PR, "duplicate-in-flight",
-                  "another CI run for this head has not finished",
-                  admitted.head_sha, admitted.base_sha)
     if prior is None:
         return admitted
     return Admission(
@@ -768,12 +795,15 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
 
     def ci_run(run_id: int, *, status: str = "completed", event: str = "pull_request",
                head: str = HEAD, prs: tuple = ("7",), audits: str | None = "success",
-               build: str | None = "success", probes: str | None = "success") -> dict:
+               build: str | None = "success", probes: str | None = "success",
+               base_ref: str = "master", base_sha: str = BASE, title: str = "") -> dict:
         jobs = [job(run_id * 10 + 1, "completed", audits, "static-audits"),
                 job(run_id * 10 + 2, "completed", build, "build-test"),
                 job(run_id * 10 + 3, "completed", probes, "behavior-probes")]
         return {"id": run_id, "event": event, "status": status, "head_sha": head,
-                "jobs": jobs, "pull_requests": [{"number": int(n)} for n in prs]}
+                "jobs": jobs, "display_title": title,
+                "pull_requests": [{"number": int(n), "base": {"ref": base_ref, "sha": base_sha}}
+                                  for n in prs]}
 
     class Gate:
         """A `gh` over scripted review-gate and ci.yml runs.
@@ -810,9 +840,12 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                 runs = [{k: v for k, v in run.items() if k != "jobs"} for run in self.ci]
                 if "head_sha=" in text:
                     runs = [r for r in runs if f"head_sha={r['head_sha']}" in text]
-                for status in ("in_progress", "queued"):
-                    if f"status={status}" in text:
-                        runs = [r for r in runs if r["status"] == status]
+                wanted = re.search(r"status=(\w+)", text)
+                if wanted:
+                    runs = [r for r in runs if r["status"] == wanted.group(1)]
+                wanted = re.search(r"event=(\w+)", text)
+                if wanted:
+                    runs = [r for r in runs if r["event"] == wanted.group(1)]
                 return 0, json.dumps({"workflow_runs": runs}), ""
             match = re.search(r"/actions/runs/(\d+)/jobs", text)
             if match:
@@ -897,6 +930,28 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
           wait(Gate([gate_run(1, skip_job, prs=("7",)),
                      gate_run(2, job(11, "completed", "failure"), prs=("8",), head=OLD)]),
                require=False, pr="7"), (True, None))
+    # Round 4 of #2928: a head visited before and pushed back to (H, X, H).
+    visited = [gate_run(1, job(10, "completed", "success")),
+               gate_run(2, job(11, "completed", "success"), head=OLD)]
+    check("await: an older success for a revisited head is not this transition's evidence",
+          wait(Gate(visited), require=True), (True, Dismissal("queued", "")))
+    check("await: ... on a non-synchronize too",
+          wait(Gate(visited), require=False), (True, Dismissal("queued", "")))
+    back = gate_run(3, job(12, "in_progress", None))
+    check("await: ... and the new transition's pending dismissal is waited for",
+          wait(Gate(visited, visited + [back], visited + [gate_run(3, job(12, "completed", "success"))]),
+               require=True), (True, _OK))
+    check("await: ... a failed new dismissal beats the old success",
+          wait(Gate(visited + [gate_run(3, job(12, "completed", "failure"))]), require=True),
+          (True, Dismissal("completed", "failure")))
+    # Missing PR association is not matching association.
+    unattributed = [gate_run(1, job(10, "completed", "failure"), prs=("7",)),
+                    gate_run(2, job(11, "completed", "success"), prs=())]
+    check("await: an unattributed newer success does not stand in for PR 7's failure",
+          wait(Gate(unattributed), require=True), (True, Dismissal("completed", "failure")))
+    check("await: a run naming no pull request is no evidence at all",
+          wait(Gate([gate_run(1, job(11, "completed", "success"), prs=())]), require=False),
+          (True, Dismissal("queued", "")))
     check("await: an unreadable API is reported unreadable, not absent",
           wait(Gate(), require=True), (False, None))
     check("await: unreadable stays unreadable for a non-synchronize too",
@@ -978,15 +1033,37 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         check(f"admit: {label}, another PR's success does not stand in for this PR's failure",
               admit(event, pull=pull_json(), gate=Gate(shared)).code, "dismissal-failed")
 
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        stale = [gate_run(1, ok_job), gate_run(2, job(11, "completed", "success"), head=OLD)]
+        check(f"admit: {label} of a revisited head waits for the new transition",
+              admit(event, pull=pull_json(), gate=Gate(stale, stale + [gate_run(3, job(12, "in_progress", None))],
+                                                       stale + [gate_run(3, job(12, "completed", "success"))])).eligible,
+              True)
+        check(f"admit: {label} of a revisited head is not admitted on the old success",
+              admit(event, pull=pull_json(), gate=Gate(stale)).code, "dismissal-pending")
+        check(f"admit: {label}, an unattributed success does not admit over PR 7's failure",
+              admit(event, pull=pull_json(), gate=Gate(unattributed)).code, "dismissal-failed")
+
     # -- supersession and same-head duplicates (round 3 of #2928) ----------
-    live = [{**ci_run(41, status="in_progress", head=OLD), "pull_requests": [{"number": 7}]},
-            {**ci_run(42, status="queued", head=OLD), "pull_requests": [{"number": 7}]},
-            {**ci_run(43, status="in_progress", head=OLD), "pull_requests": [{"number": 9}]},
-            {**ci_run(44, status="in_progress", head=HEAD), "pull_requests": [{"number": 7}]}]
+    live = [ci_run(41, status="in_progress", head=OLD), ci_run(42, status="queued", head=OLD),
+            ci_run(43, status="in_progress", head=OLD, prs=("9",)),
+            ci_run(44, status="in_progress", head=HEAD),
+            ci_run(45, status="in_progress", event="workflow_dispatch", head=OLD, prs=(),
+                   title="CI dispatch PR 7"),
+            ci_run(46, status="in_progress", event="workflow_dispatch", head=OLD, prs=(),
+                   title="CI dispatch PR 9"),
+            ci_run(47, status="in_progress", event="workflow_dispatch", head=HEAD, prs=(),
+                   title="CI dispatch PR 7"),
+            ci_run(48, status="pending", head=OLD)]
     gate = done(ci=live)
     admit(sync, pull=pull_json(), gate=gate)
-    check("supersede: this PR's runs for OTHER heads are cancelled, nothing else",
-          sorted(gate.cancelled), [41, 42])
+    check("supersede: this PR's runs for OTHER heads, dispatched ones included, are cancelled",
+          sorted(gate.cancelled), [41, 42, 45, 48])
+    gate = done(ci=live)
+    admit(_event("workflow_dispatch", ""), pull=pull_json(), gate=gate)
+    check("supersede: a dispatch run supersedes older heads the same way",
+          sorted(gate.cancelled), [41, 42, 45, 48])
     gate = done(ci=live)
     admit(_event("pull_request", "synchronize", head=OTHER), pull=pull_json(), gate=gate)
     check("supersede: a run whose head is no longer the PR's cancels nothing",
@@ -1007,9 +1084,20 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                          ("this run itself", ci_run(900))):
         check(f"duplicate: {label} is not a prior CI run",
               admit(approve, pull=pull_json(), gate=done(ci=[prior])).eligible, True)
-    check("duplicate: a still-running earlier run is never admitted over",
-          admit(approve, pull=pull_json(), gate=done(ci=[ci_run(50, status="in_progress")])).code,
-          "duplicate-in-flight")
+    check("duplicate: an unfinished run (an unrelated-label run in its own group) is ignored",
+          admit(approve, pull=pull_json(), gate=done(ci=[ci_run(50, status="in_progress")])).eligible,
+          True)
+    check("duplicate: ... even beside a finished one it must still mirror",
+          admit(approve, pull=pull_json(),
+                gate=done(ci=[ci_run(49), ci_run(50, status="in_progress")])).mode, MODE_DUP)
+    for label, prior in (("another pull request's run for the same commit", ci_run(50, prs=("8",))),
+                         ("a run on another base sha", ci_run(50, base_sha="9" * 40)),
+                         ("a run on another base branch", ci_run(50, base_ref="release")),
+                         ("a run naming no pull request", ci_run(50, prs=())),
+                         ("a run with no base recorded",
+                          {**ci_run(50), "pull_requests": [{"number": 7}]})):
+        check(f"duplicate: {label} is not this PR's CI result",
+              admit(approve, pull=pull_json(), gate=done(ci=[prior])).eligible, True)
     check("duplicate: unreadable earlier runs fail closed",
           admit(approve, pull=pull_json(), gate=done(ci_unreadable=True)).code, "prior-run-unreadable")
     check("duplicate: the newest run that ran CI wins",
@@ -1118,6 +1206,16 @@ def _check_workflow(document: dict, decided: dict, check: Callable[[str, object,
     check("ci.yml: push stays master only", triggers.get("push"), {"branches": ["master"]})
     dispatch = ((triggers.get("workflow_dispatch") or {}).get("inputs") or {}).get("pr_number") or {}
     check("ci.yml: dispatch takes a required pr_number", dispatch.get("required"), True)
+
+    run_name = str(document.get("run-name", ""))
+    check("ci.yml: a dispatched run's title names its pull request (supersession reads it)",
+          _translate(run_name, {"github.event_name": "workflow_dispatch", "inputs.pr_number": "7"}),
+          DISPATCH_TITLE.format("7"))
+    check("ci.yml: other events keep their usual titles",
+          _translate(run_name, {"github.event_name": "pull_request",
+                                "github.event.pull_request.title": "Fix x"}), "Fix x")
+    check("ci.yml: admission may cancel superseded runs",
+          (jobs.get("admission") or {}).get("permissions", {}).get("actions"), "write")
 
     admission = jobs.get("admission") or {}
     check("ci.yml: admission's condition is the admitting predicate",
