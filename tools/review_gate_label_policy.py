@@ -43,16 +43,6 @@ with no dependence on a later label event. On every other event —
 `opened`, `reopened`, `labeled`, `unlabeled` — the payload's own label
 list still decides, which is what makes re-approval recover the gate.
 
-Base freshness (#2927)
-----------------------
-`--gate` also takes `--base-freshness`, from `tools/ci_pr_admission.py
-freshness`: whether the exact head contains the base branch's current tip.
-A clean replay onto a newer base keeps the label, so the approval rules above
-cannot see a head that is approved but behind; this makes the required check
-red for it until the branch update (a synchronize that keeps the label) makes
-it current. An omitted or unrecognised value is "not verified" and closed.
-KEEP/STRIP is decided and applied independently of it, unchanged.
-
 Fail-closed, and why the reason codes matter
 --------------------------------------------
 Every predicate here selects the RED/FAIL direction unless it can
@@ -82,8 +72,7 @@ Usage:
       --pr N --repo owner/name
   python3 tools/review_gate_label_policy.py --gate --event-action ACTION \
       --payload-label true|false --dismissal-result RESULT \
-      --dismissal-decision DECISION --dismissal-label true|false|unknown \
-      --base-freshness current|behind|unverified
+      --dismissal-decision DECISION --dismissal-label true|false|unknown
   python3 tools/review_gate_label_policy.py --self-test
   python3 tools/review_gate_label_policy.py --mutation-test
 
@@ -116,13 +105,6 @@ STRIP = "strip"
 #: be spellable as either `true` or `false`, both of which a gate rule is
 #: entitled to act on.
 UNKNOWN = "unknown"
-
-#: `gate_verdict`'s `base_freshness` values (#2927), the answers
-#: `tools/ci_pr_admission.py freshness` gives: the head contains the base
-#: branch's current tip, does not, or that could not be determined. Anything
-#: other than CURRENT keeps the gate closed.
-CURRENT = "current"
-BEHIND = "behind"
 
 #: The workflow this module is wired into. `--self-test` reads it, so the
 #: wiring is checked by the same command as the policy.
@@ -285,45 +267,8 @@ def gate_verdict(
     dismissal_result: str,
     dismissal_decision: str,
     dismissal_label: str,
-    base_freshness: str,
 ) -> GateVerdict:
     """Whether the required `review-approved` check may conclude success.
-
-    Two independent questions (#2927). `_approval_verdict` is the original
-    one: is `reviewed:approve` live for this head. Freshness is the second:
-    does the head contain the base branch's current tip. A clean replay of an
-    approved head onto a newer base KEEPS the label, so the label alone says
-    nothing about freshness; a head that is approved but behind stays red
-    until the branch update (itself a synchronize) makes it current again.
-    KEEP/STRIP is decided before and apart from this and is not touched.
-    """
-    approval = _approval_verdict(
-        event_action, payload_label, dismissal_result, dismissal_decision,
-        dismissal_label)
-    if not approval.open:
-        return approval
-    if base_freshness == BEHIND:
-        return GateVerdict(
-            False, "behind-base",
-            f"{APPROVAL_LABEL} is live, but this head does not contain the base "
-            f"branch's current tip — update the branch")
-    if base_freshness != CURRENT:
-        return GateVerdict(
-            False, "base-freshness-unverified",
-            f"{APPROVAL_LABEL} is live, but whether this head contains the base "
-            f"branch's current tip is {base_freshness or '(missing)'!r}, not "
-            f"{CURRENT!r}")
-    return approval
-
-
-def _approval_verdict(
-    event_action: str,
-    payload_label: str,
-    dismissal_result: str,
-    dismissal_decision: str,
-    dismissal_label: str,
-) -> GateVerdict:
-    """Whether `reviewed:approve` is live for this head (the original gate).
 
     Off the synchronize path the event payload's own label list decides,
     unchanged: that is what `opened`/`reopened` gate on initially and what
@@ -388,7 +333,6 @@ def _run_gate(args: argparse.Namespace) -> int:
         args.dismissal_result,
         args.dismissal_decision,
         args.dismissal_label,
-        args.base_freshness,
     )
     stream = sys.stdout if verdict.open else sys.stderr
     print(f"[{verdict.reason}] {verdict.detail}", file=stream)
@@ -570,10 +514,6 @@ def _wiring_failures(path: Path) -> list[str]:
     if "review_gate_label_policy.py" not in gate_text or "--gate" not in gate_text:
         failures.append(
             "`review-approved` no longer runs review_gate_label_policy.py --gate")
-    if "--base-freshness" not in gate_text or "ci_pr_admission.py" not in gate_text:
-        failures.append(
-            "`review-approved` no longer computes and passes --base-freshness "
-            "(tools/ci_pr_admission.py freshness)")
     for expression in (
         "needs.dismiss-stale-approval.result",
         "needs.dismiss-stale-approval.outputs.decision",
@@ -701,9 +641,8 @@ def _self_test(workflow: Path) -> int:  # noqa: C901 - a flat list of cases read
         result: str = "success",
         decision: str = KEEP,
         verified: str = "true",
-        freshness: str = CURRENT,
     ) -> None:
-        verdict = gate_verdict(action, payload, result, decision, verified, freshness)
+        verdict = gate_verdict(action, payload, result, decision, verified)
         check(f"{label}: open", verdict.open, expect_open)
         check(f"{label}: reason", verdict.reason, expect_reason)
 
@@ -747,35 +686,6 @@ def _self_test(workflow: Path) -> int:  # noqa: C901 - a flat list of cases read
               expect_reason="payload-label-absent", action="labeled",
               payload="yes", result="skipped", decision="", verified=UNKNOWN)
 
-    # Freshness (#2927): approval is necessary, never sufficient.
-    for action in ("synchronize", "labeled", "opened"):
-        extra = ({} if action == "synchronize"
-                 else {"result": "skipped", "decision": "", "verified": UNKNOWN})
-        gate_case(f"gate {action} approved but behind its base", expect_open=False,
-                  expect_reason="behind-base", action=action, freshness=BEHIND, **extra)
-        gate_case(f"gate {action} approved, freshness unverified", expect_open=False,
-                  expect_reason="base-freshness-unverified", action=action,
-                  freshness="unverified", **extra)
-        gate_case(f"gate {action} approved, freshness missing", expect_open=False,
-                  expect_reason="base-freshness-unverified", action=action,
-                  freshness="", **extra)
-        gate_case(f"gate {action} approved and current", expect_open=True,
-                  expect_reason=("keep-verified" if action == "synchronize"
-                                 else "payload-label_present"),
-                  action=action, freshness=CURRENT, **extra)
-    gate_case("gate unapproved and behind reports the approval first", expect_open=False,
-              expect_reason="payload-label-absent", action="labeled", payload="false",
-              result="skipped", decision="", verified=UNKNOWN, freshness=BEHIND)
-    gate_case("gate synchronize strip and behind reports the strip first", expect_open=False,
-              expect_reason="decision-not-keep", decision=STRIP, freshness=BEHIND)
-    # The check recovers once the branch update makes the head current: the
-    # same approved head, first behind, then updated (a label-keeping
-    # synchronize).
-    behind = gate_verdict("labeled", "true", "skipped", "", UNKNOWN, BEHIND)
-    updated = gate_verdict(SYNCHRONIZE, "true", "success", KEEP, "true", CURRENT)
-    check("freshness: behind head is red", behind.open, False)
-    check("freshness: the check recovers after an eligible branch update", updated.open, True)
-
     print("-- the dismissal outcome feeds the gate end to end")
     for label, decision, cli_kwargs, expect_open in (
         ("no-op branch update", KEEP, {"labels_before": (APPROVAL_LABEL,)}, True),
@@ -787,7 +697,7 @@ def _self_test(workflow: Path) -> int:  # noqa: C901 - a flat list of cases read
             ScriptedCli(**cli_kwargs), "coghex/synarchy", "1142", decision)  # type: ignore[arg-type]
         result = "success" if outcome.ok else "failure"
         verdict = gate_verdict(
-            SYNCHRONIZE, "true", result, outcome.decision, outcome.label, CURRENT)
+            SYNCHRONIZE, "true", result, outcome.decision, outcome.label)
         check(f"end to end/{label}", verdict.open, expect_open)
 
     print("-- the workflow wiring the policy is useless without")
@@ -869,12 +779,6 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
     ("close the gate on a labelled non-synchronize event",
      lambda t: _replace_once(t, '        if payload_label.strip().lower() == "true":',
                              "        if False:")),
-    ("open the gate on an approved head that is behind its base (#2927)",
-     lambda t: _replace_once(t, "    if base_freshness == BEHIND:",
-                             "    if False:")),
-    ("open the gate when base freshness could not be verified (#2927)",
-     lambda t: _replace_once(t, "    if base_freshness != CURRENT:",
-                             "    if False:")),
     ("report the strip outcome without naming the pull request",
      lambda t: _replace_once(t, '            f"PR #{pr}: the reviewed patch changed, but removing {label} "',
                              '            f"the reviewed patch changed, but removing {label} "')),
@@ -950,8 +854,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dismissal-result", default="")
     parser.add_argument("--dismissal-decision", default="")
     parser.add_argument("--dismissal-label", default="")
-    parser.add_argument("--base-freshness", default="",
-                        help="--gate: current | behind | unverified (default: unverified)")
     args = parser.parse_args(argv)
 
     if args.self_test:

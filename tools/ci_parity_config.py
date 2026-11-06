@@ -107,12 +107,10 @@ AGGREGATE_NEEDS = frozenset({ADMISSION_JOB, AUDITED_JOB, STATIC_AUDIT_JOB, PROBE
 PROBE_GATE_NEEDS = frozenset({ADMISSION_JOB, PROBE_JOB})
 PROBE_JOB_IF = "needs.admission.outputs.mode == 'pr'"
 
-#: A required context that always runs must start with this, and carry the
-#: admitting-event predicate after it (ci_pr_admission.py pins the predicate
-#: itself): `always()` so a skipped or failed dependency cannot skip the
-#: verdict, then the event filter that keeps a run that admits nothing from
-#: reporting under the required name.
-REQUIRED_CONTEXT_IF_PREFIX = "${{ always() && ("
+#: The two required contexts that always run (`build-test`, `behavior-probes`)
+#: carry exactly this condition, so a skipped or failed dependency cannot skip
+#: the verdict (a skipped required job reads as a pass).
+REQUIRED_CONTEXT_IF = "always()"
 PROBE_REQUIRED_COMMANDS = frozenset({
     "python3 tools/ci_probes.py --stdin",
     ("python3 tools/run_probes.py --only "

@@ -497,7 +497,7 @@ jobs:
           --only "${{ steps.probe-selection.outputs.only }}"
           --exact --retries 1 --jobs 2
   behavior-probes:
-    if: ${{ always() && (github.event_name != 'pull_request') }}
+    if: always()
     needs: [admission, behavior-probe-worker]
     runs-on: ubuntu-latest
     steps:
@@ -511,7 +511,7 @@ jobs:
             test "$WORKER_RESULT" = skipped
           fi
   build-test:
-    if: ${{ always() && (github.event_name != 'pull_request') }}
+    if: always()
     needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]
     runs-on: ubuntu-latest
     steps:
@@ -520,7 +520,6 @@ jobs:
           ADMITTED: ${{ needs.admission.outputs.eligible }}
           ADMISSION_MODE: ${{ needs.admission.outputs.mode }}
           ADMISSION_REASON: ${{ needs.admission.outputs.reason }}
-          MIRROR_RESULT: ${{ needs.admission.outputs.mirror_build_test }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probe-worker.result }}
@@ -629,9 +628,9 @@ def _parallel_gate_wiring_self_test() -> list[str]:
          "worker-result env must be exactly"),
         ("drop always from the aggregate",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  build-test:\n    if: ${{ always() && (github.event_name != 'pull_request') }}\n",
+             "  build-test:\n    if: always()\n",
              "  build-test:\n"),
-         "`build-test` must use `if: ${{ always() && (...`"),
+         "`build-test` must use `if: always()`"),
         ("aggregate that no longer fails a head that was not admitted",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
              'if [ "$ADMITTED" != true ]; then\n            exit 1\n          fi\n'
@@ -646,9 +645,9 @@ def _parallel_gate_wiring_self_test() -> list[str]:
         # always-running gate, because a skipped worker reads as a pass.
         ("probe gate that is not always-running",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  behavior-probes:\n    if: ${{ always() && (github.event_name != 'pull_request') }}\n",
+             "  behavior-probes:\n    if: always()\n",
              "  behavior-probes:\n"),
-         "`behavior-probes` must use `if: ${{ always() && (...`"),
+         "`behavior-probes` must use `if: always()`"),
         ("probe gate that does not wait for the worker",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
              "    needs: [admission, behavior-probe-worker]\n",
@@ -1330,7 +1329,7 @@ def _current_save_policy_wiring_self_test() -> list[str]:
     ))
     workflow = "\n".join((
         "github.event.before",
-        "github.event.pull_request.base.sha",
+        "CI_PR_BASE_SHA",
         *local.splitlines(),
     ))
     failures: list[str] = []

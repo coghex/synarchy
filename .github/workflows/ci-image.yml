@@ -28,6 +28,21 @@
 # different bytes to it without this lock.
 on:
   workflow_call:
+    # The caller states what ci.yml's admission resolved (#2927), because a
+    # dispatched run has no pull_request event to read it from: whether the
+    # head is a fork's (it can never publish) and the base SHA the fork
+    # fallback resolves against. `fork` is required so a caller cannot forget
+    # it and fall through to publishing.
+    inputs:
+      fork:
+        description: True when the admitted head belongs to a fork pull request
+        required: true
+        type: boolean
+      base_sha:
+        description: The admitted pull request's base commit (empty on a push)
+        required: false
+        type: string
+        default: ''
     outputs:
       image:
         description: Immutable CI image reference for this revision.
@@ -106,12 +121,19 @@ jobs:
 
       # A fork PR's GITHUB_TOKEN is forced read-only regardless of the
       # permissions: block above (a GitHub security restriction), so it
-      # can pull/inspect but not push. Only a same-repo pull_request or a
+      # can pull/inspect but not push. Only a same-repo pull request or a
       # push (always same-repo, by definition) can publish a candidate.
+      # A fork PR now arrives as a workflow_dispatch of a base-repository
+      # branch (#2927), whose token CAN write, so the policy no longer rests
+      # on the token: ci.yml's admission reports the head's repository and
+      # this step refuses to publish for a fork, or for any value it cannot
+      # read as exactly `false`.
       - name: Determine publish capability
         id: fork
+        env:
+          INPUT_FORK: ${{ inputs.fork }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+          if [ "$INPUT_FORK" != "false" ]; then
             echo "can_publish=false" >> "$GITHUB_OUTPUT"
           else
             echo "can_publish=true" >> "$GITHUB_OUTPUT"
@@ -204,7 +226,11 @@ jobs:
         id: fallback
         if: steps.exists.outputs.found != 'true' && steps.fork.outputs.can_publish != 'true'
         run: |
-          BASE='${{ github.event.pull_request.base.sha }}'
+          BASE='${{ inputs.base_sha }}'
+          if [ -z "$BASE" ]; then
+            echo "::error::no admitted base SHA was supplied for the fork fallback"
+            exit 1
+          fi
           git fetch --no-tags origin "$BASE"
           FALLBACK_TAG="ci-$( (git show "$BASE:.github/workflows/ci-image.yml"; git show "$BASE:.github/ci/Dockerfile") | sha256sum | cut -c1-16)"
           echo "tag=$FALLBACK_TAG" >> "$GITHUB_OUTPUT"

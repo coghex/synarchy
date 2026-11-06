@@ -27,8 +27,12 @@ def audit_current_save_policy_wiring(workflow_text: str,
                 problems.append(f"{label} still reaches retired save policy {fragment!r}")
     if "github.event.before" not in workflow_text:
         problems.append("workflow does not use the full push before/after range")
-    if "github.event.pull_request.base.sha" not in workflow_text:
-        problems.append("workflow does not compare pull requests with their base SHA")
+    # Pull-request CI is a dispatch (#2927): the base is the one admission
+    # resolved and published, never a pull_request event field.
+    if "CI_PR_BASE_SHA" not in workflow_text:
+        problems.append("workflow does not compare pull requests with their admitted base SHA")
+    if "github.event.pull_request" in workflow_text:
+        problems.append("workflow still reads a pull_request event field")
     if "origin/master" not in local_text or "--base-ref" not in local_text:
         problems.append("local gate does not compare against origin/master")
     return problems

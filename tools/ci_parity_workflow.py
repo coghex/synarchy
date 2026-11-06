@@ -88,7 +88,7 @@ from ci_parity_config import (
     PROBE_REQUIRED_COMMANDS,
     PROJECT_CACHE_IF,
     PROJECT_CACHE_JOB,
-    REQUIRED_CONTEXT_IF_PREFIX,
+    REQUIRED_CONTEXT_IF,
     STATIC_AUDIT_JOB,
     WORKER_NEEDS,
     UNIT_ASSET_CI_IF,
@@ -361,13 +361,11 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must need exactly "
             f"{sorted(AGGREGATE_NEEDS)}, got {sorted(needs)}.")
-    if not normalise_expression(str(aggregate.get("if") or "")).startswith(
-            REQUIRED_CONTEXT_IF_PREFIX):
+    if normalise_expression(str(aggregate.get("if") or "")) != REQUIRED_CONTEXT_IF:
         problems.append(
             f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must use "
-            f"`if: {REQUIRED_CONTEXT_IF_PREFIX}...` so a failed or skipped "
-            "dependency cannot skip the stable verdict, and only a run that "
-            "can admit something reports under the required name (#2927).")
+            f"`if: {REQUIRED_CONTEXT_IF}` so a failed or skipped "
+            "dependency cannot skip the stable verdict.")
 
     aggregate_steps = aggregate.get("steps")
     steps = ([step for step in aggregate_steps if isinstance(step, dict)]
@@ -385,7 +383,6 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
             "ADMITTED": "${{ needs.admission.outputs.eligible }}",
             "ADMISSION_MODE": "${{ needs.admission.outputs.mode }}",
             "ADMISSION_REASON": "${{ needs.admission.outputs.reason }}",
-            "MIRROR_RESULT": "${{ needs.admission.outputs.mirror_build_test }}",
             "TESTS_RESULT": "${{ needs.test-and-audits.result }}",
             "AUDITS_RESULT": "${{ needs.static-audits.result }}",
             "PROBES_RESULT": "${{ needs.behavior-probe-worker.result }}",
@@ -473,11 +470,10 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{PROBE_GATE_JOB}` must need exactly "
             f"{sorted(PROBE_GATE_NEEDS)}, got {sorted(_needs_set(gate))}.")
-    if not normalise_expression(str(gate.get("if") or "")).startswith(
-            REQUIRED_CONTEXT_IF_PREFIX):
+    if normalise_expression(str(gate.get("if") or "")) != REQUIRED_CONTEXT_IF:
         problems.append(
             f"{WORKFLOW_PATH}: `{PROBE_GATE_JOB}` must use "
-            f"`if: {REQUIRED_CONTEXT_IF_PREFIX}...`: it has to run, and fail, "
+            f"`if: {REQUIRED_CONTEXT_IF}`: it has to run, and fail, "
             "when the worker was skipped.")
     gate_text = "\n".join(str(step.get("run") or "")
                           for step in (gate.get("steps") or [])
