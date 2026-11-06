@@ -467,8 +467,8 @@ pipeline) and on `pull_request` (default types). A pull-request event starts a
 run, but only the cheap `admission` job does anything for a head that is not
 admitted: the expensive jobs (`resolve-image`, `test-and-audits`,
 `headless-lanes`, `static-audits`, `behavior-probe-worker`) are gated on it, so
-a push before approval starts no expensive job and the required `build-test`
-and `behavior-probes` checks go red naming why. This supersedes the earlier
+a push, approved or not, starts no expensive job and the required `build-test`
+and `behavior-probes` checks go red naming why until the manager's re-run. This supersedes the earlier
 event-driven design (CI started by `labeled` and `synchronize`, admission worked
 out from run listings and a reuse of earlier results); none of that exists.
 
@@ -529,9 +529,16 @@ closed on any evidence it cannot read:
    `tools/review_gate_decision.py` decides (A to `sha`) only moved ancestry,
    the clean-replay rule `review-gate.yml` already uses to keep the label. A
    `reviewed:approve` label is never evidence: it can linger on a head that
-   was changed after approval while the dismissal is pending or failed.
+   was changed after approval while the dismissal is pending or failed;
+6. the run is a **re-run** (`github.run_attempt` is at least 2). A
+   `pull_request` event starts attempt 1 by itself on every push, including the
+   clean update of an already approved head ("Update branch"), and that must
+   not start CI: the check passes for such a head, so only the attempt number
+   tells the manager's explicit re-run from the automatic start. Attempt 1
+   never admits, and its reason says it is waiting for the re-run. An
+   unreadable attempt fails closed.
 
-A master push is always admitted. `review-gate.yml` and its stale-approval
+A master push is always admitted (it has no re-run rule). `review-gate.yml` and its stale-approval
 semantics are unchanged.
 
 **A refused run never counts as passing.** GitHub reports a skipped required
@@ -566,7 +573,8 @@ under `behavior-probe-worker` (historical runs keep `behavior-probes`).
 
 **Gates.** `python3 tools/ci_pr_admission.py --self-test` covers the decision
 (a stale SHA, an unapproved head, an approved head behind its base, an
-approved and current head, unreadable evidence, a master push, a run whose tree
+approved and current head, the automatic first attempt versus a re-run
+(exact-head and carried approvals), unreadable evidence, a master push, a run whose tree
 is not the head's, a lingering label, re-approval, an approval-preserving base
 update, a content change after approval, untrusted and malformed markers,
 pagination, fork identity), the live git checks on throwaway repositories
