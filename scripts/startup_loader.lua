@@ -40,10 +40,7 @@ end
 
 -- The stable identifier each YAML registry family reports under, keyed
 -- by its DIRECTORY rather than passed as a fourth argument to
--- addYamlDir/addYamlDirCanonical/addYamlTree. Those three call shapes
--- derives production's registry bootstrap from `queueNormalProfile`'s
--- source; keeping them at exactly three arguments is what keeps that
--- check working.
+-- addYamlDir/addYamlDirCanonical/addYamlTree.
 --
 -- A directory absent from this table still aggregates — under its own
 -- path — so a family added later reports something honest rather than
@@ -230,8 +227,9 @@ end
 -- has always had.
 --
 -- Deliberately spelled as an `addYaml...(dir, label, loaderFn)` call
--- with exactly three arguments, like its two siblings, because
--- source to derive production's registry bootstrap.
+-- with exactly three arguments, like its two siblings; the label is
+-- keyed by directory in `yamlFamilies` rather than passed as a fourth
+-- argument.
 local function addYamlDirCanonical(dir, label, loaderFn)
     local files = engine.listFiles(dir, ".yaml")
     local paths = {}

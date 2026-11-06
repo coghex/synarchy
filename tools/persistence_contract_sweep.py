@@ -30,8 +30,9 @@ final behavior". Instead it actually RUNS them (via the existing
 ``tools/run_probes.py --only ... --exact`` aggregate runner -- round-1
 review: a mere "does this file exist" check proves nothing and was
 replaced) and propagates any failure, so requirement 11 (the assembled
-failure contract) and requirement 13 (every maintained migration
-baseline) genuinely stay gated, not merely documented:
+failure contract) stays gated, not merely documented. The compiled
+current-save schema policy is enforced separately by the dedicated CI
+guard:
 
   tools/chop_probe.py, tools/till_probe.py, tools/crop_probe.py,
   tools/plant_probe.py, tools/construction_probe.py (designations),

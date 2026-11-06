@@ -10,11 +10,10 @@
 --   evolving as an ordinary in-memory load bridge (its own haddock:
 --   "bump 'currentSaveVersion' whenever this record's layout... changes").
 --   'SaveDataV90'/'WorldPageSaveV90' below are an independent, hand-frozen
---   copy of exactly what those types looked like at the moment #759
---   shipped (save-version 90) — verified byte-for-byte against the
---   tracked fixture recovered from git history (commit 988c2727,
---   @trackedEnvelopeFixtureHex@ in the pre-#760 @Test.Headless.World.Save.Envelope@
---   gate) in "Test.Headless.World.Save.Compat".
+--   copy of the save-version 90 runtime migration shape. The focused
+--   synthetic-envelope test lives in
+--   "Test.Headless.World.Save.Components.Compatibility"; pre-release
+--   byte-fixture verification is no longer maintained.
 --
 --   Field-for-field, every non-global-allocator field composes EXISTING
 --   frozen leaf/component DTOs from "World.Save.Component.Page" and the
@@ -174,9 +173,7 @@ data UnitSnapshotV90 = UnitSnapshotV90
     } deriving (Show, Generic, Serialize)
 
 -- | Frozen mirror of the v90 'World.Save.Types.WorldPageSave'. Field
---   order is the wire contract — it matches the live type's declaration
---   order exactly (verified against the tracked fixture in
---   "Test.Headless.World.Save.Compat").
+--   order is the runtime migration wire contract.
 data WorldPageSaveV90 = WorldPageSaveV90
     { wp90PageId       ∷ !WorldPageId
     , wp90GenParams    ∷ !WorldGenParamsDTOv1

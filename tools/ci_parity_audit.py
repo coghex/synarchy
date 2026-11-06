@@ -8,9 +8,9 @@ had no counterpart in `tools/ci-local.sh` at all, so a broken
 path-to-probe or path-to-expensive-gate mapping surfaced only after a
 push, as a PR mis-selecting its own gates. Every other cross-file
 contract in this repository is mechanically enforced (persistence
-inventory, EngineEnv capability inventory, findings-report status, enum
-append-only, cabal module inventory); this one — the gate that decides
-whether a change is safe to push — was not.
+inventory, EngineEnv capability inventory, findings-report status,
+current-save schema policy, cabal module inventory); this one — the gate
+that decides whether a change is safe to push — was not.
 
 What this compares
 ------------------

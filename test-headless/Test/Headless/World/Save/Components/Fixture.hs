@@ -231,9 +231,9 @@ minimalFrozenSaveMetadataV90 = SaveMetadataV90
 -- | A minimal, otherwise-valid frozen v90 'SaveDataV90' (issue #766,
 --   save-overhaul C4) — the exact shape a real #759-era @"session"@
 --   component payload took. Used to prove the ENVELOPE-level dispatch
---   recognizes and migrates a hand-built B1 envelope; the historical
---   byte-for-byte fixture (recovered from git history) lives in
---   "Test.Headless.World.Save.Compat.B1Fixture".
+--   recognizes and migrates a synthetic B1 envelope. This focused value
+--   supplies component tests; the retired pre-release byte-fixture corpus
+--   is no longer part of the active suite.
 minimalSaveDataV90 ∷ SaveDataV90
 minimalSaveDataV90 = SaveDataV90
     { sd90Metadata     = minimalFrozenSaveMetadataV90

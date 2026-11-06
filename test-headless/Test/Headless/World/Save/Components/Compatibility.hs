@@ -391,8 +391,8 @@ spec = do
     --   ('decodeSaveEnvelopeMetadata', what 'World.Save.Serialize.listSaves'
     --   calls) — a B1-era save is listable and loadable again, reporting
     --   its true, then-authoritative metadata unchanged.
-    --   See "Test.Headless.World.Save.Compat" for the frozen fixture
-    --   coverage (a real B1 envelope recovered from git history).
+    --   This focused test constructs the B1-shaped envelope directly;
+    --   pre-release historical byte fixtures are no longer maintained.
     describe "B1 -> current migration (issue #766, save-overhaul C4)" $ do
         it "a hand-built B1-shaped envelope (metadata + a required \
            \'session' component) migrates and lists under the current \
