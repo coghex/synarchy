@@ -475,10 +475,43 @@ moves afterwards can still require a branch update and a further run under
 1. the pull request is open and its live head is the head the run is for;
 2. it carries a live `reviewed:approve` label, read from GitHub after the
    stale-approval outcome is known, never taken from the event payload;
-3. on a `synchronize`, `review-gate.yml`'s `dismiss-stale-approval` run for
-   that exact head has completed and succeeded (the run is waited for, up to
-   15 minutes). A successful strip is green too, which is why the live label
-   is also required;
+3. the stale-approval evidence for this pull request's head is settled and
+   good. It is read from `review-gate.yml`'s own runs and jobs, scoped to the
+   pull request (its head branch and each run's own PR list, which a run
+   must positively name, so a commit shared by two PRs keeps their outcomes
+   apart), and waited for up to 15 minutes. A head that was visited before
+   and pushed back to is judged only on runs newer than the latest run for
+   another head and newer than the PR's latest recorded force push (the PR
+   timeline, any commit: a rewind to an ancestor and a fast-forward back
+   leaves a force push of the ancestor). Timestamps have one-second precision,
+   so order is proven strictly, with no slack: the run must be created
+   strictly after that push, or in the same second and ordered after it by
+   run id. A force push is a synchronize like any other, so it has its own
+   review-gate run: `review-gate.yml` records each synchronize's (before,
+   after) heads in the name of a `dismissal-transition` job, and the PR
+   timeline (GraphQL) names the heads the push moved between, which finds the
+   push's own run. Pairs can repeat (X to H, H to X, X to H), so the PR's
+   pushes in that second are counted and the anchor is trusted only once a run
+   is visible for every one of them. Once a PR has been force-pushed, every outcome
+   is tied to the transition through that anchor, whatever second its run
+   was created in: it counts only if its run id (allocated in creation order)
+   is at or after the anchor's, and without a trusted anchor nothing counts.
+   Known cost: a PR whose latest force push predates the
+   `dismissal-transition` job (or whose push run has aged out of run
+   retention) stays pending; one more force push (for example `git commit
+   --amend --no-edit` then `git push --force-with-lease`) makes a new anchor. A rewind plus fast-forward in
+   one second is therefore accepted, an older run with the same marker is
+   not, and when the push's own run is not listed yet, or a stamp is missing
+   or unusable, the head stays pending. Run, job and timeline history is always read to the
+   end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
+   completed and succeeded. The job's skipped records (on `opened`/`labeled`
+   events) are not outcomes. Absence of any outcome is accepted only for the
+   PR's initial head, proved positively: every review-gate run of the PR is
+   for that head (a synchronize needs a different head to move to). A head
+   with other heads in the PR's history and no outcome yet, a run whose jobs
+   are not listed, or no registered run at all is pending, and an unreadable
+   API denies admission. A successful strip is green too, which is why the
+   live label is read after the outcome;
 4. the exact head SHA contains the base branch's current tip after a fresh
    fetch. The default `pull_request` checkout is a synthetic merge that
    contains the base even when the branch is behind, so ancestry is never
@@ -495,9 +528,21 @@ and only an event that can create an admissible state does anything: a
 `labeled` event for `reviewed:approve`, or a `synchronize` whose label
 survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
 concurrency group of its own, never cancels, and skips every job. Admitting
-events of one pull request share one group with `cancel-in-progress`, so a
-newer head cancels a superseded run, and two admitting events for the same
-head restart rather than duplicate.
+events of one head share one concurrency group (per head, no cancel), so they
+run one after another and never cancel each other's work. When an earlier
+run was admitted for that exact identity (its `ci-identity` job ran, named
+for this PR, base ref, base sha and head, and `build-test` concluded, so an
+image-stage failure is a verdict too;
+automatic and dispatched runs alike; the run that most recently finished
+executing wins (a rerun keeps its id), so a successful manual recovery
+supersedes the failure it recovered; unfinished runs, which can only
+be unrelated-label runs, are ignored), the later
+run's admission is mode `dup`: nothing runs, and `build-test` and
+`behavior-probes` mirror the earlier run's verdicts, so a duplicate event
+neither repeats the expensive work nor turns a green result red. An explicit
+dispatch is never suppressed. Superseding a head is explicit: admission
+cancels the pull request's live runs for any other head that are older than
+itself, dispatched runs included (their record names no PR, so `ci.yml`'s `run-name` does).
 
 **A gated-out run never counts as passing.** GitHub reports a skipped required
 job as success, and the newest check run of a name wins. So the required
