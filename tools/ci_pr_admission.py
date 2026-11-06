@@ -429,7 +429,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # it is visible even while the runs it triggered are not yet listed.
     mine = [run for run in scoped
             if run.get("head_sha") == sha and run["id"] > latest_other
-            and (not epoch or _timestamp(run.get("created_at")) >= epoch)]
+            and (not epoch or _timestamp(run.get("created_at")) > epoch)]
     unsettled = Dismissal("queued", "")
     if not mine:
         return True, unsettled
@@ -447,12 +447,15 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
             if job.get("conclusion") == "skipped":
                 continue
             # Timestamps have one-second precision, so a run created in the
-            # same second as the force push cannot be ordered against it by
-            # its own stamp. The OUTCOME is therefore taken only from a job
-            # that started STRICTLY after the push (a job starts after its
-            # run is created and a runner is allocated, so the push's own
-            # dismissal does), and a job with no usable start time is no
-            # evidence: ordering that cannot be proven is pending, not good.
+            # SAME second as the force push cannot be ordered against it, and
+            # a later job start does not associate it with the transition
+            # either (an older run's queued job can start after the push).
+            # Only runs created strictly after the push count (above), and a
+            # job must also have started strictly after it; a missing or
+            # unusable stamp is no evidence. Ordering that cannot be proven is
+            # pending, never good. Known cost: the head a force push itself
+            # creates stays pending if its own dismissal run was created in
+            # the same second as the push, until the next push.
             if epoch and _timestamp(job.get("started_at")) <= epoch:
                 continue
             outcomes.append((int(job.get("id", 0)),
@@ -1225,8 +1228,14 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
               wait(Gate([gate_run(102, {**ok_job, "started_at": started})],
                         force_pushes=[(102, OLD)]), require=False),
               (True, Dismissal("queued", "")))
-    check("await: a same-second run whose job started after the push is the push's own run",
-          wait(Gate([gate_run(102, ok_job)], force_pushes=[(102, OLD)]), require=True), (True, _OK))
+    check("await: a same-second run is never evidence, whatever its job's start (ordering unprovable)",
+          wait(Gate([gate_run(102, ok_job)], force_pushes=[(102, OLD)]), require=True),
+          (True, Dismissal("queued", "")))
+    check("await: ... including an old run whose queued job started after the push",
+          wait(Gate([gate_run(102, {**ok_job, "started_at": stamp(110)})], force_pushes=[(102, HEAD)]),
+               require=False), (True, Dismissal("queued", "")))
+    check("await: a run created one second after the push, with its job after, is evidence",
+          wait(Gate([gate_run(103, ok_job)], force_pushes=[(102, OLD)]), require=True), (True, _OK))
     check("await: the old H run and the push back in the same second, new run unregistered, stay pending",
           wait(Gate([gate_run(102, {**ok_job, "started_at": stamp(102)})],
                     force_pushes=[(102, HEAD)]), require=False), (True, Dismissal("queued", "")))
@@ -1246,8 +1255,11 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         tie = Gate([gate_run(102, {**ok_job, "started_at": stamp(102)})], force_pushes=[(102, HEAD)])
         check(f"admit: {label}, a same-second old run beside a push back to the head is not admitted",
               admit(event, pull=pull_json(), gate=tie).code, "dismissal-pending")
-        genuine = Gate([gate_run(102, ok_job)], force_pushes=[(102, HEAD)])
-        check(f"admit: {label}, the push's own same-second run (job started later) is admitted",
+        later = Gate([gate_run(102, {**ok_job, "started_at": stamp(110)})], force_pushes=[(102, HEAD)])
+        check(f"admit: {label}, a same-second old run whose queued job starts after the push is not admitted",
+              admit(event, pull=pull_json(), gate=later).code, "dismissal-pending")
+        genuine = Gate([gate_run(103, ok_job)], force_pushes=[(102, HEAD)])
+        check(f"admit: {label}, the push's own run one second later is admitted",
               admit(event, pull=pull_json(), gate=genuine).eligible, True)
     check("await: a force push older than the head's own runs does not matter",
           wait(Gate([gate_run(150, ok_job)], force_pushes=[(100, OLD)]), require=True), (True, _OK))
