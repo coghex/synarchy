@@ -546,6 +546,15 @@ fork fallback resolves against the admitted base. `ci-image.yml`'s content is
 part of the image tag, so the first run after this lands builds and publishes
 the new tag once.
 
+**Reports.** `tools/ci_timing_model.py` and `tools/ci_timing_report.py` count a
+successful dispatched CI run as a pull-request sample (its pull request comes
+from the run's title, `CI PR <n> @ <sha>`, and `--event pull_request` lists
+both the dispatched and the historical `pull_request` runs).
+`tools/ci_build_drift.py` collects dispatched runs and derives their pull
+request and tested merge from the title and the cache epoch line, and
+`tools/ci_build_drift_report.py` finds the probe job under
+`behavior-probe-worker` (historical runs keep `behavior-probes`).
+
 **Docs-only and no-probe runs** keep their legitimate success once admitted
 (the docs fast path and the probe selection are unchanged).
 
