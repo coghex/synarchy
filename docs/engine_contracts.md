@@ -454,60 +454,70 @@ gate set.
 
 Owner decision (2026-11-05, refined 2026-11-06): CI does not run until the
 branch is up to date and the review is approved at that head, and it starts
-only because someone dispatched it. The expensive jobs (`resolve-image`,
-`test-and-audits`, `headless-lanes`, `static-audits`, `behavior-probe-worker`)
-therefore never start from a pull-request event. `ci.yml` triggers on pushes
-to `master` (unchanged: the full pipeline) and on `workflow_dispatch` with two
-required inputs, the pull request number and its exact head SHA. This
-supersedes the earlier event-driven design (CI started by `labeled` and
-`synchronize`, admission worked out from run listings and a reuse of earlier
-results, a `pr_number`-only dispatch interface); none of that exists any more.
+only because the manager asked for it. A `workflow_dispatch` design (the manager
+dispatches `ci.yml` with the PR number and SHA) was built first and does not
+work: GitHub leaves a dispatched run's check suite out of the pull request's
+status rollup, so branch protection reported `build-test` and `behavior-probes`
+as missing even though the run was green (PR #2928, run 42227466467). Only a
+run whose event is `pull_request` counts, so the manager's action is a
+**re-run**, which keeps the event and the PR association.
+
+**Mechanism.** `ci.yml` triggers on pushes to `master` (unchanged: the full
+pipeline) and on `pull_request` (default types). A pull-request event starts a
+run, but only the cheap `admission` job does anything for a head that is not
+admitted: the expensive jobs (`resolve-image`, `test-and-audits`,
+`headless-lanes`, `static-audits`, `behavior-probe-worker`) are gated on it, so
+a push before approval starts no expensive job and the required `build-test`
+and `behavior-probes` checks go red naming why. This supersedes the earlier
+event-driven design (CI started by `labeled` and `synchronize`, admission worked
+out from run listings and a reuse of earlier results); none of that exists.
 
 **Workflow for a change.** Each commit runs only a few focused local checks
 for what it changed, never the full suite; this is ordinary iteration policy
 and leaves the mandatory validation CLAUDE.md names (worldgen-output changes
 need the full tier; `make ci` on explicit request) as it was. Once the work is
-wrapped up and approved at an up-to-date head, CI runs once: the manager
-submits one dispatch for that head. If CI fails, the solver fixes it, runs only
-the relevant targeted local checks and probes, and goes back to rereview. CI
-runs again only after that fix is approved at an up-to-date head. "Once" is
-manager dispatch behaviour, not workflow deduplication: repeated dispatches
-rerun the work, and a base that moves after a dispatch can still require a
-branch update and another dispatch under `strict` branch protection, which is
-unchanged.
+wrapped up and approved at an up-to-date head, the manager re-runs that head's
+run, once. If CI fails, the solver fixes it, runs only the relevant targeted
+local checks and probes, and goes back to rereview; the new push starts a new
+gated run, and the manager re-runs it after approval. "Once" is manager
+behaviour, not workflow deduplication: each re-run repeats the work, and a base
+that moves after a re-run still requires a branch update and another run under
+`strict` branch protection, which is unchanged.
 
 **Interface.**
 
 ```
-gh workflow run ci.yml --ref <branch> -f pr=<N> -f sha=<head sha>
+gh run list -R coghex/synarchy --workflow ci.yml --event pull_request --commit <head sha>
+gh run rerun <run id> -R coghex/synarchy
 ```
 
-`--ref` must name a branch of THIS repository whose tip is exactly `sha`. For
-a same-repository pull request that is its head branch. For a fork pull
-request, first push the fork's head commit to a branch here
-(`git push origin <sha>:refs/heads/ci/pr-<N>`) and dispatch that branch: the
-run's checkouts and check runs then belong to the fork pull request's exact
-head commit, because the run's revision is that commit. Identity is always the
-pull request number plus the SHA, never a branch name, so same-named branches
-in different repositories cannot be confused. A newer dispatch for the same
-pull request cancels the older one's in-flight run (the concurrency group is
-the PR number); so does a dispatch that admission then refuses, in which case
-dispatch again.
+Either a plain re-run or `--failed` works: a refused admission also fails the
+`ci-admission` job, so `--failed` repeats the decision as well. The run to
+re-run is the `pull_request` run for the head's exact commit. A re-run
+replays the original event payload, which is why admission never trusts it:
+the payload names only which pull request and head the run was started for.
+Re-running a run for an older head is harmless (admission refuses it as not the
+current head), but its concurrency group is the pull request's merge ref, so it
+cancels the newer head's in-flight run; re-run the current head's run again if
+that happens. A fork pull request runs the same way (its head is a fork, so
+the image is never published); identity is always the pull request number plus
+the SHA, never a branch name.
 
-**Admission.** `tools/ci_pr_admission.py` runs first in the dispatched run. It
-checks the inputs against the pull request and git, reads no other workflow
-run, and fails closed on any evidence it cannot read:
+**Admission.** `tools/ci_pr_admission.py` runs first. It reads LIVE state (the
+pull request, the base branch and git), reads no other workflow run, and fails
+closed on any evidence it cannot read:
 
-1. `pr` is a pull request number and `sha` a full SHA; the pull request is open;
+1. the event's `pr` is a pull request number and its `sha` a full SHA; the
+   pull request is open;
 2. `sha` is the pull request's current head;
-3. the run executes `sha`: `github.sha` equals the input, so a valid
-   pull-request/SHA pair dispatched with a different `--ref` fails. Every
-   checkout, the reusable image workflow and the required checks' attribution
-   follow `github.sha`, so binding it binds all of them; no job selects a ref
-   of its own (the self-test pins that);
-4. `sha` contains the base branch's current tip after a fresh fetch
-   (`git merge-base --is-ancestor`). The synthetic merge ref is never used: it
-   contains the base even when the branch is behind;
+3. `sha` contains the base branch's current tip after a fresh fetch
+   (`git merge-base --is-ancestor`). The synthetic merge ref is never used as
+   evidence: it contains the base even when the branch is behind;
+4. the revision the run checked out (`github.sha`, the synthetic merge) has
+   exactly `sha`'s tree. With 3 that holds for every unchanged head; it binds
+   every checkout, the reusable image workflow and the required checks to the
+   code that was approved. No job selects a ref of its own (the self-test pins
+   that);
 5. the review service's head-bound marker approves it. All comment pages are
    read, comments by the repository owner's account (login compared
    case-insensitively, account type `User`) are the only candidates, and the
@@ -524,47 +534,44 @@ run, and fails closed on any evidence it cannot read:
 A master push is always admitted. `review-gate.yml` and its stale-approval
 semantics are unchanged.
 
-**A refused dispatch never counts as passing.** GitHub reports a skipped
-required job as success, so the required contexts cannot live on jobs that
-skip. The `admission` job itself always succeeds and publishes `eligible` and a
-`reason`; `resolve-image` (which can spend 30 minutes publishing an image) and
-therefore every worker are gated on it. `build-test` and `behavior-probes`
-always run and FAIL, naming the reason, for a dispatch that was not admitted;
-`behavior-probes` is a small gate over `behavior-probe-worker`, which is
-skipped by design on master pushes. A head that is never dispatched has no run
-at all, so both contexts stay pending and merging stays blocked. `strict: true`
-on `master` stays.
+**A refused run never counts as passing.** GitHub reports a skipped required
+job as success, so the required contexts cannot live on jobs that skip. A
+refusal publishes `eligible=false` and a `reason`, then fails the `admission`
+job with that reason; `resolve-image` (which can spend 30 minutes publishing an
+image) and therefore every worker are gated on `eligible`. `build-test` and
+`behavior-probes` always run and FAIL, naming the reason, for a run that was
+not admitted; `behavior-probes` is a small gate over `behavior-probe-worker`,
+which is skipped by design on master pushes. So an unapproved or behind head
+shows red required checks until the manager's re-run, and `strict: true` on
+`master` stays.
 
 **Identity in the workers.** Every worker reads the pull request's base from
 admission (`CI_PR_BASE_SHA`, mode `pr`) instead of event fields: documentation
 classification, cache epochs, expensive-gate selection, the save-schema
-comparison base and behavior-probe selection all use it, and no step of
-`ci.yml` reads a `pull_request` event field. `ci-image.yml` takes `fork` and
-`base_sha` inputs from admission: a fork head never publishes an image (the
-dispatch token could write, so the policy no longer rests on the token) and the
-fork fallback resolves against the admitted base. `ci-image.yml`'s content is
-part of the image tag, so the first run after this lands builds and publishes
-the new tag once.
+comparison base and behavior-probe selection all use it, and the only
+`pull_request` event fields `ci.yml` reads are the two identity inputs of the
+admission job (the self-test and `tools/ci_parity_save_policy.py` pin that).
+`ci-image.yml` takes `fork` and `base_sha` inputs from admission: a fork head
+never publishes an image and the fork fallback resolves against the admitted
+base. `ci-image.yml`'s content is part of the image tag, so the first run after
+this lands builds and publishes the new tag once.
 
-**Reports.** `tools/ci_timing_model.py` and `tools/ci_timing_report.py` count a
-successful dispatched CI run as a pull-request sample (its pull request comes
-from the run's title, `CI PR <n> @ <sha>`, and `--event pull_request` lists
-both the dispatched and the historical `pull_request` runs).
-`tools/ci_build_drift.py` collects dispatched runs and derives their pull
-request and tested merge from the title and the cache epoch line, and
-`tools/ci_build_drift_report.py` finds the probe job under
-`behavior-probe-worker` (historical runs keep `behavior-probes`).
+**Reports.** The timing, cache and build-drift reports already treat
+`pull_request` runs as pull-request samples, and a gated-out or red run has no
+worker timing to sample. `tools/ci_build_drift_report.py` finds the probe job
+under `behavior-probe-worker` (historical runs keep `behavior-probes`).
 
 **Docs-only and no-probe runs** keep their legitimate success once admitted
 (the docs fast path and the probe selection are unchanged).
 
 **Gates.** `python3 tools/ci_pr_admission.py --self-test` covers the decision
 (a stale SHA, an unapproved head, an approved head behind its base, an
-approved and current head, unreadable evidence, a master push, a mismatched
-`--ref`, a lingering label, re-approval, an approval-preserving base update,
-a content change after approval, untrusted and malformed markers, pagination,
-fork identity), the live git checks on throwaway repositories, `ci.yml` and
-`ci-image.yml` wiring (triggers, concurrency, gating, no event fields, the
+approved and current head, unreadable evidence, a master push, a run whose tree
+is not the head's, a lingering label, re-approval, an approval-preserving base
+update, a content change after approval, untrusted and malformed markers,
+pagination, fork identity), the live git checks on throwaway repositories
+(including a real synthetic merge), `ci.yml` and `ci-image.yml` wiring
+(triggers, concurrency, gating, the refusal step, the event fields read, the
 fork flag), and executes the real verdict scripts of `build-test` and
 `behavior-probes`. It runs in `static-audits` and `make ci`.
 `tools/ci_parity_audit.py` models the topology: every worker needs `admission`
@@ -573,9 +580,10 @@ carries the required name.
 
 **Merge flow.** `merge-pr` lives in the manager's skill scripts, not this
 repository, and is not changed here. It has to: update a behind branch (the
-label and the marker survive a clean replay), dispatch CI for the pull request
-and the exact new head SHA, wait for that run, and merge. Until then the
-manager dispatches by hand with the interface above.
+label and the marker survive a clean replay), re-run the pull request's
+`pull_request` run for the exact new head SHA (instead of dispatching), wait
+for it, and merge. Until then the manager re-runs by hand with the interface
+above.
 
 Mechanics: it uses the prod profile and your warm `dist-newstyle`.
 `-Werror` is checked into `synarchy.cabal`'s warning policy (not
