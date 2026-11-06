@@ -280,33 +280,79 @@ def fetch_pull(cli: Runner, repo: str, number: str) -> PullRequest | None:
         return None
 
 
-def _runs(cli: Runner, repo: str, workflow: str, **filters: str
-          ) -> list[dict] | None:
-    """A workflow's runs for the given filters; None when unreadable."""
+def _paged(cli: Runner, endpoint: str, key: str | None,
+           **filters: str) -> list[dict] | None:
+    """Every item of a paginated list endpoint; None when unreadable.
+
+    `--paginate --slurp` returns EVERY page, so an answer is the complete
+    history, never the first 100 results presented as if it were all of it
+    (100 skipped label runs on page one must not hide a failed dismissal on
+    page two). `key` names the page's item list; None means the page itself
+    is the list (the issue timeline).
+    """
     flags: list[str] = []
-    for key, value in filters.items():
-        flags += ["-f", f"{key}={value}"]
-    rc, out, _ = cli("api", "-X", "GET",
-                     f"repos/{repo}/actions/workflows/{workflow}/runs",
-                     *flags, "-f", "per_page=100")
+    for name, value in filters.items():
+        flags += ["-f", f"{name}={value}"]
+    rc, out, _ = cli("api", "-X", "GET", endpoint, *flags, "-f", "per_page=100",
+                     "--paginate", "--slurp")
     if rc != 0:
         return None
     try:
-        runs = json.loads(out)["workflow_runs"]
-        return [dict(item, id=int(item["id"])) for item in runs]
+        pages = json.loads(out)
+        if not isinstance(pages, list):
+            return None
+        items: list[dict] = []
+        for page in pages:
+            items.extend(page if key is None else page[key])
+        return items
     except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _runs(cli: Runner, repo: str, workflow: str, **filters: str
+          ) -> list[dict] | None:
+    """A workflow's runs for the given filters; None when unreadable."""
+    items = _paged(cli, f"repos/{repo}/actions/workflows/{workflow}/runs",
+                   "workflow_runs", **filters)
+    if items is None:
+        return None
+    try:
+        return [dict(item, id=int(item["id"])) for item in items]
+    except (KeyError, TypeError, ValueError):
         return None
 
 
 def _jobs(cli: Runner, repo: str, run_id: int) -> list[dict] | None:
-    rc, out, _ = cli("api", "-X", "GET", f"repos/{repo}/actions/runs/{run_id}/jobs",
-                     "-f", "per_page=100")
-    if rc != 0:
-        return None
+    return _paged(cli, f"repos/{repo}/actions/runs/{run_id}/jobs", "jobs")
+
+
+def _timestamp(text: object) -> float:
+    """Epoch seconds of an ISO-8601 `...Z` stamp; -1 when absent or malformed."""
+    from datetime import datetime
     try:
-        return list(json.loads(out)["jobs"])
-    except (ValueError, KeyError, TypeError):
-        return None
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return -1.0
+
+
+def force_push_epoch(cli: Runner, repo: str, pr_number: str, sha: str
+                     ) -> tuple[bool, float]:
+    """When `sha` was last FORCE-PUSHED onto this pull request (0.0: never).
+
+    Answers (readable, epoch seconds). A head can only be visited twice by a
+    force push (ordinary pushes make new commits), and that leaves a
+    `head_ref_force_pushed` event on the PR timeline naming the commit, which
+    records the transition itself rather than inferring it from whichever
+    review-gate runs happen to be listed.
+    """
+    events = _paged(cli, f"repos/{repo}/issues/{pr_number}/timeline", None)
+    if events is None:
+        return False, 0.0
+    stamps = [_timestamp(event.get("created_at")) for event in events
+              if isinstance(event, dict)
+              and event.get("event") == "head_ref_force_pushed"
+              and event.get("commit_id") == sha]
+    return True, max(stamps, default=0.0)
 
 
 def _run_prs(run: dict) -> set[str]:
@@ -339,7 +385,9 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     ABSENCE is accepted only for the initial head, and that is proved
     positively: every review-gate run of this pull request is for `sha`.
     A head that was visited before and pushed back to is judged only on runs
-    newer than the latest run for another head.
+    newer than the latest run for another head AND newer than its recorded
+    force push (the PR timeline), so an old success for it is never this
+    transition's evidence even while the intervening runs are unregistered.
     A synchronize needs a different head to move to, so any head that was
     ever pushed over another leaves a run for the earlier head behind. A head
     with other heads in the PR's history and no dismissal outcome yet is
@@ -353,13 +401,20 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # is not its evidence, whatever branch it ran on (forks share branch
     # names), and an unattributable run leaves the head unverified.
     scoped = [run for run in runs if pr_number in _run_prs(run)]
+    readable, epoch = force_push_epoch(cli, repo, pr_number, sha)
+    if not readable:
+        return False, None
     # A head can be revisited (H, then X, then a force push back to H). Only
     # runs NEWER than the latest run for any other head belong to the current
     # visit; an older success for H says nothing about this transition.
     latest_other = max((run["id"] for run in scoped if run.get("head_sha") != sha),
                        default=0)
+    # ... and, when the timeline records a force push of THIS head, only runs
+    # created at or after that push: it is the transition being admitted, and
+    # it is visible even while the runs it triggered are not yet listed.
     mine = [run for run in scoped
-            if run.get("head_sha") == sha and run["id"] > latest_other]
+            if run.get("head_sha") == sha and run["id"] > latest_other
+            and (not epoch or _timestamp(run.get("created_at")) >= epoch - 2)]
     unsettled = Dismissal("queued", "")
     if not mine:
         return True, unsettled
@@ -380,7 +435,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
                              Dismissal("completed", str(job.get("conclusion") or ""))))
     if outcomes:
         return True, max(outcomes, key=lambda pair: pair[0])[1]
-    if latest_other:
+    if latest_other or epoch:
         return True, unsettled
     return True, None
 
@@ -485,7 +540,7 @@ def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str, pr_number: 
 
 
 def cancel_superseded(cli: Runner, repo: str, pr_number: str, head_ref: str,
-                      head_sha: str) -> list[int]:
+                      head_sha: str, my_run_id: str) -> list[int]:
     """Cancel this pull request's live CI runs for any OTHER head.
 
     The workflow's concurrency group is per head (so same-head events never
@@ -493,15 +548,20 @@ def cancel_superseded(cli: Runner, repo: str, pr_number: str, head_ref: str,
     explicit act: a newer head makes every older head's run obsolete. That
     covers pull_request runs (attributed by their own PR list) and dispatched
     runs (whose record names no pull request, so ci.yml's `run-name` carries
-    it). Best effort, and never decisive for this run's own admission.
+    it). Only runs OLDER than this one (smaller run id) are cancelled: a run
+    for another head that started after this one belongs to a newer head, and
+    cancelling it would leave the current head without its pipeline. Best
+    effort, and never decisive for this run's own admission.
     """
+    if not str(my_run_id).isdigit():
+        return []
     cancelled: list[int] = []
     for event in ("pull_request", "workflow_dispatch"):
         for status in ("in_progress", "queued", "pending", "waiting"):
             runs = _runs(cli, repo, "ci.yml", branch=head_ref, event=event,
                          status=status) or []
             for run in runs:
-                if run.get("head_sha") == head_sha:
+                if run.get("head_sha") == head_sha or run["id"] >= int(my_run_id):
                     continue
                 if event == "pull_request":
                     ours = pr_number in _run_prs(run)
@@ -536,7 +596,7 @@ def run_admit(event: Event, repo: str, *, run_id: str = "", cli: Runner = gh,
     dismissal, readable = None, True
     if first is not None:
         if first.head_sha == run_head:
-            cancel_superseded(cli, repo, event.pr_number, first.head_ref, run_head)
+            cancel_superseded(cli, repo, event.pr_number, first.head_ref, run_head, run_id)
         readable, dismissal = await_dismissal(
             cli, repo, event.pr_number, first.head_ref, run_head,
             require=(event.name == "pull_request" and event.action == "synchronize"),
@@ -788,9 +848,15 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     def job(identifier: int, status: str, conclusion: str | None, name: str = DISMISSAL_CHECK) -> dict:
         return {"id": identifier, "name": name, "status": status, "conclusion": conclusion}
 
+    def stamp(seconds: int) -> str:
+        return f"2026-01-01T{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}Z"
+
     def gate_run(run_id: int, *jobs: dict, head: str = HEAD, prs: tuple = ("7",)) -> dict:
-        """A review-gate run of a pull request at `head`. No jobs: not listed yet."""
-        return {"id": run_id, "head_sha": head, "jobs": list(jobs),
+        """A review-gate run of a pull request at `head`. No jobs: not listed yet.
+
+        Created `run_id` seconds into the scripted day, so ids order in time.
+        """
+        return {"id": run_id, "head_sha": head, "jobs": list(jobs), "created_at": stamp(run_id),
                 "pull_requests": [{"number": int(n)} for n in prs]}
 
     def ci_run(run_id: int, *, status: str = "completed", event: str = "pull_request",
@@ -806,24 +872,39 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                                   for n in prs]}
 
     class Gate:
-        """A `gh` over scripted review-gate and ci.yml runs.
+        """A `gh` over scripted review-gate and ci.yml runs and a PR timeline.
 
         Review-gate answers advance one snapshot per poll (a snapshot is the
         list of that workflow's runs for the branch at that moment).
         `snapshots=None` makes the Actions API unreadable. `ci` is the static
-        list of ci.yml runs; `pull` the live pull request.
+        list of ci.yml runs; `pull` the live pull request; `force_pushes` the
+        timeline's (seconds, commit) force-push events. `page_size` splits
+        every list into pages, and a call WITHOUT `--paginate --slurp` sees
+        only the first page, as GitHub would.
         """
 
         def __init__(self, *snapshots: list, pull: str | None = None,
-                     ci: list | None = None, ci_unreadable: bool = False) -> None:
+                     ci: list | None = None, ci_unreadable: bool = False,
+                     force_pushes: list | None = None, timeline_unreadable: bool = False,
+                     page_size: int | None = None) -> None:
             self.snapshots = list(snapshots) if snapshots else None
             self.pull, self.ci, self.ci_unreadable = pull, ci or [], ci_unreadable
+            self.force_pushes = force_pushes or []
+            self.timeline_unreadable, self.page_size = timeline_unreadable, page_size
             self.polls = -1
             self.order: list[str] = []
             self.cancelled: list[int] = []
 
         def current(self) -> list:
             return self.snapshots[min(self.polls, len(self.snapshots) - 1)]
+
+        def reply(self, args: tuple, items: list, key: str | None) -> tuple[int, str, str]:
+            size = self.page_size or max(len(items), 1)
+            chunks = [items[i:i + size] for i in range(0, len(items), size)] or [[]]
+            pages = [chunk if key is None else {"total_count": len(items), key: chunk}
+                     for chunk in chunks]
+            slurp = "--slurp" in args and "--paginate" in args
+            return 0, json.dumps(pages if slurp else pages[0]), ""
 
         def __call__(self, *args: str) -> tuple[int, str, str]:
             text = " ".join(args)
@@ -832,8 +913,8 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                 if self.snapshots is None:
                     return 1, "", "boom"
                 self.polls += 1
-                return 0, json.dumps({"workflow_runs": [
-                    {k: v for k, v in run.items() if k != "jobs"} for run in self.current()]}), ""
+                return self.reply(args, [{k: v for k, v in run.items() if k != "jobs"}
+                                         for run in self.current()], "workflow_runs")
             if "workflows/ci.yml/runs" in text:
                 if self.ci_unreadable:
                     return 1, "", "boom"
@@ -846,14 +927,21 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                 wanted = re.search(r"event=(\w+)", text)
                 if wanted:
                     runs = [r for r in runs if r["event"] == wanted.group(1)]
-                return 0, json.dumps({"workflow_runs": runs}), ""
+                return self.reply(args, runs, "workflow_runs")
+            if "/timeline" in text:
+                if self.timeline_unreadable:
+                    return 1, "", "boom"
+                events = [{"event": "labeled"}] * 3 + [
+                    {"event": "head_ref_force_pushed", "commit_id": sha, "created_at": stamp(at)}
+                    for at, sha in self.force_pushes]
+                return self.reply(args, events, None)
             match = re.search(r"/actions/runs/(\d+)/jobs", text)
             if match:
                 run_id = int(match.group(1))
                 if self.snapshots is None and not any(r["id"] == run_id for r in self.ci):
                     return 1, "", "boom"
                 pool = list(self.ci) + (self.current() if self.snapshots else [])
-                return 0, json.dumps({"jobs": next(r["jobs"] for r in pool if r["id"] == run_id)}), ""
+                return self.reply(args, next(r["jobs"] for r in pool if r["id"] == run_id), "jobs")
             cancel = re.search(r"/actions/runs/(\d+)/cancel", text)
             if cancel:
                 self.cancelled.append(int(cancel.group(1)))
@@ -1045,6 +1133,58 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         check(f"admit: {label}, an unattributed success does not admit over PR 7's failure",
               admit(event, pull=pull_json(), gate=Gate(unattributed)).code, "dismissal-failed")
 
+    # Round 5 of #2928: H -> X -> H by force push, with NEITHER intervening run
+    # registered yet. Only the old success for H is listed; the timeline's
+    # force-push event is what shows that it is not this transition's.
+    old_h = [gate_run(1, ok_job)]
+    forced = dict(force_pushes=[(100, HEAD)])
+    check("await: a force-pushed head's old success is not evidence while the new runs are unregistered",
+          wait(Gate(old_h, **forced), require=True), (True, Dismissal("queued", "")))
+    check("await: ... for a non-synchronize too",
+          wait(Gate(old_h, **forced), require=False), (True, Dismissal("queued", "")))
+    check("await: ... and the new transition's run is then waited for",
+          wait(Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
+                    old_h + [gate_run(101, job(12, "completed", "success"))], **forced),
+               require=True), (True, _OK))
+    check("await: a failed new dismissal beats the old success",
+          wait(Gate(old_h + [gate_run(101, job(12, "completed", "failure"))], **forced),
+               require=True), (True, Dismissal("completed", "failure")))
+    check("await: after a force push, skipped-only runs newer than it are still not absence",
+          wait(Gate([gate_run(101, skip_job)], **forced), require=False),
+          (True, Dismissal("queued", "")))
+    check("await: a force push of another commit does not matter",
+          wait(Gate(old_h, force_pushes=[(100, OLD)]), require=True), (True, _OK))
+    check("await: an unreadable timeline is unverified, never 'no force push'",
+          wait(Gate(old_h, timeline_unreadable=True), require=True), (False, None))
+    check("await: the force push is found beyond the first timeline page",
+          wait(Gate(old_h, page_size=2, **forced), require=True), (True, Dismissal("queued", "")))
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: {label} of a force-pushed head is not admitted on the old success",
+              admit(event, pull=pull_json(), gate=Gate(old_h, **forced)).code, "dismissal-pending")
+        check(f"admit: {label} of a force-pushed head waits for the new transition",
+              admit(event, pull=pull_json(),
+                    gate=Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
+                              old_h + [gate_run(101, job(12, "completed", "success"))], **forced)).eligible,
+              True)
+
+    # Round 5 of #2928: history is read to the end, never first-page-only.
+    labels = [gate_run(i, job(i * 10, "completed", "skipped")) for i in range(1, 6)]
+    failed_late = labels + [gate_run(6, job(60, "completed", "failure"))]
+    check("await: a failed dismissal beyond the first page is found",
+          wait(Gate(failed_late, page_size=2), require=False),
+          (True, Dismissal("completed", "failure")))
+    check("admit: ... and it denies a labeled head",
+          admit(approve, pull=pull_json(), gate=Gate(failed_late, page_size=2)).code, "dismissal-failed")
+    many_jobs = {**gate_run(7), "jobs": [job(70 + i, "completed", "success", f"other-{i}") for i in range(3)]
+                 + [job(80, "completed", "failure")]}
+    check("await: a dismissal job beyond the first page of jobs is found",
+          wait(Gate([many_jobs], page_size=2), require=True),
+          (True, Dismissal("completed", "failure")))
+    paged_ci = [ci_run(11, prs=("9",)), ci_run(12, prs=("9",)), ci_run(13, prs=("9",)), ci_run(14)]
+    check("duplicate: a prior CI run beyond the first page is still mirrored",
+          admit(approve, pull=pull_json(), gate=done(ci=paged_ci, page_size=2)).mode, MODE_DUP)
+
     # -- supersession and same-head duplicates (round 3 of #2928) ----------
     live = [ci_run(41, status="in_progress", head=OLD), ci_run(42, status="queued", head=OLD),
             ci_run(43, status="in_progress", head=OLD, prs=("9",)),
@@ -1068,6 +1208,19 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     admit(_event("pull_request", "synchronize", head=OTHER), pull=pull_json(), gate=gate)
     check("supersede: a run whose head is no longer the PR's cancels nothing",
           gate.cancelled, [])
+    # Round 5: the PR advances to a newer head after this run's identity read.
+    # Its run (a LARGER id) belongs to the newer head and must survive.
+    newer = [ci_run(41, status="in_progress", head=OLD),
+             ci_run(901, status="in_progress", head=OTHER),
+             ci_run(902, status="queued", event="workflow_dispatch", head=OTHER, prs=(),
+                    title="CI dispatch PR 7")]
+    gate = done(ci=newer)
+    admit(sync, pull=pull_json(), gate=gate, run_id="900")
+    check("supersede: only runs older than this one are cancelled, never a newer head's",
+          gate.cancelled, [41])
+    gate = done(ci=newer)
+    admit(sync, pull=pull_json(), gate=gate, run_id="")
+    check("supersede: without a run id nothing is cancelled", gate.cancelled, [])
 
     ran = ci_run(50)
     check("duplicate: an earlier run that ran CI for this head is mirrored, not repeated",
