@@ -485,13 +485,16 @@ moves afterwards can still require a branch update and a further run under
    timeline, any commit: a rewind to an ancestor and a fast-forward back
    leaves a force push of the ancestor). Timestamps have one-second precision,
    so order is proven strictly, with no slack: the run must be created
-   strictly after that push, or in the same second AND positively tied to it.
-   `review-gate.yml` records each synchronize's (before, after) heads in the
-   name of a `dismissal-transition` job, and the PR timeline (GraphQL) names
-   the heads the force push moved between, so the push's own run matches and
-   an older run for the same commit does not. A missing or unusable stamp, or
-   a same-second run with no matching transition, is no evidence and stays
-   pending. Run, job and timeline history is always read to the
+   strictly after that push, or in the same second and ordered after it by
+   run id. A force push is a synchronize like any other, so it has its own
+   review-gate run: `review-gate.yml` records each synchronize's (before,
+   after) heads in the name of a `dismissal-transition` job, and the PR
+   timeline (GraphQL) names the heads the push moved between, which finds the
+   push's own run. A same-second run counts only if its id (allocated in
+   creation order) is at or after that run's. A rewind plus fast-forward in
+   one second is therefore accepted, an older run with the same marker is
+   not, and when the push's own run is not listed yet, or a stamp is missing
+   or unusable, the head stays pending. Run, job and timeline history is always read to the
    end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
