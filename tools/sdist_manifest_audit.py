@@ -478,6 +478,16 @@ def self_test() -> int:
           FIXTURE_LISTING, FIXTURE_TRACKED | {"config/audio.yaml"},
           clean=False, needle="config/audio.yaml")
 
+    check("a family whose tracked files are absent from the listing",
+          FIXTURE_LISTING - {"test-headless/data/flora-order/seed42-w64-golden.txt"},
+          FIXTURE_TRACKED, clean=False,
+          needle="seed42-w64-golden.txt")
+
+    check("a family whose tracked files are gone (stale pattern)",
+          FIXTURE_LISTING - {"test-headless/data/flora-order/seed42-w64-golden.txt"},
+          FIXTURE_TRACKED - {"test-headless/data/flora-order/seed42-w64-golden.txt"},
+          clean=False, needle="matches no tracked file")
+
     check("a new config TEMPLATE that the family already covers",
           FIXTURE_LISTING | {"config/audio_default.yaml"},
           FIXTURE_TRACKED | {"config/audio_default.yaml"}, clean=True)

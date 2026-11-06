@@ -511,9 +511,11 @@ def reconcile_inventory(document: dict) -> dict:
     It never deletes a row and never rewrites a census record beyond
     #1430's single policy initialization: a record whose
     `acceptable_failures` is still null gets the default. A probe that
-    left `probe_runner_registry.PROBES` keeps its measurements and is reported by
-    `validate_manifest` as an extra entry, which is a decision for a
-    person.
+    left `probe_runner_registry.PROBES` keeps its measurements and is
+    reported by `validate_manifest` as an extra entry until a person
+    explicitly retires that named row through `retire_probe`. Retirement
+    is separate from reconciliation: it refuses a still-registered key and
+    removes only that key's row under the census update lock.
     """
     result = migrate_document(document)
     live = {key: script for key, script, _purpose in probe_runner_registry.PROBES}

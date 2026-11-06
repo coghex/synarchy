@@ -29,12 +29,11 @@
 -- fall-permitted request are untouched. A climb that already started is
 -- not re-judged: its slip resolution is the climb mechanics', unchanged.
 --
--- APPEND-ONLY: this enum derives 'Serialize' through 'Generic', so it is
--- positional by constructor tag and rides into saves via
--- "World.Save.Component.EntitySimulation"'s unit-sim component. Adding a
--- constructor is a pure append; inserting or reordering silently
--- corrupts saved move targets (@the current save-schema policy@ guards
--- this).
+-- This enum derives 'Serialize' through 'Generic', so its positional
+-- constructor tags ride into saves via
+-- "World.Save.Component.EntitySimulation"'s unit-sim component. The
+-- compiled current-schema guard records its current shape; any constructor
+-- change requires the owning save carrier's versioned migration.
 module Unit.Pathing.Hazard
     ( MoveHazardPolicy(..)
     , defaultMoveHazardPolicy

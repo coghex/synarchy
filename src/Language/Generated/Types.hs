@@ -316,8 +316,8 @@ data Profile = Profile
 --   begins rather than discovered as an endless collision reroll.
 --
 --   No 'Generic'\/'Serialize' instance, deliberately: this type never
---   rides into a save, so adding a constructor is outside
---   @the current save-schema policy@'s append-only rule.
+--   rides into a save, so it is outside the current save-schema guard's
+--   serialized-type set.
 data GeneratorError
     = UnsupportedGeneratorVersion Int
     | InsufficientRootSpace !GeneratorVersion !LangSeed !Int !Int

@@ -244,7 +244,8 @@ probe contract, the diagnostic labels and `EXEMPT_COMMANDS` with its reason
 per entry -- so both the facade and the workflow owner can read them without
 importing each other. `ci_parity_workflow.py` parses the workflow YAML,
 compares the two gate sets in both directions, and pins the aggregate and
-probe job topology. `ci_parity_save_compat.py` owns the #1360 wiring check.
+probe job topology. `ci_parity_save_policy.py` owns the active pre-release
+save-policy wiring check.
 `test_ci_parity_audit.py` holds every fixture and case, reached only through
 `--self-test`; it also pins the split itself -- no owner imports the facade,
 the facade holds no implementation body, each re-export is the canonical

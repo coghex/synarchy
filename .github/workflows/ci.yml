@@ -288,8 +288,9 @@ jobs:
 
       # Docs-only fast path (#1490). A PR or push that changes ONLY
       # documentation cannot affect the Haskell half of this job -- no
-      # target compiles a doc, and docs/save_compat/* is excluded because
-      # its machine-readable contracts require the real-codec audit below.
+      # target compiles a doc, and docs/save_compat/current_schema.json is
+      # excluded because its machine-readable contract is checked by the
+      # current-schema audit below.
       # Such a change therefore skips the cabal build, the test
       # suites, the headless hspec suite and world_check.
       #
@@ -1199,21 +1200,6 @@ jobs:
         run: |
           python3 tools/test_engine_env_capability_audit.py
           python3 tools/engine_env_capability_audit.py
-
-      # Cheap, no-engine guard (issue #1145): fails if a
-      # positionally-serialized (`Generic`-derived `Serialize`) sum type's
-      # constructor list changes in any way that is not a pure append.
-      # The tag is an index, so a reorder/insert/remove/rename silently
-      # reinterprets every already-saved value with nothing failing to
-      # compile -- and so does reordering or retyping ONE constructor's
-      # fields, which are positional too and move no tag at all (#1270).
-      # The compat fixtures in test-and-audits only prove the handful of
-      # constructors they happen to carry. Deliberately unconditional
-      # rather than path-selective: the guarded set is discovered from
-      # every `src/`/`app/` module, and the baseline it compares against
-      # can drift from either side.
-      - name: Enum append-only audit
-        run: |
 
       # Cheap, no-engine guard (issue #972, CH-28): fails if a
       # `src/**/*.hs` module is missing from synarchy.cabal's explicit
