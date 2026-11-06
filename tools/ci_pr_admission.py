@@ -468,12 +468,12 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # or after the latest one: it is the transition being admitted, and
     # it is visible even while the runs it triggered are not yet listed.
     #
-    # Same-second ordering is settled by RUN ID, which is allocated in
+    # Ordering after a force push is settled by RUN ID, which is allocated in
     # creation order. The force push is a synchronize like any other, so it
     # has its own review-gate run, recognisable by the transition it names
-    # (before, after); a run created in that second counts only if its id is
-    # at or after that run's, i.e. it was created by or after the push. If the
-    # push's own run is not listed yet, same-second runs stay pending.
+    # (before, after); a run counts only if its id is at or after that run's,
+    # i.e. it was created by or after the push. If the push's own run is not
+    # listed yet, nothing counts and the head stays pending.
     #
     # The anchor must be the LATEST push's run, and the latest visible run
     # naming a push pair is not necessarily it: pairs repeat (X -> H, H -> X,
@@ -496,11 +496,14 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
             anchor = max(pushes)
 
     def after_push(run: dict) -> bool:
+        # Uniform: once the PR has been force-pushed, EVERY outcome is tied to
+        # the transition through the anchor, whatever second its run was
+        # created in (a workflow's creation can be delayed past the push's
+        # second, so creation time proves no association). Without a trusted
+        # anchor nothing counts and the head stays pending.
         if not epoch:
             return True
-        created = _timestamp(run.get("created_at"))
-        return created > epoch or (created == epoch and anchor is not None
-                                   and run["id"] >= anchor)
+        return anchor is not None and run["id"] >= anchor
 
     mine = [run for run in scoped
             if run.get("head_sha") == sha and run["id"] > latest_other and after_push(run)]
@@ -1256,30 +1259,33 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     # registered yet. Only the old success for H is listed; the timeline's
     # force-push event is what shows that it is not this transition's.
     old_h = [gate_run(1, ok_job)]
-    forced = dict(force_pushes=[(100, HEAD)])
+    forced = dict(force_pushes=[(100, HEAD, OLD)])
+    push_run = lambda *jobs: gate_run(101, *jobs, transition=(OLD, HEAD))  # noqa: E731
     check("await: a force-pushed head's old success is not evidence while the new runs are unregistered",
           wait(Gate(old_h, **forced), require=True), (True, Dismissal("queued", "")))
     check("await: ... for a non-synchronize too",
           wait(Gate(old_h, **forced), require=False), (True, Dismissal("queued", "")))
     check("await: ... and the new transition's run is then waited for",
-          wait(Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
-                    old_h + [gate_run(101, job(12, "completed", "success"))], **forced),
+          wait(Gate(old_h, old_h + [push_run(job(12, "in_progress", None))],
+                    old_h + [push_run(job(12, "completed", "success"))], **forced),
                require=True), (True, _OK))
     check("await: a failed new dismissal beats the old success",
-          wait(Gate(old_h + [gate_run(101, job(12, "completed", "failure"))], **forced),
+          wait(Gate(old_h + [push_run(job(12, "completed", "failure"))], **forced),
                require=True), (True, Dismissal("completed", "failure")))
     check("await: after a force push, skipped-only runs newer than it are still not absence",
-          wait(Gate([gate_run(101, skip_job)], **forced), require=False),
+          wait(Gate([push_run(skip_job)], **forced), require=False),
           (True, Dismissal("queued", "")))
     # Round 6: H -> ancestor X (force) -> H (fast-forward): the timeline holds
     # a force push of the ANCESTOR, and that is what dates the transition.
     check("await: a force push of ANOTHER commit (a rewind) still dates the transition",
           wait(Gate(old_h, force_pushes=[(100, OLD)]), require=True),
           (True, Dismissal("queued", "")))
+    rw_push = [(100, OLD, HEAD)]  # HEAD -> OLD, forced
+    rw_run = gate_run(120, skip_job, head=OLD, transition=(HEAD, OLD), created=100)
     check("await: ... and the fast-forward back is then waited for",
-          wait(Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
-                    old_h + [gate_run(101, job(12, "completed", "success"))],
-                    force_pushes=[(100, OLD)]), require=True), (True, _OK))
+          wait(Gate(old_h + [rw_run], old_h + [rw_run, gate_run(121, job(12, "in_progress", None))],
+                    old_h + [rw_run, gate_run(121, job(12, "completed", "success"))],
+                    force_pushes=rw_push), require=True), (True, _OK))
     # Round 7-10: one-second timestamps prove order only strictly; a same-second
     # run is the push's own ONLY if it names that transition.
     old100 = [gate_run(100, ok_job)]
@@ -1288,9 +1294,16 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("await: ... nor one 1s before",
           wait(Gate([gate_run(101, ok_job)], force_pushes=[(102, OLD)]), require=True),
           (True, Dismissal("queued", "")))
-    check("await: a run created after the push is evidence",
-          wait(Gate(old100 + [gate_run(103, ok_job)], force_pushes=[(102, OLD)]), require=True),
-          (True, _OK))
+    rw102 = gate_run(150, skip_job, head=OLD, transition=(HEAD, OLD), created=102)
+    check("await: a run after the push's own run is evidence, whatever second it was created in",
+          wait(Gate(old100 + [rw102, gate_run(151, ok_job, created=103)],
+                    force_pushes=[(102, OLD, HEAD)]), require=True), (True, _OK))
+    # Round 13: the SAME rule for a run created after the push's second; the
+    # older stale run created at second 103 must not bypass the anchor check.
+    stale103 = gate_run(149, ok_job, transition=(OLD, HEAD), created=103)
+    check("await: a stale run created after the push's second is not evidence without a trusted anchor",
+          wait(Gate([stale103], force_pushes=[(102, HEAD, OLD), (102, OLD, HEAD), (102, HEAD, OLD)]),
+               require=True), (True, Dismissal("queued", "")))
     check("await: a run with no usable timestamp is never evidence after a force push",
           wait(Gate([{**gate_run(150, ok_job), "created_at": "garbage"}],
                     force_pushes=[(102, OLD)]), require=True), (True, Dismissal("queued", "")))
@@ -1338,6 +1351,14 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("await: ... a current failure beats the old success",
           wait(Gate([old_xh, f_run, failed_ff], force_pushes=rewind), require=True),
           (True, Dismissal("completed", "failure")))
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: {label}, a stale run created after the push's second, anchor unproven, is not admitted",
+              admit(event, pull=pull_json(), gate=Gate(
+                  [stale103], [stale103, gate_run(160, job(13, "completed", "failure"),
+                                                  transition=(OLD, HEAD), created=102)],
+                  force_pushes=[(102, HEAD, OLD), (102, OLD, HEAD), (102, HEAD, OLD)])).code,
+              "dismissal-pending")
     # Round 12: X -> H, H -> X, X -> H, three force pushes in one second and
     # two distinct pairs. A run is expected for each push, so the anchor is
     # trusted only once all three are listed.
@@ -1396,8 +1417,9 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         check(f"admit: {label} with an old success 2s before the rewind is not admitted",
               admit(event, pull=pull_json(), gate=Gate(old100, force_pushes=[(102, OLD)])).code,
               "dismissal-pending")
-    check("await: a force push older than the head's own runs does not matter",
-          wait(Gate([gate_run(150, ok_job)], force_pushes=[(100, OLD)]), require=True), (True, _OK))
+    check("await: a force push older than the head's own runs does not matter once its run anchors",
+          wait(Gate([gate_run(120, skip_job, head=OLD, transition=(HEAD, OLD), created=100),
+                     gate_run(150, ok_job)], force_pushes=[(100, OLD, HEAD)]), require=True), (True, _OK))
     check("await: an unreadable timeline is unverified, never 'no force push'",
           wait(Gate(old_h, timeline_unreadable=True), require=True), (False, None))
     check("await: the force push is found beyond the first timeline page",
@@ -1408,8 +1430,8 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
               admit(event, pull=pull_json(), gate=Gate(old_h, **forced)).code, "dismissal-pending")
         check(f"admit: {label} of a force-pushed head waits for the new transition",
               admit(event, pull=pull_json(),
-                    gate=Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
-                              old_h + [gate_run(101, job(12, "completed", "success"))], **forced)).eligible,
+                    gate=Gate(old_h, old_h + [push_run(job(12, "in_progress", None))],
+                              old_h + [push_run(job(12, "completed", "success"))], **forced)).eligible,
               True)
 
     for label, event in (("synchronize", sync), ("labeled", approve),
