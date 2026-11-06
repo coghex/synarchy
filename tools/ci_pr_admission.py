@@ -18,10 +18,13 @@ resolution in front of them) run, when ALL of these hold:
   2. it carries a live `reviewed:approve` label, read from GitHub, not from
      the event payload (a payload is a snapshot taken before anything else
      ran);
-  3. on a `synchronize`, review-gate.yml's `dismiss-stale-approval` run for
-     that exact head has COMPLETED and succeeded. The label is read after
-     that, because neither the payload's labels nor a green dismissal alone
-     proves approval -- a successful STRIP is green too;
+  3. every review-gate.yml run for that exact head has settled, and the
+     newest real `dismiss-stale-approval` outcome (a synchronize's) has
+     COMPLETED and succeeded; a synchronize must have one. A head with no
+     registered review-gate run, or a run whose jobs are not listed yet, is
+     pending, not absent. The label is read after that, because neither the
+     payload's labels nor a green dismissal alone proves approval -- a
+     successful STRIP is green too;
   4. the head contains the base branch's current tip, checked against the
      exact head SHA after a fresh fetch. The default pull_request checkout is
      a synthetic merge of head and base, which contains the base even when the
@@ -265,31 +268,65 @@ def fetch_pull(cli: Runner, repo: str, number: str) -> PullRequest | None:
 
 
 def fetch_dismissal(cli: Runner, repo: str, sha: str) -> tuple[bool, Dismissal | None]:
-    """The newest `dismiss-stale-approval` check run for `sha`.
+    """The stale-approval outcome for `sha`, from review-gate.yml's own runs.
 
-    Answers (readable, run). An unreadable answer is not "no run".
+    Answers (readable, outcome): a completed Dismissal; a not-completed one
+    while any review-gate run for this head has not SETTLED; or None, which
+    means every review-gate run for the head settled and none of them ran a
+    dismissal (the head never went through a synchronize). An unreadable
+    answer is never "none".
+
+    It reads the workflow RUNS and their jobs rather than check runs, because
+    a run exists the moment its event fires while its checks register a
+    little later: an empty check-runs answer cannot tell "this head was never
+    synchronized" from "its dismissal has not registered yet" (a labeled or
+    dispatched run that read the label in that window would admit a head the
+    pending dismissal was about to strip). A run whose jobs are not yet
+    listed, or a head with no review-gate run at all, is therefore PENDING,
+    not absent.
+
+    The dismissal job runs only on `synchronize`; on `opened` and `labeled`
+    events GitHub records it as a SKIPPED job. A skipped job is a settled
+    absence of a dismissal and never an outcome, so it can neither mask a
+    real result nor stand in for one.
     """
-    rc, out, _ = cli("api", "-X", "GET", f"repos/{repo}/commits/{sha}/check-runs",
-                     "-f", f"check_name={DISMISSAL_CHECK}", "-f", "per_page=100")
+    rc, out, _ = cli("api", "-X", "GET",
+                     f"repos/{repo}/actions/workflows/review-gate.yml/runs",
+                     "-f", f"head_sha={sha}", "-f", "event=pull_request",
+                     "-f", "per_page=100")
     if rc != 0:
         return False, None
     try:
-        # review-gate.yml's dismissal job runs only on `synchronize`; on
-        # `opened` and `labeled` events GitHub still records the job as a
-        # SKIPPED check run. That is the absence of a dismissal, not an
-        # outcome of one: counting it would mask a real synchronize result
-        # (an initial approval, or an approval after a successful
-        # synchronize, would read as `dismissal-failed`).
-        runs = [item for item in json.loads(out)["check_runs"]
-                if item.get("name") == DISMISSAL_CHECK
-                and item.get("conclusion") != "skipped"]
+        run_ids = [int(item["id"]) for item in json.loads(out)["workflow_runs"]]
     except (ValueError, KeyError, TypeError):
         return False, None
-    if not runs:
+    unsettled = Dismissal("queued", "")
+    if not run_ids:
+        return True, unsettled
+    outcomes: list[tuple[int, Dismissal]] = []
+    for run_id in run_ids:
+        rc, out, _ = cli("api", "-X", "GET",
+                         f"repos/{repo}/actions/runs/{run_id}/jobs",
+                         "-f", "per_page=100")
+        if rc != 0:
+            return False, None
+        try:
+            jobs = [job for job in json.loads(out)["jobs"]
+                    if job.get("name") == DISMISSAL_CHECK]
+        except (ValueError, KeyError, TypeError):
+            return False, None
+        if not jobs:
+            return True, unsettled
+        for job in jobs:
+            if job.get("status") != "completed":
+                return True, Dismissal(str(job.get("status") or "queued"), "")
+            if job.get("conclusion") == "skipped":
+                continue
+            outcomes.append((int(job.get("id", 0)),
+                             Dismissal("completed", str(job.get("conclusion") or ""))))
+    if not outcomes:
         return True, None
-    newest = max(runs, key=lambda item: int(item.get("id", 0)))
-    return True, Dismissal(str(newest.get("status", "")),
-                           str(newest.get("conclusion") or ""))
+    return True, max(outcomes, key=lambda pair: pair[0])[1]
 
 
 def await_dismissal(cli: Runner, repo: str, sha: str, *, require: bool,
@@ -585,66 +622,109 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
         check(f"predicate/{name}/{action}/{label}",
               bool(_translate(ADMITTING_EXPRESSION, context)), is_admitting_event(event))
 
-    # -- await_dismissal: delayed, missing, unreadable, pending ------------
-    def scripted(*answers: tuple[int, str]) -> tuple[Runner, list]:
-        queue = list(answers)
-        calls: list = []
-
-        def cli(*args: str) -> tuple[int, str, str]:
-            calls.append(args)
-            code, body = queue.pop(0) if len(queue) > 1 else queue[0]
-            return code, body, ""
-        return cli, calls
-
-    def runs(*items: dict) -> tuple[int, str]:
-        return 0, json.dumps({"check_runs": list(items)})
-
-    def item(identifier: int, status: str, conclusion: str | None) -> dict:
+    # -- await_dismissal / fetch_dismissal over a scripted review-gate ------
+    def job(identifier: int, status: str, conclusion: str | None) -> dict:
         return {"id": identifier, "name": DISMISSAL_CHECK, "status": status,
                 "conclusion": conclusion}
+
+    def gate_run(run_id: int, *jobs: dict) -> tuple[int, list]:
+        return run_id, list(jobs)  # no jobs: the run exists, its jobs are not listed yet
+
+    class Gate:
+        """A `gh` whose review-gate answers advance one snapshot per poll.
+
+        A snapshot is the list of review-gate runs for the head at that
+        moment, each with the jobs GitHub lists for it. `pull` is the live
+        pull request; `snapshots=None` makes the Actions API unreadable.
+        """
+
+        def __init__(self, *snapshots: list, pull: str | None = None) -> None:
+            self.snapshots = list(snapshots) if snapshots else None
+            self.pull = pull
+            self.polls = -1
+            self.order: list[str] = []
+
+        def current(self) -> list:
+            return self.snapshots[min(self.polls, len(self.snapshots) - 1)]
+
+        def __call__(self, *args: str) -> tuple[int, str, str]:
+            text = " ".join(args)
+            if "review-gate.yml/runs" in text:
+                self.order.append("dismissal")
+                if self.snapshots is None:
+                    return 1, "", "boom"
+                self.polls += 1
+                return 0, json.dumps({"workflow_runs": [
+                    {"id": run_id} for run_id, _ in self.current()]}), ""
+            match = re.search(r"/actions/runs/(\d+)/jobs", text)
+            if match:
+                if self.snapshots is None:
+                    return 1, "", "boom"
+                jobs = dict(self.current())[int(match.group(1))]
+                return 0, json.dumps({"jobs": jobs}), ""
+            self.order.append("pull")
+            return (0, self.pull, "") if self.pull is not None else (1, "", "boom")
 
     ticks = iter(range(10_000))
     fake_clock = lambda: float(next(ticks))  # noqa: E731
     nap = lambda _seconds: None  # noqa: E731
 
-    def wait(cli: Runner, *, require: bool, limit: float = 6):
-        return await_dismissal(cli, "o/r", HEAD, require=require, wait_seconds=limit,
+    def wait(gate: Gate, *, require: bool, limit: float = 12):
+        return await_dismissal(gate, "o/r", HEAD, require=require, wait_seconds=limit,
                                poll_seconds=1, sleep=nap, clock=fake_clock)
 
-    cli, calls = scripted(runs(), runs(), runs(item(1, "in_progress", None)),
-                          runs(item(1, "completed", "success")))
-    check("await: delayed dismissal is waited for", wait(cli, require=True), (True, _OK))
-    check("await: it kept polling until completed", len(calls), 4)
-    cli, _ = scripted(runs())
-    check("await: a synchronize with no run times out as missing", wait(cli, require=True), (True, None))
-    cli, calls = scripted(runs())
-    check("await: a non-synchronize accepts no run at once", wait(cli, require=False), (True, None))
-    check("await: ... without polling", len(calls), 1)
-    cli, _ = scripted((1, ""))
-    check("await: an unreadable API is reported unreadable, not absent", wait(cli, require=True), (False, None))
-    cli, _ = scripted(runs(item(1, "in_progress", None)))
-    check("await: a run still pending at the deadline is returned pending",
-          wait(cli, require=True), (True, Dismissal("in_progress", "")))
-    cli, _ = scripted(runs(item(1, "completed", "failure"), item(2, "completed", "success")))
-    check("await: the newest check run wins", wait(cli, require=True), (True, _OK))
-    cli, _ = scripted(runs(item(1, "completed", "success"), item(2, "completed", "failure")))
-    check("await: a newer failed rerun wins over an older success",
-          wait(cli, require=True), (True, Dismissal("completed", "failure")))
-    cli, _ = scripted((1, ""))
-    check("await: unreadable stays unreadable for a non-synchronize too",
-          wait(cli, require=False), (False, None))
-    # Round 1 of #2928: review-gate.yml records the dismissal job as a
-    # SKIPPED check run on opened/labeled events. It is the absence of a
-    # dismissal, never an outcome, and must not mask a real one.
-    cli, _ = scripted(runs(item(1, "completed", "success"), item(2, "completed", "skipped")))
+    ok_job = job(10, "completed", "success")
+    skip_job = job(20, "completed", "skipped")
+    gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
+                [gate_run(1, ok_job)])
+    check("await: delayed dismissal is waited for", wait(gate, require=True), (True, _OK))
+    check("await: it kept polling until completed", gate.polls + 1, 4)
+    gate = Gate([])
+    check("await: a head with no review-gate run yet is pending, never absent",
+          wait(gate, require=True), (True, Dismissal("queued", "")))
+    gate = Gate([])
+    check("await: ... on a non-synchronize too",
+          wait(gate, require=False), (True, Dismissal("queued", "")))
+    gate = Gate([gate_run(1)])
+    check("await: a run whose jobs are not registered yet is pending",
+          wait(gate, require=False), (True, Dismissal("queued", "")))
+    # The race round 2 of #2928 found: the labeled/dispatch run polls while
+    # the synchronize's dismissal has not registered, then it appears.
+    for require in (False, True):
+        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))], [gate_run(1, ok_job)])
+        check(f"await: delayed registration is waited for (require={require})",
+              wait(gate, require=require), (True, _OK))
+        check(f"await: ... and was not read just once (require={require})", gate.polls > 0, True)
+    gate = Gate([gate_run(1, skip_job)])
+    check("await: initial approval (only skipped dismissals) is accepted at once",
+          wait(gate, require=False), (True, None))
+    check("await: ... without polling again", gate.polls + 1, 1)
+    gate = Gate([gate_run(1, skip_job)])
+    check("await: only skipped dismissals on a synchronize wait out as missing",
+          wait(gate, require=True), (True, None))
+    gate = Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])
     check("await: a newer skipped run does not mask a successful synchronize",
-          wait(cli, require=True), (True, _OK))
-    cli, _ = scripted(runs(item(2, "completed", "skipped")))
-    check("await: only a skipped run is no evidence on a labeled head",
-          wait(cli, require=False), (True, None))
-    cli, _ = scripted(runs(item(2, "completed", "skipped")))
-    check("await: only a skipped run is no evidence on a synchronize",
-          wait(cli, require=True), (True, None))
+          wait(gate, require=True), (True, _OK))
+    gate = Gate([gate_run(1, ok_job), gate_run(2, job(30, "in_progress", None))])
+    check("await: an unfinished run beside a finished one keeps the head pending",
+          wait(gate, require=False), (True, Dismissal("in_progress", "")))
+    gate = Gate([gate_run(1, skip_job), gate_run(2)])
+    check("await: a skipped run beside an unregistered one is still pending",
+          wait(gate, require=False), (True, Dismissal("queued", "")))
+    gate = Gate([gate_run(1, job(10, "completed", "failure")), gate_run(2, job(11, "completed", "success"))])
+    check("await: the newest job wins", wait(gate, require=True), (True, _OK))
+    gate = Gate([gate_run(1, job(10, "completed", "success")), gate_run(2, job(11, "completed", "failure"))])
+    check("await: a newer failed rerun wins over an older success",
+          wait(gate, require=True), (True, Dismissal("completed", "failure")))
+    gate = Gate([gate_run(1, job(10, "in_progress", None))])
+    check("await: a run still pending at the deadline is returned pending",
+          wait(gate, require=True), (True, Dismissal("in_progress", "")))
+    gate = Gate()
+    check("await: an unreadable API is reported unreadable, not absent",
+          wait(gate, require=True), (False, None))
+    gate = Gate()
+    check("await: unreadable stays unreadable for a non-synchronize too",
+          wait(gate, require=False), (False, None))
 
     # -- run_admit end to end over scripted gh/git, outputs written --------
     def pull_json(**over: object) -> str:
@@ -653,15 +733,10 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                            "base": {"sha": pr.base_sha, "ref": pr.base_ref},
                            "labels": [{"name": n} for n in sorted(pr.labels)]})
 
-    def world(*, pull: str, dismissal: str | None, freshness_rc: int = 0,
-              fetch_rc: int = 0, order: list | None = None):
-        def cli(*args: str) -> tuple[int, str, str]:
-            if order is not None:
-                order.append("dismissal" if "check-runs" in args[-5:] or any(
-                    "check-runs" in a for a in args) else "pull")
-            if any("check-runs" in a for a in args):
-                return (0, dismissal, "") if dismissal is not None else (1, "", "boom")
-            return (0, pull, "") if pull is not None else (1, "", "boom")
+    def admit(event: Event, *, pull: str | None, gate: Gate | None = None,
+              freshness_rc: int = 0, fetch_rc: int = 0) -> Admission:
+        gate = gate if gate is not None else Gate()
+        gate.pull = pull
 
         def run_git(*args: str) -> tuple[int, str, str]:
             if args[0] == "fetch":
@@ -669,64 +744,84 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
             if args[0] == "cat-file":
                 return 0, "", ""
             return freshness_rc, "", ""
-        return cli, run_git
-
-    def admit(event: Event, **kw) -> Admission:
-        cli, run_git = world(**kw)
-        return run_admit(event, "o/r", cli=cli, run_git=run_git, wait_seconds=2,
+        return run_admit(event, "o/r", cli=gate, run_git=run_git, wait_seconds=12,
                          poll_seconds=1, sleep=nap, clock=fake_clock)
 
-    done = runs(item(1, "completed", "success"))[1]
+    def done() -> Gate:
+        return Gate([gate_run(1, ok_job)], pull=None)
+
     check("admit: synchronize kept and current",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=done).eligible, True)
+          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done()).eligible, True)
     check("admit: ... but behind",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=done,
+          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
                 freshness_rc=1).code, "behind-base")
     check("admit: ... but the base fetch failed",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=done,
+          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
                 fetch_rc=1).code, "freshness-unverified")
     check("admit: ... but git errored",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=done,
+          admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=done(),
                 freshness_rc=128).code, "freshness-unverified")
     check("admit: the dismissal strip (green) with the label gone",
           admit(_event("pull_request", "synchronize"), pull=pull_json(labels=frozenset()),
-                dismissal=done).code, "not-approved")
+                gate=done()).code, "not-approved")
     check("admit: unreadable pull request",
-          admit(_event("pull_request", "synchronize"), pull=None, dismissal=done).code,
+          admit(_event("pull_request", "synchronize"), pull=None, gate=done()).code,
           "pr-identity-unresolved")
-    check("admit: dismissal API down on a synchronize",
-          admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=None).code,
+    check("admit: checks API down on a synchronize",
+          admit(_event("pull_request", "synchronize"), pull=pull_json()).code,
           "dismissal-unreadable")
-    skipped_only = runs(item(5, "completed", "skipped"))[1]
-    check("admit: initial approval beside a skipped dismissal check",
-          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
-                dismissal=skipped_only).eligible, True)
-    mixed = runs(item(1, "completed", "success"), item(5, "completed", "skipped"))[1]
-    check("admit: approval after a successful synchronize despite a newer skipped check",
-          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
-                dismissal=mixed).eligible, True)
-    check("admit: dispatch recovery sees through a skipped check",
-          admit(_event("workflow_dispatch", ""), pull=pull_json(), dismissal=mixed).eligible, True)
-    check("admit: a labeled head whose checks API is unreadable is not admitted",
-          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
-                dismissal=None).code, "dismissal-unreadable")
-    check("admit: a dispatch whose checks API is unreadable is not admitted",
-          admit(_event("workflow_dispatch", ""), pull=pull_json(), dismissal=None).code,
-          "dismissal-unreadable")
+    approve = _event("pull_request", "labeled", label=APPROVAL_LABEL)
+    check("admit: initial approval beside skipped dismissal jobs",
+          admit(approve, pull=pull_json(),
+                gate=Gate([gate_run(1, skip_job), gate_run(2, job(21, "completed", "skipped"))])).eligible,
+          True)
+    check("admit: approval after a successful synchronize despite a newer skipped job",
+          admit(approve, pull=pull_json(),
+                gate=Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])).eligible,
+          True)
+    check("admit: dispatch recovery sees through a skipped job",
+          admit(_event("workflow_dispatch", ""), pull=pull_json(),
+                gate=Gate([gate_run(1, ok_job), gate_run(2, job(30, "completed", "skipped"))])).eligible,
+          True)
+    for label, event in (("labeled", approve), ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: a {label} head whose Actions API is unreadable is not admitted",
+              admit(event, pull=pull_json()).code, "dismissal-unreadable")
+        # The round 2 race: the first read finds nothing registered, a
+        # synchronize dismissal then appears and finishes. Admission must
+        # wait for it, and read the label only afterwards.
+        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
+                    [gate_run(1, ok_job)])
+        result = admit(event, pull=pull_json(), gate=gate)
+        check(f"admit: {label} waits out a delayed synchronize dismissal", result.eligible, True)
+        check(f"admit: {label} polled more than once", gate.polls >= 3, True)
+        gate = Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))],
+                    [gate_run(1, ok_job)])
+        check(f"admit: {label}, the delayed dismissal stripped the label",
+              admit(event, pull=pull_json(labels=frozenset()), gate=gate).code, "not-approved")
+        check(f"admit: {label}, a dismissal that never finishes is not admitted",
+              admit(event, pull=pull_json(),
+                    gate=Gate([], [gate_run(1)], [gate_run(1, job(10, "in_progress", None))])).code,
+              "dismissal-pending")
+        check(f"admit: {label}, a head review-gate never registered is not admitted",
+              admit(event, pull=pull_json(), gate=Gate([])).code, "dismissal-pending")
+        check(f"admit: {label}, a failed synchronize dismissal is not admitted",
+              admit(event, pull=pull_json(),
+                    gate=Gate([gate_run(1, job(10, "completed", "failure"))])).code,
+              "dismissal-failed")
     check("admit: master push needs no evidence",
-          admit(_event("push", ""), pull=None, dismissal=None).eligible, True)
+          admit(_event("push", ""), pull=None).eligible, True)
     check("admit: unrelated label event reads nothing",
-          admit(_event("pull_request", "labeled", label="tooling"), pull=None,
-                dismissal=None).code, "unrelated-event")
+          admit(_event("pull_request", "labeled", label="tooling"), pull=None).code,
+          "unrelated-event")
     check("admit: dispatch of the PR head",
-          admit(_event("workflow_dispatch", ""), pull=pull_json(), dismissal=done).eligible, True)
+          admit(_event("workflow_dispatch", ""), pull=pull_json(), gate=done()).eligible, True)
     check("admit: dispatch of another ref",
           admit(_event("workflow_dispatch", ""), pull=pull_json(head_sha=OTHER),
-                dismissal=done).code, "dispatch-ref-not-pr-head")
-    order: list[str] = []
-    admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=done, order=order)
+                gate=done()).code, "dispatch-ref-not-pr-head")
+    gate = done()
+    admit(_event("pull_request", "synchronize"), pull=pull_json(), gate=gate)
     check("admit: the dismissal is read before the live pull request",
-          order[:1] + order[-1:], ["dismissal", "pull"])
+          gate.order[:1] + gate.order[-1:], ["dismissal", "pull"])
     with tempfile.TemporaryDirectory(prefix="ci-admission-") as tmp:
         sink = Path(tmp) / "out"
         _emit({"eligible": "false", "reason": "[x] one\ntwo"}, str(sink))

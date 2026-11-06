@@ -271,6 +271,7 @@ jobs:
       contents: read
       pull-requests: read
       checks: read
+      actions: read
     outputs:
       eligible: ${{ steps.admit.outputs.eligible }}
       mode: ${{ steps.admit.outputs.mode }}
