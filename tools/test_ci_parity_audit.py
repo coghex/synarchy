@@ -466,22 +466,27 @@ _PARALLEL_GATE_WORKFLOW_GOOD = """\
 name: fixture
 on: [push, pull_request]
 jobs:
+  admission:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 tools/ci_pr_admission.py admit
   test-and-audits:
-    needs: resolve-image
+    needs: [admission, resolve-image]
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.resolve-image.outputs.image }}
     steps:
       - run: python3 tools/audit.py
   static-audits:
-    needs: resolve-image
+    needs: [admission, resolve-image]
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.resolve-image.outputs.image }}
     steps:
       - run: python3 tools/static_audit.py
-  behavior-probes:
-    if: github.event_name == 'pull_request'
+  behavior-probe-worker:
+    if: needs.admission.outputs.mode == 'pr'
+    needs: [admission, resolve-image]
     runs-on: ubuntu-latest
     steps:
       - run: python3 tools/ci_probes.py --stdin
@@ -491,22 +496,42 @@ jobs:
           python3 tools/run_probes.py
           --only "${{ steps.probe-selection.outputs.only }}"
           --exact --retries 1 --jobs 2
+  behavior-probes:
+    if: always()
+    needs: [admission, behavior-probe-worker]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "$ADMITTED" != true ]; then
+            exit 1
+          fi
+          if [ "$ADMISSION_MODE" = pr ]; then
+            test "$WORKER_RESULT" = success
+          else
+            test "$WORKER_RESULT" = skipped
+          fi
   build-test:
     if: always()
-    needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]
+    needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]
     runs-on: ubuntu-latest
     steps:
       - env:
           EVENT_NAME: ${{ github.event_name }}
+          ADMITTED: ${{ needs.admission.outputs.eligible }}
+          ADMISSION_MODE: ${{ needs.admission.outputs.mode }}
+          ADMISSION_REASON: ${{ needs.admission.outputs.reason }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
-          PROBES_RESULT: ${{ needs.behavior-probes.result }}
+          PROBES_RESULT: ${{ needs.behavior-probe-worker.result }}
           LANES_RESULT: ${{ needs.headless-lanes.result }}
         run: |
+          if [ "$ADMITTED" != true ]; then
+            exit 1
+          fi
           test "$TESTS_RESULT" = success
           test "$AUDITS_RESULT" = success
           test "$LANES_RESULT" = success
-          if [ "$EVENT_NAME" = pull_request ]; then
+          if [ "$ADMISSION_MODE" = pr ]; then
             test "$PROBES_RESULT" = success
           else
             test "$PROBES_RESULT" = skipped
@@ -526,15 +551,15 @@ def _parallel_gate_wiring_self_test() -> list[str]:
     mutations = (
         ("drop aggregate probe dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
-             "needs: [test-and-audits, static-audits, headless-lanes]"), "must need exactly"),
+             "needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]",
+             "needs: [admission, test-and-audits, static-audits, headless-lanes]"), "must need exactly"),
         # The #2272 aggregate wiring, from both halves: the stable context
         # has to DEPEND on the split-out worker and has to ASSERT its
         # result. Dropping either one alone leaves the other looking fine.
         ("drop aggregate static-audit dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
-             "needs: [test-and-audits, behavior-probes, headless-lanes]"),
+             "needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]",
+             "needs: [admission, test-and-audits, behavior-probe-worker, headless-lanes]"),
          "must need exactly"),
         ("drop static-audit verdict assertion",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
@@ -549,27 +574,32 @@ def _parallel_gate_wiring_self_test() -> list[str]:
         # split: image-only `needs`, and no condition at all.
         ("static audits waiting for the build job",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  static-audits:\n    needs: resolve-image\n",
-             "  static-audits:\n    needs: [resolve-image, test-and-audits]\n"),
-         "must need exactly ['resolve-image']"),
+             "  static-audits:\n    needs: [admission, resolve-image]\n",
+             "  static-audits:\n    needs: [admission, resolve-image, test-and-audits]\n"),
+         "must need exactly ['admission', 'resolve-image']"),
+        ("static audits not waiting for the admission",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  static-audits:\n    needs: [admission, resolve-image]\n",
+             "  static-audits:\n    needs: resolve-image\n"),
+         "must need exactly ['admission', 'resolve-image']"),
         ("static audits given a job-level condition",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  static-audits:\n    needs: resolve-image\n",
+             "  static-audits:\n    needs: [admission, resolve-image]\n",
              "  static-audits:\n    if: github.event_name == 'pull_request'\n"
-             "    needs: resolve-image\n"),
+             "    needs: [admission, resolve-image]\n"),
          "must carry no job-level"),
         ("static audits on a different image",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  static-audits:\n    needs: resolve-image\n"
+             "  static-audits:\n    needs: [admission, resolve-image]\n"
              "    runs-on: ubuntu-latest\n"
              "    container:\n"
              "      image: ${{ needs.resolve-image.outputs.image }}\n",
-             "  static-audits:\n    needs: resolve-image\n"
+             "  static-audits:\n    needs: [admission, resolve-image]\n"
              "    runs-on: ubuntu-latest\n"),
          "must resolve the SAME CI image"),
         ("drop the static-audit job outright",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "  static-audits:\n    needs: resolve-image\n"
+             "  static-audits:\n    needs: [admission, resolve-image]\n"
              "    runs-on: ubuntu-latest\n"
              "    container:\n"
              "      image: ${{ needs.resolve-image.outputs.image }}\n"
@@ -580,8 +610,8 @@ def _parallel_gate_wiring_self_test() -> list[str]:
         # assertion must not tolerate a skipped or failed lane.
         ("drop aggregate lane dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
-             "needs: [test-and-audits, static-audits, behavior-probes]"),
+             "needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]",
+             "needs: [admission, test-and-audits, static-audits, behavior-probe-worker]"),
          "must need exactly"),
         ("drop lane verdict assertion",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
@@ -596,9 +626,62 @@ def _parallel_gate_wiring_self_test() -> list[str]:
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
              "          LANES_RESULT: ${{ needs.headless-lanes.result }}\n", ""),
          "worker-result env must be exactly"),
-        ("drop always",
-         _PARALLEL_GATE_WORKFLOW_GOOD.replace("    if: always()\n", ""),
-         "must use `if: always()`"),
+        ("drop always from the aggregate",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  build-test:\n    if: always()\n",
+             "  build-test:\n"),
+         "`build-test` must use `if: always()`"),
+        ("aggregate that no longer fails a head that was not admitted",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             'if [ "$ADMITTED" != true ]; then\n            exit 1\n          fi\n'
+             '          test "$TESTS_RESULT" = success\n',
+             'test "$TESTS_RESULT" = success\n'),
+         "does not enforce 'if [ \"$ADMITTED\" != true ]; then'"),
+        ("aggregate that ignores the admission env",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "          ADMITTED: ${{ needs.admission.outputs.eligible }}\n", "", 1),
+         "worker-result env must be exactly"),
+        # #2927: the required `behavior-probes` name lives on an
+        # always-running gate, because a skipped worker reads as a pass.
+        ("probe gate that is not always-running",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  behavior-probes:\n    if: always()\n",
+             "  behavior-probes:\n"),
+         "`behavior-probes` must use `if: always()`"),
+        ("probe gate that does not wait for the worker",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "    needs: [admission, behavior-probe-worker]\n",
+             "    needs: [admission]\n"),
+         "`behavior-probes` must need exactly"),
+        ("probe gate that accepts a skipped worker on a PR",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             '            test "$WORKER_RESULT" = success\n',
+             '            test "$WORKER_RESULT" = skipped\n'),
+         'does not enforce \'test "$WORKER_RESULT" = success\''),
+        ("probe gate that no longer fails a head that was not admitted",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             'if [ "$ADMITTED" != true ]; then\n            exit 1\n          fi\n'
+             '          if [ "$ADMISSION_MODE" = pr ]; then\n'
+             '            test "$WORKER_RESULT"',
+             'if [ "$ADMISSION_MODE" = pr ]; then\n'
+             '            test "$WORKER_RESULT"'),
+         "`behavior-probes` does not enforce"),
+        ("probe worker that is not PR-mode only",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "    if: needs.admission.outputs.mode == 'pr'\n", ""),
+         "must remain PR-only"),
+        ("probe worker that does not wait for the admission",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  behavior-probe-worker:\n    if: needs.admission.outputs.mode == 'pr'\n"
+             "    needs: [admission, resolve-image]\n",
+             "  behavior-probe-worker:\n    if: needs.admission.outputs.mode == 'pr'\n"
+             "    needs: resolve-image\n"),
+         "`behavior-probe-worker` must need exactly"),
+        ("no admission job",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  admission:\n    runs-on: ubuntu-latest\n    steps:\n"
+             "      - run: python3 tools/ci_pr_admission.py admit\n", ""),
+         "no `admission` job"),
         ("drop probe runner",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
              "      - run: >-\n          python3 tools/run_probes.py\n"
@@ -744,7 +827,7 @@ name: fixture
 on: [push, pull_request]
 jobs:
   test-and-audits:
-    needs: resolve-image
+    needs: [admission, resolve-image]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
@@ -756,7 +839,7 @@ jobs:
       - name: Headless lane coverage
         run: python3 tools/headless_lanes.py
   headless-lanes:
-    needs: resolve-image
+    needs: [admission, resolve-image]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -779,7 +862,7 @@ jobs:
           fi
   build-test:
     if: always()
-    needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]
+    needs: [admission, test-and-audits, static-audits, behavior-probe-worker, headless-lanes]
     runs-on: ubuntu-latest
     steps:
       - run: test "$LANES_RESULT" = success
@@ -833,16 +916,19 @@ def _headless_lane_wiring_self_test() -> list[str]:
             "the known-good lane fixture should pass, got "
             f"{problems(_LANE_WORKFLOW_GOOD)}")
     good = _LANE_WORKFLOW_GOOD
-    lane_header = "  headless-lanes:\n    needs: resolve-image\n"
+    lane_header = "  headless-lanes:\n    needs: [admission, resolve-image]\n"
     mutations = (
         ("lanes waiting for another job's build",
          good.replace(lane_header,
-                      "  headless-lanes:\n    needs: [resolve-image, test-and-audits]\n"),
-         "must need exactly ['resolve-image']"),
+                      "  headless-lanes:\n    needs: [admission, resolve-image, test-and-audits]\n"),
+         "must need exactly ['admission', 'resolve-image']"),
+        ("lanes not waiting for the admission",
+         good.replace(lane_header, "  headless-lanes:\n    needs: resolve-image\n"),
+         "must need exactly ['admission', 'resolve-image']"),
         ("lanes behind a job-level condition",
          good.replace(lane_header,
                       "  headless-lanes:\n    if: github.event_name == 'pull_request'\n"
-                      "    needs: resolve-image\n"),
+                      "    needs: [admission, resolve-image]\n"),
          "must carry no job-level `if:`"),
         ("a shorter lane timeout",
          good.replace("    timeout-minutes: 90\n    strategy:",
@@ -976,7 +1062,7 @@ jobs:
             sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
       - name: Unit asset inventory, freshness and budget
         if: >-
-          github.event_name != 'pull_request'
+          needs.admission.outputs.mode != 'pr'
           || steps.expensive-gates.outputs.unit-assets == 'true'
         run: |
           python3 tools/test_pack_atlas.py
@@ -1019,7 +1105,7 @@ def _unit_asset_wiring_self_test() -> list[str]:
         # not list would then leave the inventory unchecked on master.
         ("gate made pull-request-selective on every event",
          _UNIT_ASSET_WORKFLOW_GOOD.replace(
-             "          github.event_name != 'pull_request'\n"
+             "          needs.admission.outputs.mode != 'pr'\n"
              "          || steps.expensive-gates.outputs.unit-assets == "
              "'true'\n",
              "          steps.expensive-gates.outputs.unit-assets == "
@@ -1029,7 +1115,7 @@ def _unit_asset_wiring_self_test() -> list[str]:
         ("gate made unconditional",
          _UNIT_ASSET_WORKFLOW_GOOD.replace(
              "        if: >-\n"
-             "          github.event_name != 'pull_request'\n"
+             "          needs.admission.outputs.mode != 'pr'\n"
              "          || steps.expensive-gates.outputs.unit-assets == "
              "'true'\n",
              ""),
@@ -1243,7 +1329,7 @@ def _current_save_policy_wiring_self_test() -> list[str]:
     ))
     workflow = "\n".join((
         "github.event.before",
-        "github.event.pull_request.base.sha",
+        "CI_PR_BASE_SHA",
         *local.splitlines(),
     ))
     failures: list[str] = []
@@ -1258,6 +1344,21 @@ def _current_save_policy_wiring_self_test() -> list[str]:
             any("retired" in problem for problem in
                 audit_current_save_policy_wiring(workflow + " --gate save-compat", local)),
             "historical gate reachability must fail")
+    # Admission reads which pull request and head the event is for, and nothing else.
+    identity = ("PR_NUMBER: ${{ github.event.pull_request.number }}\n"
+                "SHA: ${{ github.event.pull_request.head.sha }}")
+    _expect(failures, not audit_current_save_policy_wiring(workflow + "\n" + identity, local),
+            "admission's two identity inputs are the permitted pull_request reads")
+    for stray in ("github.event.pull_request.base.sha", "github.event.pull_request.head.ref",
+                  "github.event.pull_request.labels.*.name"):
+        _expect(failures,
+                any("pull_request event field" in problem for problem in
+                    audit_current_save_policy_wiring(workflow + "\n" + identity + "\n" + stray, local)),
+                f"a worker reading {stray} must fail")
+    _expect(failures,
+            any("admitted base" in problem for problem in
+                audit_current_save_policy_wiring(workflow.replace("CI_PR_BASE_SHA", ""), local)),
+            "a workflow without the admitted base must fail")
     return failures
 
 

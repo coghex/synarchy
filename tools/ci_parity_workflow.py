@@ -62,6 +62,7 @@ except ImportError:  # pragma: no cover - exercised only on a bare toolchain
 # ModuleNotFoundError while `python3 tools/ci_parity_audit.py` keeps working.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ci_parity_config import (
+    ADMISSION_JOB,
     AGGREGATE_JOB,
     AGGREGATE_NEEDS,
     AUDITED_JOB,
@@ -78,6 +79,8 @@ from ci_parity_config import (
     LANE_FULL_TIER_GUARD,
     LOCAL_GATE_LABEL,
     PROBE_FORBIDDEN_PREREQUISITES,
+    PROBE_GATE_JOB,
+    PROBE_GATE_NEEDS,
     PROBE_JOB,
     PROBE_JOB_IF,
     PROBE_PREREQUISITE_STEP,
@@ -85,7 +88,9 @@ from ci_parity_config import (
     PROBE_REQUIRED_COMMANDS,
     PROJECT_CACHE_IF,
     PROJECT_CACHE_JOB,
+    REQUIRED_CONTEXT_IF,
     STATIC_AUDIT_JOB,
+    WORKER_NEEDS,
     UNIT_ASSET_CI_IF,
     UNIT_ASSET_COMMAND,
     UNIT_ASSET_GATE,
@@ -340,7 +345,8 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         return [f"{WORKFLOW_PATH}: no `jobs:` mapping."]
 
     problems: list[str] = []
-    for job in (AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB, AGGREGATE_JOB):
+    for job in (ADMISSION_JOB, AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB,
+                PROBE_GATE_JOB, AGGREGATE_JOB):
         if not isinstance(jobs.get(job), dict):
             problems.append(f"{WORKFLOW_PATH}: no `{job}` job.")
     if problems:
@@ -355,10 +361,11 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must need exactly "
             f"{sorted(AGGREGATE_NEEDS)}, got {sorted(needs)}.")
-    if normalise_expression(str(aggregate.get("if") or "")) != "always()":
+    if normalise_expression(str(aggregate.get("if") or "")) != REQUIRED_CONTEXT_IF:
         problems.append(
-            f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must use `if: always()` so "
-            "a failed or skipped dependency cannot skip the stable verdict.")
+            f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must use "
+            f"`if: {REQUIRED_CONTEXT_IF}` so a failed or skipped "
+            "dependency cannot skip the stable verdict.")
 
     aggregate_steps = aggregate.get("steps")
     steps = ([step for step in aggregate_steps if isinstance(step, dict)]
@@ -373,9 +380,12 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         env = verdict_steps[0].get("env")
         expected_env = {
             "EVENT_NAME": "${{ github.event_name }}",
+            "ADMITTED": "${{ needs.admission.outputs.eligible }}",
+            "ADMISSION_MODE": "${{ needs.admission.outputs.mode }}",
+            "ADMISSION_REASON": "${{ needs.admission.outputs.reason }}",
             "TESTS_RESULT": "${{ needs.test-and-audits.result }}",
             "AUDITS_RESULT": "${{ needs.static-audits.result }}",
-            "PROBES_RESULT": "${{ needs.behavior-probes.result }}",
+            "PROBES_RESULT": "${{ needs.behavior-probe-worker.result }}",
             "LANES_RESULT": "${{ needs.headless-lanes.result }}",
         }
         if env != expected_env:
@@ -384,7 +394,11 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
                 f"be exactly {expected_env}, got {env}.")
     aggregate_text = "\n".join(
         str(step.get("run") or "") for step in steps)
-    for token in ("pull_request",
+    for token in ('if [ "$ADMITTED" != true ]; then',
+                  # An un-admitted head fails with its reason; a missing
+                  # decision (a crashed admission) is not "true" either.
+                  'exit 1',
+                  'if [ "$ADMISSION_MODE" = pr ]; then',
                   'test "$TESTS_RESULT" = success',
                   # Unconditional on purpose: STATIC_AUDIT_JOB carries no
                   # job-level `if:`, so a failure, a cancellation and a skip
@@ -418,12 +432,13 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
     static_needs = ({raw_static_needs} if isinstance(raw_static_needs, str)
                     else set(raw_static_needs)
                     if isinstance(raw_static_needs, list) else set())
-    if static_needs != {IMAGE_JOB}:
+    if static_needs != WORKER_NEEDS:
         problems.append(
             f"{WORKFLOW_PATH}: `{STATIC_AUDIT_JOB}` must need exactly "
-            f"['{IMAGE_JOB}'], got {sorted(static_needs)}. Anything else "
-            "makes the engine-free gates wait for a build again, which is "
-            "the whole cost this split removed.")
+            f"{sorted(WORKER_NEEDS)}, got {sorted(static_needs)}. The "
+            "admission gates it (#2927); anything else makes the "
+            "engine-free gates wait for a build again, which is the whole "
+            "cost this split removed.")
     static_image = ((static.get("container") or {}).get("image")
                     if isinstance(static.get("container"), dict) else None)
     audited_image = ((jobs[AUDITED_JOB].get("container") or {}).get("image")
@@ -442,6 +457,35 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{PROBE_JOB}` must remain PR-only with "
             f"`if: {PROBE_JOB_IF}`.")
+    if _needs_set(probe) != WORKER_NEEDS:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}` must need exactly "
+            f"{sorted(WORKER_NEEDS)}, got {sorted(_needs_set(probe))}.")
+
+    # The required `behavior-probes` context is an always-running gate over
+    # the worker (#2927): a skipped required job reads as a pass, so the
+    # required name cannot live on a job that is skipped by design.
+    gate = jobs[PROBE_GATE_JOB]
+    if _needs_set(gate) != PROBE_GATE_NEEDS:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_GATE_JOB}` must need exactly "
+            f"{sorted(PROBE_GATE_NEEDS)}, got {sorted(_needs_set(gate))}.")
+    if normalise_expression(str(gate.get("if") or "")) != REQUIRED_CONTEXT_IF:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_GATE_JOB}` must use "
+            f"`if: {REQUIRED_CONTEXT_IF}`: it has to run, and fail, "
+            "when the worker was skipped.")
+    gate_text = "\n".join(str(step.get("run") or "")
+                          for step in (gate.get("steps") or [])
+                          if isinstance(step, dict))
+    for token in ('if [ "$ADMITTED" != true ]; then', "exit 1",
+                  'if [ "$ADMISSION_MODE" = pr ]; then',
+                  'test "$WORKER_RESULT" = success',
+                  'test "$WORKER_RESULT" = skipped'):
+        if token not in gate_text:
+            problems.append(
+                f"{WORKFLOW_PATH}: `{PROBE_GATE_JOB}` does not enforce "
+                f"{token!r}.")
     commands = workflow_invocations(yaml_text, PROBE_JOB,
                                     f"{WORKFLOW_PATH} (job: {PROBE_JOB})")
     missing = PROBE_REQUIRED_COMMANDS - commands
@@ -589,12 +633,13 @@ def audit_headless_lane_wiring(yaml_text: str) -> list[str]:
     where = f"{WORKFLOW_PATH} (job: {LANE_JOB})"
     lane, audited = jobs[LANE_JOB], jobs[AUDITED_JOB]
 
-    if _needs_set(lane) != {IMAGE_JOB}:
+    if _needs_set(lane) != WORKER_NEEDS:
         problems.append(
-            f"{where}: must need exactly ['{IMAGE_JOB}'], got "
+            f"{where}: must need exactly {sorted(WORKER_NEEDS)}, got "
             f"{sorted(_needs_set(lane))}. Every lane is eligible as soon as "
-            "the image resolves; waiting on another job's build is the "
-            "artifact handoff #2745 decided against.")
+            "the image resolves and the run is admitted (#2927); waiting on "
+            "another job's build is the artifact handoff #2745 decided "
+            "against.")
     if str(lane.get("if") or "").strip():
         problems.append(
             f"{where}: must carry no job-level `if:`; the docs-only fast path "

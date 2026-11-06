@@ -133,6 +133,17 @@ another owner's processes. User cancellation still ends the wait immediately.
 - **Worldgen-output changes require the full tier**, rebaselining, world
   checks, and a save-version bump: follow `src/World/CLAUDE.md`. Iteration
   sanity check: `python3 tools/world_check.py --quick`.
+- **Pull-request CI runs once per approved head (#2927).** Each commit runs
+  only a few focused checks for what it changed. A push starts a pull_request
+  run that only the cheap `admission` job acts on (attempt 1 always fails,
+  naming why); once the head is approved and contains the base tip, the
+  manager re-runs that run once, and only that re-run starts the expensive
+  jobs, so they run once per approved head. Never start
+  it yourself, and never `workflow_dispatch` it (a dispatch's checks do not
+  count toward the required contexts). If CI fails, fix it, run only the
+  relevant targeted local checks and probes, rereview, and CI runs again once
+  the fix is approved at an up-to-date head.
+  Details: engine contracts §When pull-request CI runs.
 - **Run `make ci` only on an explicit request for full local CI.** It matches
   the combined `test-and-audits` and `static-audits` CI gate set; parity is
   enforced by `tools/ci_parity_audit.py`. Details: engine contracts

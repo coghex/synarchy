@@ -48,11 +48,28 @@ AUDITED_JOBS = (AUDITED_JOB, STATIC_AUDIT_JOB)
 #: may wait on. Anything else in its `needs` puts it back behind a build.
 IMAGE_JOB = "resolve-image"
 
+#: The PR admission job (#2927). Every worker waits on it as well as on the
+#: image: it publishes the admitted PR identity (`mode`, `base_sha`) the
+#: workers read, and resolve-image is gated on its verdict.
+ADMISSION_JOB = "admission"
+
+#: What every worker must need, exactly: the admission and the image. Still
+#: no build job: the split's whole point is that engine-free gates and lanes
+#: start as soon as the image resolves.
+WORKER_NEEDS = frozenset({ADMISSION_JOB, IMAGE_JOB})
+
 #: The stable status context the drainer and branch protection consume.
 AGGREGATE_JOB = "build-test"
 
 #: The separate real-engine worker that runs alongside AUDITED_JOBS on PRs.
-PROBE_JOB = "behavior-probes"
+#: Its required context is NOT this job: a skipped worker would read as a
+#: pass, so the required name `behavior-probes` lives on PROBE_GATE_JOB.
+PROBE_JOB = "behavior-probe-worker"
+
+#: The always-running gate that carries the required `behavior-probes` name
+#: (#2927): it fails for a head that was not admitted and for a worker that
+#: did not succeed, and expects the worker skipped on a master push.
+PROBE_GATE_JOB = "behavior-probes"
 
 #: The headless suite, one matrix leg per lane (#2745). Not an audited
 #: gate-set job: it runs `cabal test`, which the gate-set comparison does
@@ -85,8 +102,15 @@ PROJECT_CACHE_IF = (
     "github.event_name == 'push' && github.ref == 'refs/heads/master' "
     "&& needs.build-test.result == 'success' "
     "&& needs.test-and-audits.outputs.docs_only != 'true'")
-AGGREGATE_NEEDS = frozenset({AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB, LANE_JOB})
-PROBE_JOB_IF = "github.event_name == 'pull_request'"
+AGGREGATE_NEEDS = frozenset({ADMISSION_JOB, AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB,
+                             LANE_JOB})
+PROBE_GATE_NEEDS = frozenset({ADMISSION_JOB, PROBE_JOB})
+PROBE_JOB_IF = "needs.admission.outputs.mode == 'pr'"
+
+#: The two required contexts that always run (`build-test`, `behavior-probes`)
+#: carry exactly this condition, so a skipped or failed dependency cannot skip
+#: the verdict (a skipped required job reads as a pass).
+REQUIRED_CONTEXT_IF = "always()"
 PROBE_REQUIRED_COMMANDS = frozenset({
     "python3 tools/ci_probes.py --stdin",
     ("python3 tools/run_probes.py --only "
@@ -165,7 +189,7 @@ UNIT_ASSET_COMMAND = "python3 tools/pack_atlas.py --validate-only --strict"
 UNIT_ASSET_SELECTOR_COMMAND = (
     "python3 tools/ci_expensive_gates.py --stdin --gate " + UNIT_ASSET_GATE)
 UNIT_ASSET_CI_IF = (
-    "github.event_name != 'pull_request' "
+    "needs.admission.outputs.mode != 'pr' "
     "|| steps.expensive-gates.outputs.unit-assets == 'true'")
 
 #: Cabal build/test verbosity (#1920). At Cabal's default verbosity a cold
