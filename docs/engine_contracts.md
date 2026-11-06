@@ -475,14 +475,19 @@ moves afterwards can still require a branch update and a further run under
 1. the pull request is open and its live head is the head the run is for;
 2. it carries a live `reviewed:approve` label, read from GitHub after the
    stale-approval outcome is known, never taken from the event payload;
-3. every `review-gate.yml` run for that exact head has settled and its newest
-   real `dismiss-stale-approval` outcome has completed and succeeded; a
-   `synchronize` must have one. The runs are waited for, up to 15 minutes. A
-   head with no registered review-gate run, or a run whose jobs are not yet
-   listed, is pending rather than "never synchronized", and the dismissal
-   job's skipped records (on `opened`/`labeled` events) are not outcomes. A
-   successful strip is green too, which is why the live label is also read,
-   after the outcome, and why an unreadable API denies admission;
+3. the stale-approval evidence for this pull request's head is settled and
+   good. It is read from `review-gate.yml`'s own runs and jobs, scoped to the
+   pull request (its head branch and each run's own PR list, so a commit
+   shared by two PRs keeps their outcomes apart), and waited for up to 15
+   minutes. The newest real `dismiss-stale-approval` outcome must have
+   completed and succeeded. The job's skipped records (on `opened`/`labeled`
+   events) are not outcomes. Absence of any outcome is accepted only for the
+   PR's initial head, proved positively: every review-gate run of the PR is
+   for that head (a synchronize needs a different head to move to). A head
+   with other heads in the PR's history and no outcome yet, a run whose jobs
+   are not listed, or no registered run at all is pending, and an unreadable
+   API denies admission. A successful strip is green too, which is why the
+   live label is read after the outcome;
 4. the exact head SHA contains the base branch's current tip after a fresh
    fetch. The default `pull_request` checkout is a synthetic merge that
    contains the base even when the branch is behind, so ancestry is never
@@ -499,9 +504,14 @@ and only an event that can create an admissible state does anything: a
 `labeled` event for `reviewed:approve`, or a `synchronize` whose label
 survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
 concurrency group of its own, never cancels, and skips every job. Admitting
-events of one pull request share one group with `cancel-in-progress`, so a
-newer head cancels a superseded run, and two admitting events for the same
-head restart rather than duplicate.
+events of one head share one concurrency group (per head, no cancel), so they
+run one after another and never cancel each other's work. When an earlier
+run already ran CI for that head (its `static-audits` concluded), the later
+run's admission is mode `dup`: nothing runs, and `build-test` and
+`behavior-probes` mirror the earlier run's verdicts, so a duplicate event
+neither repeats the expensive work nor turns a green result red. An explicit
+dispatch is never suppressed. Superseding a head is explicit: admission
+cancels the pull request's live runs for any other head.
 
 **A gated-out run never counts as passing.** GitHub reports a skipped required
 job as success, and the newest check run of a name wins. So the required
