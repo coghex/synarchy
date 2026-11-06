@@ -1344,6 +1344,21 @@ def _current_save_policy_wiring_self_test() -> list[str]:
             any("retired" in problem for problem in
                 audit_current_save_policy_wiring(workflow + " --gate save-compat", local)),
             "historical gate reachability must fail")
+    # Admission reads which pull request and head the event is for, and nothing else.
+    identity = ("PR_NUMBER: ${{ github.event.pull_request.number }}\n"
+                "SHA: ${{ github.event.pull_request.head.sha }}")
+    _expect(failures, not audit_current_save_policy_wiring(workflow + "\n" + identity, local),
+            "admission's two identity inputs are the permitted pull_request reads")
+    for stray in ("github.event.pull_request.base.sha", "github.event.pull_request.head.ref",
+                  "github.event.pull_request.labels.*.name"):
+        _expect(failures,
+                any("pull_request event field" in problem for problem in
+                    audit_current_save_policy_wiring(workflow + "\n" + identity + "\n" + stray, local)),
+                f"a worker reading {stray} must fail")
+    _expect(failures,
+            any("admitted base" in problem for problem in
+                audit_current_save_policy_wiring(workflow.replace("CI_PR_BASE_SHA", ""), local)),
+            "a workflow without the admitted base must fail")
     return failures
 
 

@@ -129,12 +129,6 @@ SKIPPED = "skipped"
 #: push run in the selection is a master push by construction.
 CATEGORY_PULL_REQUEST = "pull_request"
 CATEGORY_PUSH = "push"
-#: Since #2927 pull-request CI runs only as `workflow_dispatch(pr, sha)`
-#: (the workflow has no `pull_request` trigger), so a dispatched run of the CI
-#: workflow IS a pull-request run. Historical runs keep `pull_request`.
-EVENT_DISPATCH = "workflow_dispatch"
-#: ci.yml's `run-name` for a dispatch: `CI PR <number> @ <head sha>`.
-DISPATCH_TITLE_RE = re.compile(r"CI PR (\d+) @ ([0-9a-f]{40})")
 CATEGORIES = (
     (CATEGORY_PULL_REQUEST, "pull-request runs"),
     (CATEGORY_PUSH, "master pushes"),
@@ -261,19 +255,10 @@ class RunTiming:
     @property
     def category(self) -> str | None:
         """Which aggregate category this run belongs to, if any."""
-        event = CATEGORY_PULL_REQUEST if self.event == EVENT_DISPATCH else self.event
         for name, _label in CATEGORIES:
-            if event == name:
+            if self.event == name:
                 return name
         return None
-
-    @property
-    def dispatched_pull_request(self) -> int | None:
-        """The pull request a dispatched run was started for, from its title."""
-        if self.event != EVENT_DISPATCH:
-            return None
-        match = DISPATCH_TITLE_RE.fullmatch(self.display_title)
-        return int(match.group(1)) if match else None
 
     @property
     def outcome(self) -> str:

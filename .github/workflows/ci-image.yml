@@ -28,9 +28,9 @@
 # different bytes to it without this lock.
 on:
   workflow_call:
-    # The caller states what ci.yml's admission resolved (#2927), because a
-    # dispatched run has no pull_request event to read it from: whether the
-    # head is a fork's (it can never publish) and the base SHA the fork
+    # The caller states what ci.yml's admission resolved from live state
+    # (#2927), not the pull_request payload, which a re-run replays: whether
+    # the head is a fork's (it can never publish) and the base SHA the fork
     # fallback resolves against. `fork` is required so a caller cannot forget
     # it and fall through to publishing.
     inputs:
@@ -123,11 +123,10 @@ jobs:
       # permissions: block above (a GitHub security restriction), so it
       # can pull/inspect but not push. Only a same-repo pull request or a
       # push (always same-repo, by definition) can publish a candidate.
-      # A fork PR now arrives as a workflow_dispatch of a base-repository
-      # branch (#2927), whose token CAN write, so the policy no longer rests
-      # on the token: ci.yml's admission reports the head's repository and
-      # this step refuses to publish for a fork, or for any value it cannot
-      # read as exactly `false`.
+      # The policy no longer rests on the token alone (#2927): ci.yml's
+      # admission reports the head's repository from live state, and this step
+      # refuses to publish for a fork, or for any value it cannot read as
+      # exactly `false`.
       - name: Determine publish capability
         id: fork
         env:

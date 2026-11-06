@@ -2,20 +2,26 @@
 # test tiers on Linux — the first automated validation of the Linux
 # build (development is on macOS).
 #
-# Pull-request CI runs only by explicit dispatch (#2927). Nothing a pull
-# request does starts it: the workflow triggers on pushes to master and on
-# `workflow_dispatch(pr, sha)`, which the manager starts once the head is
-# approved at an up-to-date branch:
+# Pull-request CI runs once per approved head, started by the manager (#2927).
+# A pull_request event starts this workflow on every push, but only the cheap
+# `admission` job does anything for a head that is not admitted: the manager
+# starts the real run by RE-RUNNING the head's workflow run once the head is
+# approved and up to date:
 #
-#     gh workflow run ci.yml --ref <branch> -f pr=<N> -f sha=<head sha>
+#     gh run rerun <run id of the pull_request run for that head>
 #
-# The `admission` job checks those inputs through tools/ci_pr_admission.py
-# (the SHA is the PR's current head and the revision this run executes, the
-# head contains the base's current tip, and the review service's head-bound
-# marker approves it). Every worker is gated behind it, and the two required
-# contexts that always run (`build-test`, `behavior-probes`) FAIL with the
-# admission's reason on a dispatch that was not admitted. A head that is never
-# dispatched leaves them pending, so merging stays blocked. See
+# (the whole run: the admission decision is part of it). A rerun keeps the
+# pull_request event and the PR association, which is why the required checks
+# count; a workflow_dispatch run does not (its suite is left out of the PR's
+# status rollup, so branch protection reports the contexts missing).
+#
+# The `admission` job decides through tools/ci_pr_admission.py, from LIVE
+# state, never the event payload a rerun replays: the event's head is the
+# pull request's current head, the code this run checks out has that head's
+# tree, the head contains the base's current tip, and the review service's
+# head-bound marker approves it. Every worker is gated behind it, and the two
+# required contexts that always run (`build-test`, `behavior-probes`) FAIL with
+# the admission's reason on a run that was not admitted. See
 # docs/engine_contracts.md §When pull-request CI runs.
 #
 # Job layout (nine jobs, four of them workers):
@@ -183,34 +189,17 @@
 # see tools/ci-local.sh's -fforce-recomp for the local gate's mitigation.
 name: CI
 
-# A dispatched run says which pull request and head it is for.
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('CI PR {0} @ {1}', inputs.pr, inputs.sha) || github.event.head_commit.message }}
-
 on:
   push:
     branches: [master]
-  # Pull-request CI (#2927): started by hand for one PR head, never by a
-  # pull-request event. Admission applies the approval and freshness rules,
-  # so a dispatch is not a bypass. `--ref` must name a branch in THIS
-  # repository whose tip is exactly `sha`: the run, its checkouts and its
-  # check runs then belong to that commit. For a fork PR push the fork's head
-  # commit to a branch here first (`git push origin <sha>:refs/heads/ci/pr-<N>`)
-  # and dispatch that branch; the checks land on the fork PR's exact head.
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Pull request number to run CI for
-        required: true
-        type: string
-      sha:
-        description: Exact head commit of that pull request (the dispatched ref's tip)
-        required: true
-        type: string
+  # Pull-request CI (#2927): a pull_request event starts a run that admission
+  # gates out until the manager re-runs it at an approved, up-to-date head.
+  pull_request:
 
-# A dispatch is keyed on the PR number alone (#2927), so a dispatch for a newer
-# head cancels the older head's run. That also means ANY dispatch for the PR
-# (even one that admission then refuses) cancels its in-flight run; dispatch
-# again if that happens.
+# A pull_request run supersedes its own older runs (cancel-in-progress), so a
+# new push cancels the previous head's run, and so does a re-run of a run for
+# an older head (admission refuses it as not the current head; re-run the
+# current head's run again if that cancelled it).
 #
 # A master PUSH must never cancel another master push (#1490). Keying
 # every push on its own SHA gives each master commit its own group, so
@@ -225,26 +214,29 @@ on:
 # which point two of them had each burned their CI reruns and been
 # quarantined by the drainer.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('ci-pr-{0}', inputs.pr) || format('ci-{0}', github.sha) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # PR admission (#2927). Decides whether this run may do expensive work.
   #
-  # A master push is always admitted. A dispatch is admitted only when its
-  # inputs check out against the pull request and git (tools/ci_pr_admission.py,
-  # self-tested): `sha` is the PR's current head AND the revision this run
-  # executes (github.sha, which every checkout, the reusable image workflow and
-  # the check runs follow), the head contains the base's current tip after a
-  # fresh fetch, and the newest head-bound review marker by the repository
-  # owner's account approves it (or approves an earlier head this one only
-  # carries onto a newer base). Evidence it cannot read fails closed. It reads
-  # the pull request's comments and git, never other runs.
+  # A master push is always admitted. A pull_request run is admitted only when
+  # the live state of the pull request and git check out
+  # (tools/ci_pr_admission.py, self-tested): the event's head is the PR's
+  # CURRENT head, the revision this run checks out has that head's tree (the
+  # synthetic merge of an up-to-date head IS the head), the head contains the
+  # base's current tip after a fresh fetch, and the newest head-bound review
+  # marker by the repository owner's account approves it (or approves an
+  # earlier head this one only carries onto a newer base). Evidence it cannot
+  # read fails closed. It reads the pull request's comments and git, never
+  # other runs, and never the event payload as evidence of anything but which
+  # head this run was started for: a re-run replays that payload.
   #
-  # The job itself succeeds whether or not it admits: it publishes `eligible`
-  # and a `reason`, resolve-image is gated on `eligible`, and so every worker is
-  # skipped transitively. `build-test` and `behavior-probes` then turn a
-  # refused dispatch into a FAILED required check carrying the reason.
+  # The decision is published as outputs and then, when it refuses, the job
+  # FAILS with the reason, so a re-run of only the failed jobs repeats the
+  # decision too. resolve-image is gated on `eligible`, and so every worker is
+  # skipped transitively. `build-test` and `behavior-probes` turn the refusal
+  # into FAILED required checks carrying the reason.
   admission:
     name: ci-admission
     runs-on: ubuntu-26.04
@@ -264,7 +256,7 @@ jobs:
       fork: ${{ steps.admit.outputs.fork }}
     steps:
       # The run's own revision, full history: ancestry is judged against it,
-      # and the helper refuses a run whose revision is not the supplied SHA.
+      # and the helper refuses a run whose tree is not the head's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -275,8 +267,8 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ inputs.pr }}
-          SHA: ${{ inputs.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_AUTHOR: ${{ github.repository_owner }}
         run: >-
           python3 tools/ci_pr_admission.py admit
@@ -288,6 +280,13 @@ jobs:
           --review-author "$REVIEW_AUTHOR"
           --github-output "$GITHUB_OUTPUT"
           --github-summary "$GITHUB_STEP_SUMMARY"
+      - name: Fail a refused admission
+        if: steps.admit.outputs.eligible != 'true'
+        env:
+          REASON: ${{ steps.admit.outputs.reason }}
+        run: |
+          echo "::error::CI was not admitted for this run: ${REASON:-the admission step produced no decision}"
+          exit 1
 
   # Resolves (building + validating + first-publishing when needed) the
   # immutable, content-addressed CI image tag both test jobs consume. Lives
@@ -303,7 +302,7 @@ jobs:
     needs: admission
     if: needs.admission.outputs.eligible == 'true'
     uses: ./.github/workflows/ci-image.yml
-    # The admitted identity, so a dispatched fork head is never treated as
+    # The admitted identity, so a fork head is never treated as
     # publish-capable and the fork fallback resolves against the admitted base.
     with:
       fork: ${{ needs.admission.outputs.fork == 'true' }}
@@ -323,7 +322,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     # The admitted PR identity (#2927), for every PR-mode branch below: an
-    # admitted workflow_dispatch runs as mode `pr`, with the base SHA admission
+    # admitted pull_request run is mode `pr`, with the base SHA admission
     # resolved. Nothing here reads a pull_request event field.
     env:
       CI_MODE: ${{ needs.admission.outputs.mode }}
@@ -765,7 +764,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     # The admitted PR identity (#2927), for every PR-mode branch below: an
-    # admitted workflow_dispatch runs as mode `pr`, with the base SHA admission
+    # admitted pull_request run is mode `pr`, with the base SHA admission
     # resolved. Nothing here reads a pull_request event field.
     env:
       CI_MODE: ${{ needs.admission.outputs.mode }}
@@ -1029,7 +1028,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     # The admitted PR identity (#2927), for every PR-mode branch below: an
-    # admitted workflow_dispatch runs as mode `pr`, with the base SHA admission
+    # admitted pull_request run is mode `pr`, with the base SHA admission
     # resolved. Nothing here reads a pull_request event field.
     env:
       CI_MODE: ${{ needs.admission.outputs.mode }}
@@ -2041,12 +2040,12 @@ jobs:
   # intentionally skipped and test-and-audits + static-audits remain the
   # complete post-merge backstop.
   #
-  # PR admission (#2927): a dispatch that was not admitted skips every worker,
-  # so the worker assertions alone would already fail; the first check says WHY
+  # PR admission (#2927): a run that was not admitted skips every worker, so
+  # the worker assertions alone would already fail; the first check says WHY
   # (the admission's reason) instead of leaving a bare "skipped". It is also
   # what makes an unapproved or behind head FAIL here rather than read as a
-  # pass. A head that is never dispatched has no run at all, so this context
-  # stays pending and merging stays blocked.
+  # pass. The manager's re-run of the admitted head's run is what turns it
+  # green.
   build-test:
     if: always()
     needs:
@@ -2070,7 +2069,7 @@ jobs:
           LANES_RESULT: ${{ needs.headless-lanes.result }}
         run: |
           if [ "$ADMITTED" != true ]; then
-            echo "::error::CI was not admitted for this dispatch: ${ADMISSION_REASON:-the admission job produced no decision}"
+            echo "::error::CI was not admitted for this run: ${ADMISSION_REASON:-the admission job produced no decision}"
             exit 1
           fi
           test "$TESTS_RESULT" = success
@@ -2102,7 +2101,7 @@ jobs:
           WORKER_RESULT: ${{ needs.behavior-probe-worker.result }}
         run: |
           if [ "$ADMITTED" != true ]; then
-            echo "::error::behavior probes were not admitted for this dispatch: ${ADMISSION_REASON:-the admission job produced no decision}"
+            echo "::error::behavior probes were not admitted for this run: ${ADMISSION_REASON:-the admission job produced no decision}"
             exit 1
           fi
           if [ "$ADMISSION_MODE" = pr ]; then

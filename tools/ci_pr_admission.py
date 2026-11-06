@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Admission for a dispatched pull-request CI run (#2927).
+"""Admission for a pull-request CI run (#2927).
 
-Pull-request CI never starts on a pull-request event. `.github/workflows/ci.yml`
-runs its expensive work for a pull request only through `workflow_dispatch`,
-which the manager starts once the head is approved and up to date:
+Pull-request CI does its expensive work once per approved, up-to-date head, and
+only when the manager asks for it. A `pull_request` event starts
+`.github/workflows/ci.yml` on every push, and this helper, the first job of that
+run, refuses it unless the head is admitted; the manager then re-runs the head's
+run, which repeats this decision against the live state:
 
-    gh workflow run ci.yml --ref <branch> -f pr=<N> -f sha=<head sha>
+    gh run rerun <run id of the pull_request run for that head>
 
-This helper is the first job of that run. It checks the INPUTS against the
-pull request and the repository, and nothing else: it never reads another
-workflow run's listing or result, and it never trusts the label. A master push
-is admitted unconditionally (it is the post-merge backstop). A dispatch is
-admitted only when every one of these holds, and any evidence it cannot read
-fails closed:
+(A `workflow_dispatch` run was tried first and does not work: GitHub leaves its
+check suite out of the PR's status rollup, so the required contexts stay
+missing. A re-run keeps the `pull_request` event and the PR association.)
 
-  1. `pr` and `sha` are well formed, and the PR is open.
-  2. `sha` is the pull request's CURRENT head.
-  3. The run itself executes `sha` (`github.sha`). A valid PR/SHA pair
-     dispatched with a different `--ref` fails: the checkouts of every job,
-     the reusable image workflow, and the check runs the required contexts
-     attach to all follow `github.sha`, so binding it here binds all of them.
-  4. `sha` contains the base branch's current tip, after a fresh fetch
+The decision comes from LIVE state, never from the event payload, because a
+re-run replays the payload of the original run. The payload supplies only which
+pull request and head the run was started for. A master push is admitted
+unconditionally (it is the post-merge backstop). A pull_request run is admitted
+only when every one of these holds, and any evidence it cannot read fails
+closed:
+
+  1. `pr` and `sha` (the event's head) are well formed, and the PR is open.
+  2. `sha` is the pull request's CURRENT head, so a re-run of an older head's
+     run is refused.
+  3. `sha` contains the base branch's current tip, after a fresh fetch
      (`git merge-base --is-ancestor <tip> <sha>`); never the synthetic merge
      ref, which can contain the base when the branch does not.
+  4. The revision this run checks out (`github.sha`, the synthetic merge) has
+     exactly the head's tree. With 3 that is always so for an unchanged head;
+     checking it binds every checkout, the reusable image workflow and the
+     check runs to the code that was approved.
   5. The review service's head-bound marker approves it. The newest
      `<!-- pr-review:v2 ... head=<sha> verdict=... -->` record by the trusted
      review account is selected over ALL comment pages, then evaluated:
@@ -35,9 +42,9 @@ fails closed:
      whatever that record says; a malformed newest record, a record by anyone
      else and a lingering `reviewed:approve` label grant nothing.
 
-The decision is published as outputs. A refused dispatch still SUCCEEDS here:
-`eligible=false` plus a reason. The workers are gated on it, and the required
-contexts `build-test` and `behavior-probes` then FAIL with the reason, because
+The decision is published as outputs. `eligible=false` plus a reason skips the
+workers and the workflow fails the admission job with that reason, and the
+required contexts `build-test` and `behavior-probes` FAIL with it too, because
 GitHub reports a skipped required job as passing.
 
 `--self-test [--workflow PATH]` runs the decision tables, throwaway git
@@ -109,6 +116,7 @@ class Evidence(NamedTuple):
     comments: Callable[[str, str], list]
     base_tip: Callable[[str], str]
     contains: Callable[[str, str], bool]
+    same_tree: Callable[[str, str], bool]
     replay_keeps: Callable[[str, str, str, str], bool]
 
 
@@ -149,8 +157,8 @@ def decide(event_name: str, run_sha: str, pr_number: str, sha: str, repo: str,
     run_sha = (run_sha or "").strip().lower()
     if event_name == "push":
         return Admission(True, MODE_PUSH, "master push: always admitted", head_sha=run_sha)
-    if event_name != "workflow_dispatch":
-        return refuse(f"event {event_name!r} does not run pull-request CI (dispatch it)")
+    if event_name != "pull_request":
+        return refuse(f"event {event_name!r} does not run pull-request CI")
 
     pr_number = (pr_number or "").strip()
     sha = (sha or "").strip().lower()
@@ -158,10 +166,8 @@ def decide(event_name: str, run_sha: str, pr_number: str, sha: str, repo: str,
         return refuse(f"input pr {pr_number!r} is not a pull request number")
     if not _SHA.fullmatch(sha):
         return refuse(f"input sha {sha!r} is not a full 40-character commit SHA", pr_number=pr_number)
-    if run_sha != sha:
-        return refuse(f"this run executes {run_sha[:12] or '(unknown)'}, not the supplied {sha[:12]}: "
-                      f"dispatch with --ref naming a branch whose tip is {sha}",
-                      pr_number=pr_number, head_sha=sha)
+    if not _SHA.fullmatch(run_sha):
+        return refuse(f"this run's revision {run_sha!r} is not a full commit SHA", pr_number=pr_number, head_sha=sha)
 
     def no(reason: str, **kw: object) -> Admission:
         return refuse(reason, pr_number=pr_number, head_sha=sha, **kw)  # type: ignore[arg-type]
@@ -188,7 +194,10 @@ def decide(event_name: str, run_sha: str, pr_number: str, sha: str, repo: str,
         known = {"base_ref": base_ref, "base_sha": tip, "fork": fork}
         if not ev.contains(tip, sha):
             return no(f"{sha[:12]} does not contain {base_ref}'s current tip {tip[:12]}: "
-                      f"update the branch, get it re-approved if needed, then dispatch", **known)
+                      f"update the branch, get it re-approved if needed, then re-run", **known)
+        if run_sha != sha and not ev.same_tree(run_sha, sha):
+            return no(f"this run checked out {run_sha[:12]}, whose tree is not {sha[:12]}'s: "
+                      f"push again so CI runs the current head", **known)
         approved_head, verdict = latest_review_record(ev.comments(repo, pr_number), author)
     except Exception as error:  # noqa: BLE001 - any read failure fails closed
         return no(f"evidence unreadable, failing closed: {error}")
@@ -268,6 +277,15 @@ def live_evidence(repo_dir: str = ".") -> Evidence:
             return False
         raise EvidenceError(f"ancestry of {sha[:12]} could not be determined: {err.strip()[:200]}")
 
+    def same_tree(run_sha: str, sha: str) -> bool:
+        trees = []
+        for rev in (run_sha, sha):
+            code, out, err = _run("git", "rev-parse", "--verify", f"{rev}^{{tree}}", cwd=repo_dir)
+            if code != 0:
+                raise EvidenceError(f"the tree of {rev[:12]} is unreadable: {err.strip()[:200]}")
+            trees.append(out.strip())
+        return trees[0] == trees[1]
+
     def replay_keeps(approved: str, sha: str, base_ref: str, tip: str) -> bool:
         # The approved head may have been force-pushed away; fetching it by
         # SHA is best effort, and an unreachable head simply is not kept.
@@ -275,7 +293,7 @@ def live_evidence(repo_dir: str = ".") -> Evidence:
         decision = review_gate_decision.decide(review_gate_decision.Git(repo_dir), approved, sha, base_ref, tip)
         return decision.keeps_label
 
-    return Evidence(pull, comments, base_tip, contains, replay_keeps)
+    return Evidence(pull, comments, base_tip, contains, same_tree, replay_keeps)
 
 
 def _single_line(text: str) -> str:
@@ -300,7 +318,7 @@ def _emit(result: Admission, path: str) -> None:
             handle.write(f"{key}={_single_line(value)}\n")
 
 
-def _admit_main(args: argparse.Namespace) -> int:
+def _admit_main(args: argparse.Namespace) -> int:  # noqa: D103
     result = decide(args.event_name, args.run_sha, args.pr_number, args.sha, args.repo,
                     args.review_author, live_evidence(args.repo_dir))
     line = f"CI admission: {'ADMITTED' if result.eligible else 'NOT admitted'} (mode {result.mode}) {result.reason}"
@@ -331,7 +349,8 @@ def comment(cid: int, body: str, login: str = AUTHOR, kind: str = "User", create
 
 
 def fake(*, head: str = A, state: str = "open", head_repo: str = REPO, base_ref: str = "master",
-         tip: str = C, contained: bool = True, comments: object = None, keeps: bool = False,
+         tip: str = C, contained: bool = True, same_tree: bool = True, comments: object = None,
+         keeps: bool = False,
          labels: Sequence[str] = ()) -> Evidence:
     pull = {"state": state, "labels": [{"name": n} for n in labels],
             "head": {"sha": head, "ref": "feature", "repo": {"full_name": head_repo} if head_repo else None},
@@ -342,7 +361,8 @@ def fake(*, head: str = A, state: str = "open", head_repo: str = REPO, base_ref:
             raise comments
         return comments if comments is not None else []
 
-    return Evidence(lambda *_: pull, read, lambda ref: tip, lambda t, s: contained, lambda *a: keeps)
+    return Evidence(lambda *_: pull, read, lambda ref: tip, lambda t, s: contained,
+                    lambda r, s: same_tree, lambda *a: keeps)
 
 
 def _raise(error: Exception) -> Callable[..., object]:
@@ -437,7 +457,7 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
         if got != want:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
-    def run(sha: str = A, *, event: str = "workflow_dispatch", run_sha: str | None = None,
+    def run(sha: str = A, *, event: str = "pull_request", run_sha: str | None = None,
             pr: str = "7", ev: Evidence | None = None) -> Admission:
         return decide(event, sha if run_sha is None else run_sha, pr, sha, REPO, AUTHOR, ev or fake())
 
@@ -476,19 +496,29 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
           run(ev=broken._replace(pull=lambda *_: [])).eligible, False)
     check("a deleted fork fails closed", run(ev=fake(comments=approve, head_repo="")).eligible, False)
     check("a refusal never reports an eligible mode", failed.mode, "none")
+    check("a stale event head is refused even on a re-run of its own run",
+          run(B, run_sha=C, ev=fake(head=A, comments=[comment(1, marker(B))], same_tree=True)).eligible, False)
 
     # -- input shape and run-revision binding ---------------------------------------
     check("a short sha is refused", run("abc123", run_sha="abc123", ev=fake(comments=approve)).eligible, False)
     check("a non-number pr is refused", run(pr="7; rm", ev=fake(comments=approve)).eligible, False)
     check("a leading-zero pr is refused", run(pr="07", ev=fake(comments=approve)).eligible, False)
     check("an empty pr is refused", run(pr="", ev=fake(comments=approve)).eligible, False)
-    mismatch = run(run_sha=B, ev=fake(comments=approve))
-    check("the run must execute the supplied sha (valid pair, different --ref)", mismatch.eligible, False)
-    check("... naming --ref", "--ref" in mismatch.reason, True)
+    check("the synthetic merge of an up-to-date head (same tree) is admitted",
+          run(run_sha=B, ev=fake(comments=approve, same_tree=True)).eligible, True)
+    mismatch = run(run_sha=B, ev=fake(comments=approve, same_tree=False))
+    check("a run whose checked-out tree is not the head's is refused", mismatch.eligible, False)
+    check("... naming the tree", "tree" in mismatch.reason, True)
+    check("a tree that cannot be read fails closed",
+          run(run_sha=B, ev=fake(comments=approve)._replace(same_tree=_raise(EvidenceError("x")))).eligible, False)
+    check("a run revision that is not a SHA is refused", run(run_sha="main", ev=fake(comments=approve)).eligible, False)
     check("an empty run revision is refused", run(run_sha="", ev=fake(comments=approve)).eligible, False)
     check("sha case does not matter", run(A.upper(), run_sha=A, ev=fake(comments=approve)).eligible, True)
-    check("a pull_request event runs nothing", run(event="pull_request", ev=fake(comments=approve)).eligible, False)
+    check("a workflow_dispatch event runs nothing",
+          run(event="workflow_dispatch", ev=fake(comments=approve)).eligible, False)
     check("an unknown event runs nothing", run(event="schedule", ev=fake(comments=approve)).eligible, False)
+    check("a push's run revision is not asked for a tree",
+          run(event="push", run_sha=B, ev=fake(same_tree=False)).eligible, True)
 
     # -- the label is not evidence --------------------------------------------------
     check("a lingering label with no record is refused",
@@ -600,10 +630,10 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
         def ev_for(head: str, records: list) -> Evidence:
             return Evidence(lambda *_: {"state": "open", "head": {"sha": head, "repo": {"full_name": REPO}},
                                         "base": {"ref": "master"}},
-                            lambda *_: records, live.base_tip, live.contains, live.replay_keeps)
+                            lambda *_: records, live.base_tip, live.contains, live.same_tree, live.replay_keeps)
 
         def real(head: str, records: list) -> Admission:
-            return decide("workflow_dispatch", head, "7", head, REPO, AUTHOR, ev_for(head, records))
+            return decide("pull_request", head, "7", head, REPO, AUTHOR, ev_for(head, records))
 
         check("git: approved A then a clean update to B admits",
               real(merged, [comment(1, marker(approved))]).eligible, True)
@@ -615,6 +645,23 @@ def _self_test(workflow: Path = CI_WORKFLOW, image_workflow: Path = CI_IMAGE_WOR
         check("git: an approval of an edit that was then rejected is refused",
               real(edited, [comment(1, marker(edited)), comment(2, marker(edited, "CHANGES_REQUESTED"))]).eligible,
               False)
+        # The synthetic merge GitHub checks out for a pull_request run.
+        g.git("checkout", "-q", "-b", "merge-ok", merged)
+        g.git("merge", "-q", "--no-ff", "-m", "synthetic", "master")
+        synthetic = g.git("rev-parse", "HEAD")
+        g.git("checkout", "-q", "-b", "merge-stale", approved)
+        g.git("merge", "-q", "--no-ff", "-m", "synthetic", "master")
+        behind_merge = g.git("rev-parse", "HEAD")
+        check("git: the merge of an up-to-date head has the head's tree", live.same_tree(synthetic, merged), True)
+        check("git: a merge that brings in the base differs from the old head's tree",
+              live.same_tree(behind_merge, approved), False)
+        check("git: an unknown revision is a tree error", _raises(lambda: live.same_tree(D, merged)), True)
+        merged_run = decide("pull_request", synthetic, "7", merged, REPO, AUTHOR,
+                            ev_for(merged, [comment(1, marker(merged))]))
+        check("git: a re-run on the synthetic merge of the admitted head is admitted", merged_run.eligible, True)
+        stale_run = decide("pull_request", behind_merge, "7", edited, REPO, AUTHOR,
+                           ev_for(edited, [comment(1, marker(edited))]))
+        check("git: a run that checked out something else than the head is refused", stale_run.eligible, False)
         nowhere = live_evidence(str(Path(tmp) / "nowhere"))
         check("git: a fetch failure is an error", _raises(lambda: nowhere.base_tip("master")), True)
 
@@ -643,21 +690,22 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
     jobs = document.get("jobs") or {}
     squash = lambda text: " ".join(str(text).split())  # noqa: E731
 
-    check("ci.yml: only push and workflow_dispatch trigger it", sorted(triggers), ["push", "workflow_dispatch"])
+    check("ci.yml: only push and pull_request trigger it (a dispatch's checks do not count)",
+          sorted(triggers), ["pull_request", "push"])
     check("ci.yml: push stays master only", triggers.get("push"), {"branches": ["master"]})
-    inputs = (triggers.get("workflow_dispatch") or {}).get("inputs") or {}
-    check("ci.yml: dispatch inputs are pr and sha", sorted(inputs), ["pr", "sha"])
-    for name in ("pr", "sha"):
-        check(f"ci.yml: input {name} is required", (inputs.get(name) or {}).get("required"), True)
+    check("ci.yml: pull_request keeps the default activity types", triggers.get("pull_request"), None)
 
     concurrency = document.get("concurrency") or {}
     group = str(concurrency.get("group", ""))
     cancel = str(concurrency.get("cancel-in-progress", ""))
-    dispatch = {"github.event_name": "workflow_dispatch", "inputs.pr": "7", "github.sha": A}
+    check("ci.yml: concurrency groups are the literal prefix ci- plus one expression",
+          bool(re.fullmatch(r"ci-\$\{\{[^}]*\}\}", group)), True)
+    group = group[len("ci-"):]
+    pull = {"github.event_name": "pull_request", "github.ref": "refs/pull/7/merge", "github.sha": B}
     push = {"github.event_name": "push", "github.sha": A}
-    check("ci.yml: a dispatch's group is keyed on the PR number only", _translate(group, dispatch), "ci-pr-7")
-    check("ci.yml: a newer head's dispatch supersedes the PR's older run", _translate(cancel, dispatch), True)
-    check("ci.yml: a push never cancels another master push (group per SHA)", _translate(group, push), f"ci-{A}")
+    check("ci.yml: a pull request's group is keyed on its merge ref", _translate(group, pull), "refs/pull/7/merge")
+    check("ci.yml: a newer push supersedes the PR's older run", _translate(cancel, pull), True)
+    check("ci.yml: a push never cancels another master push (group per SHA)", _translate(group, push), A)
     check("ci.yml: a push does not cancel", _translate(cancel, push), False)
 
     admission = jobs.get("admission") or {}
@@ -671,8 +719,14 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
           all("ref" not in (s.get("with") or {}) for s in steps if "checkout" in str(s.get("uses", ""))), True)
     env = helper_step.get("env") or {}
     check("ci.yml: admission binds the run revision", env.get("RUN_SHA"), "${{ github.sha }}")
-    check("ci.yml: admission reads the dispatch inputs",
-          (env.get("PR_NUMBER"), env.get("SHA")), ("${{ inputs.pr }}", "${{ inputs.sha }}"))
+    check("ci.yml: admission reads which pull request and head the event is for",
+          (env.get("PR_NUMBER"), env.get("SHA")),
+          ("${{ github.event.pull_request.number }}", "${{ github.event.pull_request.head.sha }}"))
+    refusal = next((s for s in steps if s.get("name") == "Fail a refused admission"), {})
+    check("ci.yml: a refused admission fails the job", squash(refusal.get("if", "")),
+          "steps.admit.outputs.eligible != 'true'")
+    check("ci.yml: the refusal step exits non-zero with the reason",
+          _verdict(str(refusal.get("run", "")), {"REASON": "not approved"}), 1)
     check("ci.yml: the trusted review author is the repository owner",
           env.get("REVIEW_AUTHOR"), "${{ github.repository_owner }}")
 
@@ -700,7 +754,11 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
     # Every job runs the admitted revision: none reads a pull_request field or picks a ref.
     text = workflow.read_text(encoding="utf-8")
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-    check("ci.yml: no step reads a pull_request event field", "github.event.pull_request" in code, False)
+    reads = sorted(set(re.findall(r"github\.event\.pull_request[\w.]*", code)))
+    check("ci.yml: the only pull_request event fields read are admission's two identity inputs",
+          reads, ["github.event.pull_request.head.sha", "github.event.pull_request.number"])
+    check("ci.yml: and only the admission job reads them",
+          [name for name, job in jobs.items() if "github.event.pull_request" in str(job)], ["admission"])
     check("ci.yml: no step selects a checkout ref of its own",
           bool(re.search(r"^\s+ref:", code, re.MULTILINE)), False)
 
@@ -710,7 +768,7 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
     def env_for(base_env: dict, mode: str, **over: str) -> dict:
         out = {key: "" for key in base_env}
         out.update({"ADMITTED": "true", "ADMISSION_MODE": mode, "ADMISSION_REASON": "ok",
-                    "EVENT_NAME": "push" if mode == "push" else "workflow_dispatch"})
+                    "EVENT_NAME": "push" if mode == "push" else "pull_request"})
         out.update(over)
         return out
 
@@ -735,9 +793,9 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
                           _verdict(script, {**good_pr, worker: bad}), 1)
             check("build-test: a probe result on a push must be skipped",
                   _verdict(script, {**good_push, "PROBES_RESULT": "success"}), 1)
-            check("build-test: a refused dispatch FAILS (every worker skipped)",
+            check("build-test: a refused run FAILS (every worker skipped)",
                   _verdict(script, env_for(base_env, "none", ADMITTED="false", **{n: "skipped" for n in names})), 1)
-            check("build-test: a refused dispatch fails even if every worker somehow succeeded",
+            check("build-test: a refused run fails even if every worker somehow succeeded",
                   _verdict(script, {**good_pr, "ADMITTED": "false", "ADMISSION_MODE": "none"}), 1)
             check("build-test: an admission that produced no decision fails",
                   _verdict(script, {**good_pr, "ADMITTED": "", "ADMISSION_MODE": ""}), 1)
@@ -751,7 +809,7 @@ def _check_workflow(workflow: Path, image_workflow: Path, check: Callable[[str, 
                   _verdict(script, env_for(base_env, "push", WORKER_RESULT="skipped")), 0)
             check("behavior-probes: a master push with a running worker fails",
                   _verdict(script, env_for(base_env, "push", WORKER_RESULT="success")), 1)
-            check("behavior-probes: a refused dispatch FAILS rather than skips",
+            check("behavior-probes: a refused run FAILS rather than skips",
                   _verdict(script, env_for(base_env, "none", ADMITTED="false", WORKER_RESULT="skipped")), 1)
             check("behavior-probes: an admission that produced no decision fails",
                   _verdict(script, env_for(base_env, "pr", ADMITTED="", WORKER_RESULT="success")), 1)

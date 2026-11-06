@@ -261,7 +261,7 @@ def lane_stats(lane_runs: list[dict]) -> dict:
     build seconds in the same run (same cache, same change): a lane builds the
     library and the suite but no executable.
     """
-    runs = [r for r in lane_runs if r["event"] in ("pull_request", "workflow_dispatch") and LANE_JOB.format("rest") in r["jobs"]]
+    runs = [r for r in lane_runs if r["event"] == "pull_request" and LANE_JOB.format("rest") in r["jobs"]]
     out: dict = {"n": len(runs), "wall": [r["wall_seconds"] for r in runs]}
     scale, fixed = [], []
     for r in runs:
@@ -346,10 +346,9 @@ def self_test() -> int:
     lane = {"seconds": 100, "steps": {LANE_BUILD: 50, LANE_RUN: 30}}
     jobs = {LANE_JOB.format(name): lane for name in LANES}
     jobs["test-and-audits"] = {"seconds": 1000, "steps": {AUDIT_LIB: 300, AUDIT_TESTS: 300}}
-    for event in ("pull_request", "workflow_dispatch"):
-        assert lane_stats([{"event": event, "wall_seconds": 5, "jobs": jobs}])["n"] == 1, event
-    mixed = [{"event": e, "wall_seconds": 5, "jobs": jobs} for e in ("push", "pull_request", "workflow_dispatch")]
-    assert lane_stats(mixed)["n"] == 2, "master pushes stay out of the pull-request lane statistics"
+    assert lane_stats([{"event": "pull_request", "wall_seconds": 5, "jobs": jobs}])["n"] == 1
+    mixed = [{"event": e, "wall_seconds": 5, "jobs": jobs} for e in ("push", "pull_request")]
+    assert lane_stats(mixed)["n"] == 1, "master pushes stay out of the pull-request lane statistics"
     d = frozenset({("lib", "A"), ("lib", "B")})
     o = frozenset({("lib", "B"), ("lib", "C")})
     u = frozenset({("lib", "A"), ("lib", "B"), ("lib", "C"), ("lib", "D")})
