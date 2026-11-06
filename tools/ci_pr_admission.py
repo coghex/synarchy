@@ -138,7 +138,8 @@ def no(mode: str, code: str, detail: str, head: str = "", base: str = "") -> Adm
 
 
 def decide(event: Event, pull: PullRequest | None,
-           dismissal: Dismissal | None, freshness: str) -> Admission:
+           dismissal: Dismissal | None, freshness: str,
+           dismissal_readable: bool = True) -> Admission:
     """The whole admission rule. Pure: every input is evidence already read.
 
     Every branch that cannot positively prove the green direction returns a
@@ -187,6 +188,13 @@ def decide(event: Event, pull: PullRequest | None,
                   run_head, base_sha)
 
     is_sync = event.name == "pull_request" and event.action == "synchronize"
+    if not dismissal_readable:
+        # Unreadable evidence is not verified absence: on a labeled or
+        # dispatch run "no dismissal run" is acceptable only when GitHub
+        # actually answered that there is none.
+        return no(MODE_PR, "dismissal-unreadable",
+                  f"the {DISMISSAL_CHECK} state for this head could not be read "
+                  "from GitHub, so it is unverified", run_head, base_sha)
     if dismissal is None:
         if is_sync:
             return no(MODE_PR, "dismissal-missing",
@@ -266,8 +274,15 @@ def fetch_dismissal(cli: Runner, repo: str, sha: str) -> tuple[bool, Dismissal |
     if rc != 0:
         return False, None
     try:
+        # review-gate.yml's dismissal job runs only on `synchronize`; on
+        # `opened` and `labeled` events GitHub still records the job as a
+        # SKIPPED check run. That is the absence of a dismissal, not an
+        # outcome of one: counting it would mask a real synchronize result
+        # (an initial approval, or an approval after a successful
+        # synchronize, would read as `dismissal-failed`).
         runs = [item for item in json.loads(out)["check_runs"]
-                if item.get("name") == DISMISSAL_CHECK]
+                if item.get("name") == DISMISSAL_CHECK
+                and item.get("conclusion") != "skipped"]
     except (ValueError, KeyError, TypeError):
         return False, None
     if not runs:
@@ -280,15 +295,18 @@ def fetch_dismissal(cli: Runner, repo: str, sha: str) -> tuple[bool, Dismissal |
 def await_dismissal(cli: Runner, repo: str, sha: str, *, require: bool,
                     wait_seconds: float, poll_seconds: float,
                     sleep: Callable[[float], None] = time.sleep,
-                    clock: Callable[[], float] = time.monotonic) -> Dismissal | None:
+                    clock: Callable[[], float] = time.monotonic
+                    ) -> tuple[bool, Dismissal | None]:
     """Wait for the stale-approval outcome for `sha` to be completed.
 
     On a synchronize the run must exist, so a missing one is waited for (it
     starts concurrently with CI). Elsewhere a missing run means the head never
     went through a synchronize and is accepted, but one that exists and is
     unfinished is still waited for. An unreadable API is retried like a
-    missing run. Returns the last seen state: completed, still pending at the
-    deadline, or None (never seen / never readable).
+    missing run. Returns (readable, run): `readable` is whether the LAST poll
+    could be read at all, and `run` the last seen state (completed, still
+    pending at the deadline, or None for confirmed absence). Unreadable is
+    never conflated with absent.
     """
     deadline = clock() + wait_seconds
     last: Dismissal | None = None
@@ -297,11 +315,11 @@ def await_dismissal(cli: Runner, repo: str, sha: str, *, require: bool,
         if readable:
             last = run
             if run is not None and run.status == "completed":
-                return run
+                return True, run
             if run is None and not require:
-                return None
+                return True, None
         if clock() >= deadline:
-            return last
+            return readable, (last if readable else None)
         sleep(poll_seconds)
 
 
@@ -338,9 +356,9 @@ def run_admit(event: Event, repo: str, *, cli: Runner = gh, run_git: Runner = gi
             or (event.name == "pull_request" and not is_admitting_event(event)):
         return decide(event, None, None, UNVERIFIED)
     run_head = event.pr_head_sha if event.name == "pull_request" else event.run_sha
-    dismissal = None
+    dismissal, readable = None, True
     if _SHA.fullmatch(run_head or "") and event.pr_number.isdigit():
-        dismissal = await_dismissal(
+        readable, dismissal = await_dismissal(
             cli, repo, run_head,
             require=(event.name == "pull_request" and event.action == "synchronize"),
             wait_seconds=wait_seconds, poll_seconds=poll_seconds,
@@ -349,7 +367,7 @@ def run_admit(event: Event, repo: str, *, cli: Runner = gh, run_git: Runner = gi
             if event.pr_number.isdigit() else None)
     base_ref = pull.base_ref if pull is not None else event.pr_base_ref
     freshness = base_freshness(run_git, run_head, base_ref)
-    return decide(event, pull, dismissal, freshness)
+    return decide(event, pull, dismissal, freshness, readable)
 
 
 def _single_line(text: str) -> str:
@@ -539,6 +557,13 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
          _pull(), Dismissal("in_progress", ""), CURRENT, False, "dismissal-pending"),
         ("unknown event", _event("schedule", ""), None, None, CURRENT, False, "unsupported-event"),
     ]
+    for label, event in (
+            ("labeled", _event("pull_request", "labeled", label=APPROVAL_LABEL)),
+            ("dispatch", _event("workflow_dispatch", "")),
+            ("synchronize", _event("pull_request", "synchronize"))):
+        unread = decide(event, _pull(), None, CURRENT, False)
+        check(f"decide/unreadable dismissal on {label}: eligible", unread.eligible, False)
+        check(f"decide/unreadable dismissal on {label}: code", unread.code, "dismissal-unreadable")
     decided: dict[str, Admission] = {}
     for label, event, pull, dismissal, freshness, want, code in cases:
         result = decide(event, pull, dismissal, freshness)
@@ -582,29 +607,44 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     fake_clock = lambda: float(next(ticks))  # noqa: E731
     nap = lambda _seconds: None  # noqa: E731
 
-    def wait(cli: Runner, *, require: bool, limit: float = 6) -> Dismissal | None:
+    def wait(cli: Runner, *, require: bool, limit: float = 6):
         return await_dismissal(cli, "o/r", HEAD, require=require, wait_seconds=limit,
                                poll_seconds=1, sleep=nap, clock=fake_clock)
 
     cli, calls = scripted(runs(), runs(), runs(item(1, "in_progress", None)),
                           runs(item(1, "completed", "success")))
-    check("await: delayed dismissal is waited for", wait(cli, require=True), _OK)
+    check("await: delayed dismissal is waited for", wait(cli, require=True), (True, _OK))
     check("await: it kept polling until completed", len(calls), 4)
     cli, _ = scripted(runs())
-    check("await: a synchronize with no run times out as missing", wait(cli, require=True), None)
+    check("await: a synchronize with no run times out as missing", wait(cli, require=True), (True, None))
     cli, calls = scripted(runs())
-    check("await: a non-synchronize accepts no run at once", wait(cli, require=False), None)
+    check("await: a non-synchronize accepts no run at once", wait(cli, require=False), (True, None))
     check("await: ... without polling", len(calls), 1)
     cli, _ = scripted((1, ""))
-    check("await: an unreadable API never counts as completed", wait(cli, require=True), None)
+    check("await: an unreadable API is reported unreadable, not absent", wait(cli, require=True), (False, None))
     cli, _ = scripted(runs(item(1, "in_progress", None)))
     check("await: a run still pending at the deadline is returned pending",
-          wait(cli, require=True), Dismissal("in_progress", ""))
+          wait(cli, require=True), (True, Dismissal("in_progress", "")))
     cli, _ = scripted(runs(item(1, "completed", "failure"), item(2, "completed", "success")))
-    check("await: the newest check run wins", wait(cli, require=True), _OK)
+    check("await: the newest check run wins", wait(cli, require=True), (True, _OK))
     cli, _ = scripted(runs(item(1, "completed", "success"), item(2, "completed", "failure")))
     check("await: a newer failed rerun wins over an older success",
-          wait(cli, require=True), Dismissal("completed", "failure"))
+          wait(cli, require=True), (True, Dismissal("completed", "failure")))
+    cli, _ = scripted((1, ""))
+    check("await: unreadable stays unreadable for a non-synchronize too",
+          wait(cli, require=False), (False, None))
+    # Round 1 of #2928: review-gate.yml records the dismissal job as a
+    # SKIPPED check run on opened/labeled events. It is the absence of a
+    # dismissal, never an outcome, and must not mask a real one.
+    cli, _ = scripted(runs(item(1, "completed", "success"), item(2, "completed", "skipped")))
+    check("await: a newer skipped run does not mask a successful synchronize",
+          wait(cli, require=True), (True, _OK))
+    cli, _ = scripted(runs(item(2, "completed", "skipped")))
+    check("await: only a skipped run is no evidence on a labeled head",
+          wait(cli, require=False), (True, None))
+    cli, _ = scripted(runs(item(2, "completed", "skipped")))
+    check("await: only a skipped run is no evidence on a synchronize",
+          wait(cli, require=True), (True, None))
 
     # -- run_admit end to end over scripted gh/git, outputs written --------
     def pull_json(**over: object) -> str:
@@ -654,9 +694,25 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("admit: unreadable pull request",
           admit(_event("pull_request", "synchronize"), pull=None, dismissal=done).code,
           "pr-identity-unresolved")
-    check("admit: dismissal API down",
+    check("admit: dismissal API down on a synchronize",
           admit(_event("pull_request", "synchronize"), pull=pull_json(), dismissal=None).code,
-          "dismissal-missing")
+          "dismissal-unreadable")
+    skipped_only = runs(item(5, "completed", "skipped"))[1]
+    check("admit: initial approval beside a skipped dismissal check",
+          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
+                dismissal=skipped_only).eligible, True)
+    mixed = runs(item(1, "completed", "success"), item(5, "completed", "skipped"))[1]
+    check("admit: approval after a successful synchronize despite a newer skipped check",
+          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
+                dismissal=mixed).eligible, True)
+    check("admit: dispatch recovery sees through a skipped check",
+          admit(_event("workflow_dispatch", ""), pull=pull_json(), dismissal=mixed).eligible, True)
+    check("admit: a labeled head whose checks API is unreadable is not admitted",
+          admit(_event("pull_request", "labeled", label=APPROVAL_LABEL), pull=pull_json(),
+                dismissal=None).code, "dismissal-unreadable")
+    check("admit: a dispatch whose checks API is unreadable is not admitted",
+          admit(_event("workflow_dispatch", ""), pull=pull_json(), dismissal=None).code,
+          "dismissal-unreadable")
     check("admit: master push needs no evidence",
           admit(_event("push", ""), pull=None, dismissal=None).eligible, True)
     check("admit: unrelated label event reads nothing",
