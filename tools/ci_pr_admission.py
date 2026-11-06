@@ -126,6 +126,17 @@ class Dismissal(NamedTuple):
     conclusion: str
 
 
+def identity_for(pr_number: str, base_ref: str, base_sha: str, head_sha: str) -> str:
+    """What a run validated: this PR, on this base, at this head.
+
+    ci.yml publishes it as the NAME of its `ci-identity` job. A run record
+    names no pull request for a dispatched run, and no base for any, so the
+    job name is the one place a finished run's validated identity can be read
+    back, for every kind of run alike.
+    """
+    return f"ci-identity PR {pr_number} base {base_ref}@{base_sha} head {head_sha}"
+
+
 class Admission(NamedTuple):
     eligible: bool
     mode: str
@@ -135,6 +146,7 @@ class Admission(NamedTuple):
     base_sha: str = ""
     mirror_build_test: str = ""
     mirror_probes: str = ""
+    identity: str = ""
 
     @property
     def reason(self) -> str:
@@ -335,23 +347,24 @@ def _timestamp(text: object) -> float:
         return -1.0
 
 
-def force_push_epoch(cli: Runner, repo: str, pr_number: str, sha: str
-                     ) -> tuple[bool, float]:
-    """When `sha` was last FORCE-PUSHED onto this pull request (0.0: never).
+def force_push_epoch(cli: Runner, repo: str, pr_number: str) -> tuple[bool, float]:
+    """When this pull request's head was last FORCE-PUSHED (0.0: never).
 
-    Answers (readable, epoch seconds). A head can only be visited twice by a
-    force push (ordinary pushes make new commits), and that leaves a
-    `head_ref_force_pushed` event on the PR timeline naming the commit, which
-    records the transition itself rather than inferring it from whichever
-    review-gate runs happen to be listed.
+    Answers (readable, epoch seconds). Any head that predates a force push can
+    only be the current head again through a push made after it: the force
+    push left some commit as the head, and getting back to the one in question
+    (by a second force push, or by an ordinary fast-forward after rewinding to
+    an ancestor) is a later transition. So a head's evidence counts only from
+    the latest force push of the PR onward, whichever commit that push named.
+    The `head_ref_force_pushed` timeline event records the push itself rather
+    than inferring it from whichever review-gate runs are listed yet.
     """
     events = _paged(cli, f"repos/{repo}/issues/{pr_number}/timeline", None)
     if events is None:
         return False, 0.0
     stamps = [_timestamp(event.get("created_at")) for event in events
               if isinstance(event, dict)
-              and event.get("event") == "head_ref_force_pushed"
-              and event.get("commit_id") == sha]
+              and event.get("event") == "head_ref_force_pushed"]
     return True, max(stamps, default=0.0)
 
 
@@ -385,9 +398,11 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     ABSENCE is accepted only for the initial head, and that is proved
     positively: every review-gate run of this pull request is for `sha`.
     A head that was visited before and pushed back to is judged only on runs
-    newer than the latest run for another head AND newer than its recorded
-    force push (the PR timeline), so an old success for it is never this
-    transition's evidence even while the intervening runs are unregistered.
+    newer than the latest run for another head AND newer than the PR's latest
+    recorded force push (the PR timeline, any commit: a rewind to an ancestor
+    and a fast-forward back leaves a force push of the ANCESTOR), so an old
+    success for it is never this transition's evidence even while the
+    intervening runs are unregistered.
     A synchronize needs a different head to move to, so any head that was
     ever pushed over another leaves a run for the earlier head behind. A head
     with other heads in the PR's history and no dismissal outcome yet is
@@ -401,7 +416,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # is not its evidence, whatever branch it ran on (forks share branch
     # names), and an unattributable run leaves the head unverified.
     scoped = [run for run in runs if pr_number in _run_prs(run)]
-    readable, epoch = force_push_epoch(cli, repo, pr_number, sha)
+    readable, epoch = force_push_epoch(cli, repo, pr_number)
     if not readable:
         return False, None
     # A head can be revisited (H, then X, then a force push back to H). Only
@@ -409,8 +424,8 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # visit; an older success for H says nothing about this transition.
     latest_other = max((run["id"] for run in scoped if run.get("head_sha") != sha),
                        default=0)
-    # ... and, when the timeline records a force push of THIS head, only runs
-    # created at or after that push: it is the transition being admitted, and
+    # ... and, when the timeline records any force push, only runs created at
+    # or after the latest one: it is the transition being admitted, and
     # it is visible even while the runs it triggered are not yet listed.
     mine = [run for run in scoped
             if run.get("head_sha") == sha and run["id"] > latest_other
@@ -497,22 +512,23 @@ class Prior(NamedTuple):
     probes: str
 
 
-def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str, pr_number: str,
-                   base_ref: str, base_sha: str) -> tuple[str, Prior | None]:
-    """An earlier ci.yml run that already RAN CI for this head AND this PR.
+def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str,
+                   identity: str) -> tuple[str, Prior | None]:
+    """An earlier ci.yml run that already RAN CI for this exact identity.
 
-    Answers ("ok" | "unreadable", prior). A run counts only when its own
-    record names this pull request with this base ref and base sha: the same
-    commit can head two pull requests, and probe selection, the expensive
-    gates and the save-schema comparison all depend on the base, so another
-    PR's (or another base's) green result is not this one's. A run that is
-    not finished is ignored: same-head admitting runs are serialized by the
-    workflow's concurrency group, so one still running is an unrelated-label
-    run in its own group, which skips every job and can start no CI.
+    Answers ("ok" | "unreadable", prior). A run counts only when its
+    `ci-identity` job is named exactly `identity` (this PR, this base ref and
+    sha, this head): the same commit can head two pull requests, probe
+    selection, the expensive gates and the save-schema comparison depend on
+    the base, and a dispatched run's record names neither. Automatic and
+    dispatched runs are judged alike, and the NEWEST that ran CI wins, so a
+    manual recovery run supersedes the automatic failure it recovered. A run
+    that is not finished is ignored: same-head admitting runs are serialized
+    by the workflow's concurrency group, so one still running is an
+    unrelated-label run in its own group, which skips every job.
 
     A run RAN CI when its `static-audits` job concluded success or failure;
-    an un-admitted run, a mirror, or a cancelled one did not. The newest run
-    that did is the verdict a duplicate mirrors.
+    an un-admitted run, a mirror, or a cancelled one did not.
     """
     runs = _runs(cli, repo, "ci.yml", head_sha=sha)
     if runs is None:
@@ -521,16 +537,12 @@ def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str, pr_number: 
         if str(run["id"]) == str(my_run_id) or run.get("status") != "completed" \
                 or run.get("event") not in ("pull_request", "workflow_dispatch"):
             continue
-        if not any(isinstance(entry, dict)
-                   and str(entry.get("number")) == pr_number
-                   and (entry.get("base") or {}).get("ref") == base_ref
-                   and (entry.get("base") or {}).get("sha") == base_sha
-                   for entry in run.get("pull_requests") or []):
-            continue
         jobs = _jobs(cli, repo, run["id"])
         if jobs is None:
             return "unreadable", None
         by_name = {job.get("name"): job for job in jobs}
+        if identity not in by_name:
+            continue
         if (by_name.get("static-audits") or {}).get("conclusion") not in ("success", "failure"):
             continue
         return "ok", Prior(run["id"],
@@ -606,11 +618,15 @@ def run_admit(event: Event, repo: str, *, run_id: str = "", cli: Runner = gh,
     base_ref = pull.base_ref if pull is not None else event.pr_base_ref
     freshness = base_freshness(run_git, run_head, base_ref)
     admitted = decide(event, pull, dismissal, freshness, readable)
-    if not admitted.eligible or event.name != "pull_request":
+    if not admitted.eligible:
+        return admitted
+    identity = identity_for(event.pr_number, pull.base_ref if pull else "",
+                            admitted.base_sha, admitted.head_sha)
+    admitted = admitted._replace(identity=identity)
+    if event.name != "pull_request":
         # An explicit dispatch is a deliberate re-run and is never suppressed.
         return admitted
-    state, prior = find_prior_run(cli, repo, run_head, run_id, event.pr_number,
-                                  pull.base_ref if pull else "", admitted.base_sha)
+    state, prior = find_prior_run(cli, repo, run_head, run_id, identity)
     if state == "unreadable":
         return no(MODE_PR, "prior-run-unreadable",
                   "could not read the earlier CI runs for this head, so a duplicate "
@@ -622,7 +638,8 @@ def run_admit(event: Event, repo: str, *, run_id: str = "", cli: Runner = gh,
         f"run {prior.run_id} already ran CI for this head; its verdicts "
         f"(build-test {prior.build_test or 'unknown'}, behavior-probes "
         f"{prior.probes or 'unknown'}) are mirrored and nothing runs again",
-        admitted.head_sha, admitted.base_sha, prior.build_test, prior.probes)
+        admitted.head_sha, admitted.base_sha, prior.build_test, prior.probes,
+        identity)
 
 
 def _single_line(text: str) -> str:
@@ -649,6 +666,7 @@ def _admit_main(args: argparse.Namespace) -> int:
     _emit({"eligible": "true" if result.eligible else "false",
            "mode": result.mode, "reason": result.reason,
            "base_sha": result.base_sha, "head_sha": result.head_sha,
+           "identity": result.identity,
            "mirror_build_test": result.mirror_build_test,
            "mirror_probes": result.mirror_probes},
           args.github_output)
@@ -862,10 +880,14 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     def ci_run(run_id: int, *, status: str = "completed", event: str = "pull_request",
                head: str = HEAD, prs: tuple = ("7",), audits: str | None = "success",
                build: str | None = "success", probes: str | None = "success",
-               base_ref: str = "master", base_sha: str = BASE, title: str = "") -> dict:
+               base_ref: str = "master", base_sha: str = BASE, title: str = "",
+               pr: str = "7", identity: bool = True) -> dict:
         jobs = [job(run_id * 10 + 1, "completed", audits, "static-audits"),
                 job(run_id * 10 + 2, "completed", build, "build-test"),
                 job(run_id * 10 + 3, "completed", probes, "behavior-probes")]
+        if identity:
+            jobs.append(job(run_id * 10 + 4, "completed", "success",
+                            identity_for(pr, base_ref, base_sha, head)))
         return {"id": run_id, "event": event, "status": status, "head_sha": head,
                 "jobs": jobs, "display_title": title,
                 "pull_requests": [{"number": int(n), "base": {"ref": base_ref, "sha": base_sha}}
@@ -1152,8 +1174,17 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("await: after a force push, skipped-only runs newer than it are still not absence",
           wait(Gate([gate_run(101, skip_job)], **forced), require=False),
           (True, Dismissal("queued", "")))
-    check("await: a force push of another commit does not matter",
-          wait(Gate(old_h, force_pushes=[(100, OLD)]), require=True), (True, _OK))
+    # Round 6: H -> ancestor X (force) -> H (fast-forward): the timeline holds
+    # a force push of the ANCESTOR, and that is what dates the transition.
+    check("await: a force push of ANOTHER commit (a rewind) still dates the transition",
+          wait(Gate(old_h, force_pushes=[(100, OLD)]), require=True),
+          (True, Dismissal("queued", "")))
+    check("await: ... and the fast-forward back is then waited for",
+          wait(Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
+                    old_h + [gate_run(101, job(12, "completed", "success"))],
+                    force_pushes=[(100, OLD)]), require=True), (True, _OK))
+    check("await: a force push older than the head's own runs does not matter",
+          wait(Gate([gate_run(150, ok_job)], force_pushes=[(100, OLD)]), require=True), (True, _OK))
     check("await: an unreadable timeline is unverified, never 'no force push'",
           wait(Gate(old_h, timeline_unreadable=True), require=True), (False, None))
     check("await: the force push is found beyond the first timeline page",
@@ -1167,6 +1198,12 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                     gate=Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
                               old_h + [gate_run(101, job(12, "completed", "success"))], **forced)).eligible,
               True)
+
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: {label} after a rewind to an ancestor and a fast-forward back is not admitted on the old success",
+              admit(event, pull=pull_json(), gate=Gate(old_h, force_pushes=[(100, OLD)])).code,
+              "dismissal-pending")
 
     # Round 5 of #2928: history is read to the end, never first-page-only.
     labels = [gate_run(i, job(i * 10, "completed", "skipped")) for i in range(1, 6)]
@@ -1243,12 +1280,10 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     check("duplicate: ... even beside a finished one it must still mirror",
           admit(approve, pull=pull_json(),
                 gate=done(ci=[ci_run(49), ci_run(50, status="in_progress")])).mode, MODE_DUP)
-    for label, prior in (("another pull request's run for the same commit", ci_run(50, prs=("8",))),
+    for label, prior in (("another pull request's run for the same commit", ci_run(50, pr="8", prs=("8",))),
                          ("a run on another base sha", ci_run(50, base_sha="9" * 40)),
                          ("a run on another base branch", ci_run(50, base_ref="release")),
-                         ("a run naming no pull request", ci_run(50, prs=())),
-                         ("a run with no base recorded",
-                          {**ci_run(50), "pull_requests": [{"number": 7}]})):
+                         ("a run that recorded no identity", ci_run(50, identity=False))):
         check(f"duplicate: {label} is not this PR's CI result",
               admit(approve, pull=pull_json(), gate=done(ci=[prior])).eligible, True)
     check("duplicate: unreadable earlier runs fail closed",
@@ -1257,6 +1292,25 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
           admit(approve, pull=pull_json(),
                 gate=done(ci=[ci_run(50, build="failure"), ci_run(51, build="success"),
                               ci_run(52, audits="skipped", build="failure")])).mirror_build_test, "success")
+    # Round 6 of #2928: a failed automatic run, a successful manual recovery,
+    # then a later approval. The newest result for the identity wins, and a
+    # dispatched run (whose record names no PR) is identified by its job.
+    recovered = [ci_run(500, build="failure", probes="failure"),
+                 ci_run(600, event="workflow_dispatch", prs=(), title="CI dispatch PR 7")]
+    r = admit(approve, pull=pull_json(), gate=done(ci=recovered))
+    check("duplicate: a successful dispatch recovery supersedes the automatic failure",
+          (r.mode, r.mirror_build_test, r.mirror_probes), (MODE_DUP, "success", "success"))
+    r = admit(approve, pull=pull_json(),
+              gate=done(ci=[ci_run(500), ci_run(600, event="workflow_dispatch", prs=(),
+                                                build="failure", probes="failure")]))
+    check("duplicate: a later failed dispatch is the verdict mirrored",
+          (r.mirror_build_test, r.mirror_probes), ("failure", "failure"))
+    check("duplicate: a dispatch for another PR is not this PR's result",
+          admit(approve, pull=pull_json(),
+                gate=done(ci=[ci_run(600, event="workflow_dispatch", prs=(), pr="8")])).eligible, True)
+    check("duplicate: the admitted run's identity is published for later runs",
+          admit(approve, pull=pull_json(), gate=done()).identity,
+          identity_for("7", "master", BASE, HEAD))
     check("duplicate: an explicit dispatch is never suppressed",
           admit(_event("workflow_dispatch", ""), pull=pull_json(), gate=done(ci=[ran])).eligible, True)
     check("duplicate: a head that is not admitted reports its own reason, not a mirror",
@@ -1381,6 +1435,14 @@ def _check_workflow(document: dict, decided: dict, check: Callable[[str, object,
     check("ci.yml: admission checks out the exact PR head",
           any("github.event.pull_request.head.sha" in str((step.get("with") or {}).get("ref", ""))
               for step in admission.get("steps") or []), True)
+
+    identity_job = jobs.get("ci-identity") or {}
+    check("ci.yml: ci-identity is named by the admission's identity output",
+          str(identity_job.get("name", "")).strip(), "${{ needs.admission.outputs.identity }}")
+    check("ci.yml: ci-identity exists only for an admitted run",
+          squash(identity_job.get("if", "")), "needs.admission.outputs.eligible == 'true'")
+    check("ci.yml: admission publishes the identity",
+          "identity" in (admission.get("outputs") or {}), True)
 
     image = jobs.get("resolve-image") or {}
     check("ci.yml: resolve-image waits for admission", image.get("needs"), "admission")

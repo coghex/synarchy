@@ -291,6 +291,7 @@ jobs:
       reason: ${{ steps.admit.outputs.reason }}
       base_sha: ${{ steps.admit.outputs.base_sha }}
       head_sha: ${{ steps.admit.outputs.head_sha }}
+      identity: ${{ steps.admit.outputs.identity }}
       mirror_build_test: ${{ steps.admit.outputs.mirror_build_test }}
       mirror_probes: ${{ steps.admit.outputs.mirror_probes }}
     steps:
@@ -328,6 +329,24 @@ jobs:
           --pr-base-ref "$PR_BASE_REF"
           --github-output "$GITHUB_OUTPUT"
           --github-summary "$GITHUB_STEP_SUMMARY"
+
+  # Records what this run validates -- the pull request, its base ref and sha
+  # and the head -- as the NAME of a job, the only place a finished run's
+  # identity can be read back for every kind of run (a dispatched run's record
+  # names no pull request, and no run record names its base). A later
+  # same-head event finds the newest run for exactly this identity and mirrors
+  # its verdicts instead of running again (tools/ci_pr_admission.py
+  # find_prior_run). Only an admitted run that does work carries one.
+  ci-identity:
+    name: ${{ needs.admission.outputs.identity }}
+    needs: admission
+    if: needs.admission.outputs.eligible == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "$IDENTITY"
+        env:
+          IDENTITY: ${{ needs.admission.outputs.identity }}
 
   # Resolves (building + validating + first-publishing when needed) the
   # immutable, content-addressed CI image tag both test jobs consume. Lives
