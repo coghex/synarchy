@@ -870,7 +870,7 @@ mapping.
     integrity error that refuses the load.
   - One naming no restored unit is a `dangling-reference` warning, and the restore
     drops it.
-- **Fixture.** `z13-unit-scenario-refs` is the v6 fixture.
+- **Current coverage.** `current tag admission` and `unit scenario reference` Hspec tests cover current-format admission and reference restoration.
 
 ## Authoring examples
 
@@ -1099,8 +1099,7 @@ the document's other entries.
 offsets, variant, health, stored age baseline), written after the planting edit
 (`WePlaceFloraRef` on disk) it follows; `migrateWorldEditsV5` crosses every older
 payload verbatim. Crop plots and regrowth timers already persist in `world-activity`; the planted-id
-cursor and the tile, occurrence and plot tags in `world-edits`. The `z16-scenario-world` fixture pins the
-whole set. See [persistence_state_inventory.md](persistence_state_inventory.md).
+cursor and the tile, occurrence and plot tags in `world-edits`. Current-format coverage is in `current page-core persistence`, `world-edits current persistence`, and `current tag admission`. See [persistence_state_inventory.md](persistence_state_inventory.md).
 
 ## Placement construction and capture (SCN-12, #2712)
 

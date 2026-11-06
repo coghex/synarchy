@@ -1,12 +1,12 @@
-# Current-schema save guard (PSP-2, #2916)
+# Current-schema save guard (PSP-5, #2919)
 
-Before release, a persisted shape change advances every affected component,
-metadata, Lua or framing version, and each affected carrier then accepts only
+Before the first public release, a persisted shape change advances every
+affected component, metadata, Lua or framing version, and each affected carrier then accepts only
 its current version with its affected exact-shape legacy routes disabled. No
 historical-decoder compatibility analysis, new migration or historical fixture
 is required. Design: `docs/designs/prerelease_save_policy_design.md` (P-2,
-PSP-2, D-5, D-9). The guard is not wired into CI, `make ci` or any default
-until PSP-5 (#2919).
+PSP-2, D-5, D-9). The guard is activated for every code revision in CI
+and the local gate; it is not path-selected.
 
 ## Commands
 
@@ -20,7 +20,8 @@ python3 tools/current_save_schema_audit.py --update-record
 ```
 
 `--update-record` rewrites `docs/save_compat/current_schema.json` from the
-compiled evidence. It does not replace the independent `--base-ref` check:
+compiled evidence. The record is code-gated and cannot take the docs-only
+fast path. Updating it does not replace the independent `--base-ref` check:
 regenerating, editing or deleting the record cannot bless same-version drift,
 because the comparison reads the record committed at the base revision.
 
@@ -35,7 +36,7 @@ Nothing is parsed from source text.
 | Metadata | `metadataWireRoot` (the type `encodeSessionSnapshot` encodes), `metadataComponentVersion`, and a probe at every version through all four public entry points (`decodeSaveEnvelopeMetadata`, `decodeSaveEnvelopeMetadataClassified`, `decodeSessionEnvelope`, `decodeSessionEnvelopeClassified`). They must agree, and the result must equal the advertised list. |
 | Framing | `currentEnvelopeVersion` (also its advertised list), `envelopeMagic`, a header size measured from a real encoded envelope, an fnv1a64 probe, and the hex of a fixed encoded envelope, with acceptance probed through the same four entry points. The header bytes are hand written, so they are declared and probed, not derived. The cereal manifest is walked. |
 | Lua modules | The production `scripts/init_loader.lua` runs under a recording `engine.loadScript`; every recorded script is loaded and its real `init` run; the evaluated `saveModules.registry` supplies id, version, `inputVersions` and `required`; each version is probed through `saveModules.prepareLoad`. A script that cannot load or initialise fails the run. `scripts/lib/data_codec.lua` is the unversioned wire owner every Lua carrier shares, recorded by a probe of its encoding. |
-| Legacy routes | B1 (`session`) and B2 (`lua-state`) are probed through `decodeSaveEnvelopeMetadata`, `decodeSessionEnvelopeClassified` and the direct `decodeLegacy*`/`decodeB2*` entry points with correctly shaped envelopes. A route entry point is live when it decodes the exact shape, or gets as far as per-component work before failing; a shape it refuses at the envelope (a version it no longer accepts) is not live. A route is enabled if any entry point is live. Ownership is conservative: B1 is owned by metadata and every Haskell carrier; B2 by metadata, `lua-state` and every required Haskell carrier. |
+| Legacy routes | B1 (`session`) and B2 (`lua-state`) entry points are probed with correctly shaped envelopes. Any affected carrier must refuse its older shape at the envelope boundary, and the current record stores the route status so a re-enabled route is detected. |
 
 ## Serialization boundaries
 
@@ -73,6 +74,10 @@ generic encoding. Every reachable type is one of:
   test). A type that is reachable but not declared, or declared but
   unreachable, fails.
 
+Lua payloads are dynamic tables; the hand-written framing bytes are explicit
+owned boundaries rather than a fabricated type description. Their behavioral
+probes and independent current tests are part of the declared evidence.
+
 A type with no `Generic` instance and no explicit instance is a compile error
 at the `componentCodec` call site, so a new boundary cannot be added silently.
 
@@ -85,13 +90,13 @@ at the `componentCodec` call site, so a new boundary cannot be added silently.
   distinguishing test. A refreshed record or self-generated expected output is
   not that evidence.
 - A declaration reachable only through a still-accepted older decoder or an
-  enabled legacy route is **not recorded** (for example `ToolMode`, which is on
-  the wire only through B1). D-5/D-7 accept this residual; the unchanged strict
-  `tools/enum_append_only_audit.py` still guards such enums until PSP-5
-  retires it.
-- Routine comparison never builds the base. The base record's freshness rests
-  on the merge-time check PSP-5 enforces on every merged commit; this tool
-  validates its structure and reports its blob identity.
+  enabled legacy route is **not recorded**. For a changed carrier, disable its
+  affected old dispatches and legacy routes and pin refusal in current
+  behavioral tests. Unchanged carriers need no blanket purge.
+- Routine comparison never builds the base. CI checks every candidate and every
+  merged code revision, so the base record was itself validated when it
+  entered the protected history; this tool validates its structure and reports
+  its blob identity.
 
 ## Rules
 

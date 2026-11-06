@@ -1434,8 +1434,8 @@ removing it.
   by the three relation verbs on every call, and persisted as the FOURTH
   optional component `relation-causes` (v1, session-scoped, frozen
   `RelationValueDTO`). Replaced by a load on the texture palette's seam and
-  emptied by Exit to Menu only. Evidence: hspec `Faction relation store`, the
-  tracked `z18-relation-causes` fixture and the `relation_cause_cycles` of
+  emptied by Exit to Menu only. Evidence: hspec `Faction relation store` and the
+  `relation_cause_cycles` of
   `tools/persistence_contract_probe.py`; contract:
   `docs/engine_contracts.md` §Relations and autonomous combat.
 

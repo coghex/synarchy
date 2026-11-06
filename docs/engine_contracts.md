@@ -96,7 +96,7 @@ exactly why the detail could move out of the always-loaded file.
 
 - [Autosave: staging, rotation order, and the intent mutex](#autosave-staging-rotation-order-and-the-intent-mutex)
 - [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
-- [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
+- [Current save schema policy and guard (#2919)](#current-save-schema-policy-and-guard-2919)
 - [Local-config writes: one atomic-replace helper (#2202)](#local-config-writes-one-atomic-replace-helper-2202)
 - [Config-writing tests: the isolation fixture (#1357)](#config-writing-tests-the-isolation-fixture-1357)
 - [Config state and legacy migration (#638/#786/#1937)](#config-state-and-legacy-migration-6387861937)
@@ -157,7 +157,7 @@ build, #2648 — no
 outside `Test.Headless.Harness.Log`, as the configured build compiles it;
 see §Headless fixture logging), the config-write / persistence-inventory /
 EngineEnv-capability
-/ save-compat / enum-append-only / cabal-library-module-inventory /
+/ current-save-schema / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
 findings-report-status audits (each
 with its own self-test), the F4 Tier 1 coverage-mapping gate
@@ -346,72 +346,16 @@ the addition panel, its adversarial ascending-id twin, and a pinned
 full root map for seed 1337) and `--match "concept placement order"`
 (the artifact's own loading and every rejection).
 
-**One member of the save-compat self-test is path-selective on BOTH
-sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
-partition it: `--without-reproducibility` runs every member except
-`test_normalize_fixture_timestamp_makes_generation_reproducible`, and
-`--only-reproducibility` runs exactly that one. The excluded member
-builds two envelopes differing only in `smTimestamp` and exercises
-fixture GENERATION, which only a save-format, fixture, save-tooling or
-Cabal change can move. It cost ~26 s of a ~58 s module on a warm tree
-while it built those variants through a `cabal repl
-test:synarchy-test-headless` of its own; since #2273 it writes them
-through the compiled `exe:synarchy-save-codec`, so the split now selects
-on which inputs can move the result rather than on cost. Local
-`make ci` runs `--without-reproducibility` unconditionally; CI runs it
-for every non-docs-only change and every save-compat input change. Both
-sides reach `--only-reproducibility` through
-`ci_expensive_gates.py`'s `save-compat` gate. A bare `python3
-tools/test_save_compat_audit.py` still runs everything, which is what a
-developer running the module by hand gets.
-
-This is the ONE case where `make ci` is path-selective rather than
-unconditional, so it needs its own local changed-path notion:
-`ci_expensive_gates.py --local-changed-paths` prints every TRACKED path
-differing from the merge base with the checked-out default branch
-(committed, staged and unstaged alike), and `tools/ci-local.sh` pipes
-that into the very same `--stdin --gate save-compat` command CI runs —
-one matcher, one answer, no second table to drift. When no default
-branch or merge base resolves, `--local-changed-paths` emits a
-conservative sentinel that selects EVERY gate: a local gate that cannot
-tell what changed runs the coverage rather than skipping it.
-
-**`ci-local.sh` resolves that list BEFORE it writes its own temporary
-`cabal.project.local`, and the order is load-bearing.** That file is not
-gitignored, so a change can legitimately track one — and cabal would
-apply it in CI, which is why `cabal.project*` (the `.local` member
-included) is in the gate's pattern table. Resolving after the write
-would report this gate's own scratch edit to a tracked file as if it
-were the candidate's. `ci_parity_audit.py` checks that ordering, and the
-marked block reads the already-resolved `$SAVE_COMPAT_PATHS` rather than
-re-deriving it, which would put the resolution back after the write.
-
-Outside CI's ordinary-docs fast path, the main save-compat step stays
-deliberately blocking: `save_compat_audit.py` runs in full, as does every
-other member selected by `--without-reproducibility`. Local `make ci`
-always runs that step. It still needs the real Haskell codec:
-`save_compat_audit.py`'s real-manifest run decodes the tracked fixtures'
-envelope descriptors (`verify_fixture_descriptors` →
-`dump_fixture_descriptors`), and `test_real_manifest_passes_the_audit`
-runs that same audit. Since #2273 it reaches that codec by exec'ing the
-compiled `exe:synarchy-save-codec` the job's `cabal build all` already
-produced, rather than by starting a `cabal repl`. Therefore CI
-skips the whole step only when `ci_docs_fast_path.py` has proved that the
-change is ordinary documentation outside `docs/save_compat/`.
-
-The conditions themselves are gated, not just the command set:
-`ci_parity_audit.py` pins the main audit's docs-only exception and the
-reproducibility member's `save-compat` guard to their exact canonical
-text, checks that the latter reads the output the selector step writes,
-and refuses a bare invocation on either side. The post-merge backstop is
-now supplied by the selector input: an ordinary-docs push uses its real
-changed range, while every other master push supplies `git ls-files`,
-which necessarily selects `save-compat` through the workflow, Cabal and
-Makefile entries in `SAVE_COMPAT_GLOBS`. Because a set comparison cannot
-see a condition, the parity audit also EXTRACTS the marked selection
-block from `ci-local.sh` and EXECUTES it against a positive and a
-negative changed-path sample with `python3` shimmed, so a block that
-stopped guarding the member fails there rather than after a push.
+**Current save-schema policy (#2919).** Before the first public release,
+the repository supports the current save schema only. CI compares the
+candidate's compiled schema record with the exact pull-request base or
+master-push before revision; `make ci` compares with `origin/master`.
+Both run the guard on every code revision, with only ordinary documentation
+changes taking the docs-only fast path. `current_save_schema_audit.py`
+checks extraction against the committed record, `test_save_compat_audit.py`
+and `save_compat_audit.py` verify the current fixture and compiled codec,
+and the current-schema Hspec examples run in the normal headless lanes.
+There is no historical fixture selector or migration-reproducibility gate.
 
 **Same gate SET, not the same conditional control flow:** CI
 path-selects the graphical suite build, the unit-asset gate and
@@ -419,10 +363,10 @@ path-selects the graphical suite build, the unit-asset gate and
 Since #1490 CI also has a **docs-only fast path on pull requests and
 master pushes**: when every path in the complete base/pushed range is
 documentation — under `docs/`, a plain add or modify, and never under
-`docs/save_compat/`, whose machine-readable contracts require the real
-codec — dependency-plan resolution, both caches, the cabal build, both
-test-suite builds, the headless hspec suite, `world_check`, and both
-Cabal-backed save-compat steps are skipped. **Every engine-free Python
+`docs/save_compat/`, whose current schema record requires compiled
+validation — dependency-plan resolution, both caches, the cabal build, both
+test-suite builds, the headless hspec suite, `world_check`, and the compiled current-schema
+checks are skipped. **Every engine-free Python
 audit still runs, self-tests included.** That asymmetry is the point
 rather than an oversight: #1490's cause was a docs-only push breaking
 `test_findings_report_audit.py`, so a fast path that skipped all audits
@@ -495,9 +439,9 @@ worker's selector and runner commands.
 
 One invocation is LOCAL-only for the mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
-pull-request base sha and `make ci` has to resolve its own. The
-`--stdin --gate save-compat` decision both of them feed is NOT exempt —
-it runs on both sides. Everything else must
+pull-request base sha and `make ci` has to resolve its own. The current
+save-schema guard is independently required on both sides and uses the
+exact CI event base or local `origin/master`. Everything else must
 run on both sides — `tools/ci_parity_audit.py` (#1355, CI + `make ci`,
 with its own `--self-test`) compares the two files' `python3 tools/*.py`
 invocations at command-and-arguments granularity in both directions and
@@ -2153,12 +2097,9 @@ store. Gates: hspec `--match "Faction relation store"` (pure rules against exact
 overlays, the codec through real envelope bytes, the real save → load → stage →
 publish and teardown lifecycle on a private engine, and the live verbs),
 `--match "save components"`, `--match "save envelope"`, `--match "persistence
-contract"`, the tracked `z18-relation-causes` fixture (seeded with
-`save_compat_audit.py --generate-session --seed-tags`, whose `relationCauses`
-category is the one test-only way to put a cause in a save) and
-`tools/persistence_contract_probe.py`'s `relation_cause_cycles` (a seeded save
-through three fresh processes, every generation non-empty and identical, the
-restored authority's answers exact).
+contract"`, and `tools/persistence_contract_probe.py`'s `relation_cause_cycles`
+(a seeded save through three fresh processes, every generation non-empty and
+identical, the restored authority's answers exact).
 
 **Capabilities.** `factionCatalogueRef` is a `content-registries` field,
 written only by `Engine.Scripting.Lua.API.Factions` through
@@ -2309,8 +2250,7 @@ absent one keeps following the default through the S2 resolver. A unit
 holds an empty map until `physiology.setMode` records an override (S4).
 `PhysioMode` is a positional `Generic Serialize` enum (tag 0
 `PhysioNominal`, tag 1 `PhysioSimulated`); it is append-only and is
-recorded in `docs/save_compat/enum_baseline.json` by
-`tools/enum_append_only_audit.py --update-baseline`, never by hand.
+checked as part of the affected carrier's versioned schema.
 `ResolvedMode` is deliberately NOT serialized: Unsupported is a
 resolver verdict, never a saved intent.
 
@@ -2321,13 +2261,11 @@ The complete outgoing v3 graph is frozen as `UnitsDTOv3` /
 migrateUnitsDTOv3`); `componentCodec` selects one decoder per encoded
 version, so there is no implicit chain, and the B1 `SessionV90` adapter
 composes the same step. Each older path supplies EMPTY overrides, and
-no content-dependent normalization lives in a migration. The tracked
-fixtures are `z7-units-v3-salt-store` (generated by the pre-v4 codec
-before the wire changed, carrying #2761's present-zero and partial
-`salt_store`), `z6-unit-faction-profile` (a v3 session decoded through
-the same frozen graph) and `z8-units-v4-physiology-overrides` (the
-current version); the canonical summary records each unit's overrides and
-`salt_store`, so losing a nonempty map or a durable value is observable.
+no content-dependent normalization lives in a migration. The current
+override shape and its version are covered by the compiled current-schema
+guard and focused physiology persistence tests. Historical pre-release
+fixtures are not maintained; runtime conversion code remains where it
+supports the current component contract.
 
 **Load policy for decoded physiology state (D-6).** The content-aware load
 gate (`World.Save.Physiology.physiologyLoadGate`, beside the
@@ -5073,74 +5011,49 @@ session surfaces"` (the reconciliation terminal itself, and the
 
 ---
 
-## Enum append-only audit: baseline and payload normalization
+## Current save schema policy and guard (#2919)
 
-Enforced by `tools/enum_append_only_audit.py` (CI + `make ci`, with its
-own `--self-test`). `src/World/Save/CLAUDE.md` states the rule and the
-two hard facts about the baseline (it is GENERATED; a pure append
-ratchets it with `--update-baseline`). This is the rest.
+Before the first public release, the repository supports only the current
+save schema. If a persisted shape or meaning changes, advance the real
+version of every affected Haskell component, metadata record, Lua module or
+framing carrier. Each changed or version-bumped carrier then accepts only
+its current version; disable its older dispatches and affected exact-shape
+legacy routes. Unchanged carriers keep their existing accepted versions.
+There is no requirement for an outgoing DTO, migration, historical fixture
+or historical compatibility analysis for a pre-release change.
 
-**Coverage.** Most guarded types are on the save wire, and fewer again
-are named by a live component; the rest are guarded pre-emptively, which
-is the point of keying on the `Serialize`-via-`Generic` instance rather
-than on save reachability. How many of each is deliberately not written
-down here. Adding a guarded type moves one, two or all three of them,
-depending on what reaches it — nothing for an off-wire type but the
-guarded total, no component for one carried only by a bare wire root —
-so a transcribed set goes stale unpredictably, which is what this
-paragraph itself did while telling its reader not to hand-count
-(#2299). The audit's success line reports all three on every run,
-derived from the guarded set it discovered and from
-`docs/save_compat/enum_baseline.json`'s per-type `onSaveWire` /
-`components` fields.
+The compiled current-schema guard compares the validated record committed
+at the PR base, full master-push before revision, or local merge base with
+fresh candidate evidence. CI and `make ci` run the guard on every code
+revision. The routine comparison compiles only the candidate; the one-time
+bootstrap is the sole exception because the pre-guard base has no validated
+record. A missing or stale base record fails closed. The current Hspec group
+pins representative wire layouts and refusal behavior; the compiled codec
+audit checks the committed current fixture; the
+`persistence_contract` probe checks save/load across three fresh processes.
 
-**What the baseline records.** Module-qualified constructor lists, each
-constructor recording its name and its ordered PAYLOAD signature, plus the
-save-wire attribution captured alongside.
+The guard derives generic Haskell shapes through compiled `Generic` and
+`Typeable` information, but it cannot prove arbitrary custom serializers,
+dynamic Lua table meaning or hand-written framing from types alone. Those
+boundaries have explicit ownership and behavioral evidence; changes outside
+mechanical detection still require a version bump and distinguishing test.
+Refreshing the record or expected output is not evidence by itself.
+`currentSaveVersion` is an in-memory bridge and does not protect on-disk
+saves.
 
-**How a payload slot is normalized.** A slot is the field's declared type
-with strictness markers, `{-# UNPACK #-}`, layout, `::`/`∷` and the
-parentheses a `!` forces all erased. Field order and type structure are
-NOT erased. For a record alternative the selector is kept — which is what
-makes swapping two same-typed record fields visible, and means a selector
-rename reports too.
+Unsupported versions fail during staging before publication. The old
+session remains paused, and the rejected file is not rewritten. A
+structurally incompatible authoritative generation is not replaced by the
+`.prev` generation. See `docs/current_save_schema_guard.md` for the
+evidence sources, limits and exact current test commands.
 
-**Diagnostics.** An incompatible change's output names every component and
-historical shape that carries the type, with the reachability path. That
-holds even for a type that was renamed or deleted, read back from the
-recorded attribution because there is nothing left in the tree to walk.
-
-**Boundary against `tools/save_compat_audit.py`.** Since #1270 this audit
-is the one exhaustive gate owning payload drift INSIDE a
-multi-constructor sum. Single-constructor record field order stays the
-frozen-DTO boundary's and `save_compat_audit.py`'s.
-
-**Retaining a version means still DECODING it (moved from CLAUDE.md).**
-Anything beyond appending is a per-component migration, never a
-`currentSaveVersion` change — that marker does not gate on-disk
-compatibility. Find EVERY component storing the enum — `Direction` is
-stored by both `units` (`UnitInstanceDTO.uidFacing`) and `unit-sim`
-(`UnitSimStateDTO.simFacing`), while `Pose` and `UnitActivity` are
-`unit-sim`'s alone — and for each: raise its `csVersion`, freeze the
-outgoing DTO, and register that frozen type in `csOlderVersions` via
-`atVersion` with an explicit migration. `componentCodec` derives
-`ccInputVers` from those declarations, so the reader gains the new
-version while retaining every version it already accepted.
-
-Freezing the OUTGOING DTO is only half the job: **every** version left
-in `csOlderVersions` needs a wire type that reaches a frozen COPY of the
-constructor order that version was written with — transitively, the
-`Pose` nested in `UnitActivity` included. Today's frozen DTOs do not
-satisfy that. `UnitSimStateDTOv1` (which `unit-sim` v1 AND v2 both
-decode through) still names the live `Pose`/`UnitActivity`/`Direction`,
-and `UnitInstanceDTOv1.uid1Facing` still names the live `Direction`, so
-a reorder that froze only the current shape would decode every retained
-legacy payload against the new order anyway. `unitSimCodec`'s v1/v2
-entries are the exemplar for version dispatch and explicit migration
-only — no codec has needed a frozen enum yet, so they do not
-demonstrate that half.
-
----
+**Public-release prerequisite.** Start the support promise with the first
+public-release save format. Freeze its transitive wire shapes and capture
+real nonempty release fixtures with independent expectations. Build
+supported-baseline tracking, migrations, historical verification, restart
+coverage and release gates afresh, and validate them before promising
+support. Do not restore pre-release save fixtures or a dormant historical
+mode.
 
 ## Local-config writes: one atomic-replace helper (#2202)
 
@@ -6210,8 +6123,7 @@ may be derived from it.
    numeric flora references name; every other flat family keeps
    `engine.listFiles`'s raw enumeration, and `engine.listFiles` itself
    does NOT sort. All three `addYaml...` verbs stay at exactly three
-   arguments — `tools/save_compat_migration_probe.py` parses those call
-   shapes verbatim.
+   arguments.
 
 3. **A duplicate authored name is refused, whole-file and atomically.**
    `engine.loadFloraYaml` preflights a file against the live catalog AND
@@ -6281,9 +6193,8 @@ Gates: hspec `--match "World.FloraOrder"` (two opposing registration
 orders, the impossible-fit lexically-earlier species, the checked-in
 seed-42/world-size-64 golden, and the pre-change numeric-reference
 fixture — both fixtures live under `test-headless/data/flora-order/` and
-are re-capturable through the env vars the module header names, and
-neither is registered in `docs/save_compat/manifest.json`, so neither
-owes the save-compat gate); `--match "Startup"` (the two-order loader
+are re-capturable through the env vars the module header names, and both remain standalone behavior fixtures, outside the current
+save-schema fixture audit); `--match "Startup"` (the two-order loader
 proof in `Startup asset logging`, the shipped-duplicate readiness
 failure in `Startup readiness`); `--match "Asset.FloraContent"`
 (whole-file refusal atomicity, `flora.register`'s nonfatal refusal);
@@ -7282,55 +7193,11 @@ inventing no remainder it has no bytes for. v1 and v2 payloads reach
 that hop through the migrations above it, so every accepted version is
 scaled exactly ONCE and a v4 payload is not scaled at all.
 
-Gates: hspec `--match "Sim.Fluid.Exact"` (the helper laws; the `Word16`
-conversion domain, with the active↔passive identity proved over EVERY
-representable volume 1..65535 rather than a sample; the identity through
-the real activation, per-tick derivation, seam re-derivation and
-equilibrium deactivation; the sub-terrain preservation rules; and the
-exact-pressure behavior driven through the real `simulateActiveTick`,
-in-chunk and across both an ordinary and a WRAPPED seam, on a pair whose
-two exact surfaces share one integer ceiling — a fixture that separates
-the exact comparison from a ceiling comparison, from reading the
-source's volume for the neighbour's surface, and from re-multiplying the
-difference by the scale, each of which yields a different number),
-`--match "Sim.Fluid.Conservation"`, `--match "Sim.Fluid.Seam"`,
-`--match "unlike-fluid reaction"`, `--match "save migrations"` (the
-v1/v2/v3 → v4 scaling and the exact round trip),
-and `python3 tools/save_compat_audit.py`. The slow
-`python3 tools/save_compat_migration_probe.py` (every legacy fixture, about an
-hour) is optional (#2912): run it on request, not as a required gate.
-
-The tracked `z3-exact-fluid-units` fixture is a real saved session whose
-snapshots carry partial top levels under several fluid types, Ocean
-included. Its canonical summary pins the plane in three layers, because
-each closes a hole the one above it leaves open:
-
-- the page totals (`count`, `partialCount`, `exactSum`) catch a rescale
-  of the whole plane, but a TYPE SWAP leaves all three unchanged, and so
-  does any compensating pair of remainder corruptions that keeps the sum;
-- `byType` adds, per fluid type, a histogram of how many cells sit at
-  each top fill level 1..8 — so a swap moves a row, and a one-unit cell
-  is a level-1 row under its own type. A histogram is still a MULTISET
-  though: two same-type cells moved by `+8` and `-8` keep both their
-  levels and the sum, and a permutation of two cells' surfaces is
-  invisible to it;
-- `digest` closes both. It is an `fnv1a64` over EVERY snapshot in
-  canonical coordinate order, each carrying its own coordinate, type and
-  exact surface, so any change to any cell — value, type, position or
-  ordering — moves it. `samples` then makes a mismatch legible: the
-  coordinate-first witness of each (type, level) present, which is where
-  the mandated one-unit, seven-unit and partial-Ocean cells are pinned
-  individually and by coordinate.
-
-What the save records is the exact SURFACE, not volume-over-terrain:
-terrain is regenerated from the page's own gen params rather than
-stored. Surface is the durable quantity, and against the deterministic
-terrain a given seed regenerates it fixes the volume too; the
-volume-over-terrain identity itself is proved at a KNOWN terrain by the
-hspec round trip. The integer Lua returns and the dump's `fluidSurf`
-cannot see a remainder at all, so neither can stand in for any of this;
-the exact diagnostics #2535 added can, and `fluid_exact_restart` uses
-them for the fresh-process chain.
+Gates: the `Sim.Fluid.Exact`, `Sim.Fluid.Conservation`, `Sim.Fluid.Seam`
+and `unlike-fluid reaction` Hspec groups cover exact state and simulation
+behavior. `fluid_exact_restart` checks save/load preservation across fresh
+processes. The current schema guard and current-fixture codec audit cover the
+save-format boundary; no pre-release historical fluid fixture is maintained.
 
 ---
 
@@ -8348,12 +8215,12 @@ The invariants, each held by a test of the `Scenario.World` group:
   content-derived generated ids made unique against the document's other ids.
 
 **Gates:** hspec `--match "Scenario.World"`, `--match "Scenario.Schema"`
-(format v2), `--match "save components"`, `--match "save migrations"`
-(`z16-scenario-world`), `--match "Gameplay.Tags"`, `--match "Sim.Fluid.Exact"`,
-`--match "sim chunk admission"`, `--match "flora instance persistence"`,
-`--match "crop plant invalidation"`, `--match "persistence contract"`,
-`--match "arena finite bounds"`; `tools/enum_append_only_audit.py` and
-`tools/save_compat_audit.py`.
+(format v2), `--match "save components"`, `--match "current page-core persistence"`, `--match "current tag admission"`,
+`--match "Gameplay.Tags"`, `--match "Sim.Fluid.Exact"`, `--match "sim chunk admission"`,
+`--match "flora instance persistence"`, `--match "crop plant invalidation"`,
+`--match "persistence contract"`,
+`--match "arena finite bounds"`; `tools/current_save_schema_audit.py`, `tools/test_save_compat_audit.py`
+and `tools/save_compat_audit.py`.
 
 ## Scenario placement: structures, buildings and real locations (#2712)
 
@@ -8430,7 +8297,7 @@ significant contents"`, `--match "Location container shells"`, `--match
 "persistence reference integrity"`, `--match "save components"`, `--match "save
 migrations"`; `tools/persistence_inventory_audit.py`,
 `tools/engine_env_capability_audit.py`, `tools/save_compat_audit.py`,
-`tools/enum_append_only_audit.py`, `tools/haskell_module_budget.py`,
+`tools/current_save_schema_audit.py`, `tools/haskell_module_budget.py`,
 `tools/lua_module_budget.py` and `tools/unicode_operator_audit.py`.
 
 ---
@@ -8586,7 +8453,7 @@ identity steps.
 disposition"`, `--match "load replacement clears transient session surfaces"`,
 `--match "persistence contract"`; `tools/transactional_load_probe.py`,
 `tools/persistence_inventory_audit.py`, `tools/engine_env_capability_audit.py`,
-`tools/save_compat_audit.py`, `tools/enum_append_only_audit.py`,
+`tools/save_compat_audit.py`, `tools/current_save_schema_audit.py`,
 `tools/haskell_module_budget.py`, `tools/lua_module_budget.py` and
 `tools/unicode_operator_audit.py`.
 
