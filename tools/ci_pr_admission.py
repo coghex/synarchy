@@ -347,25 +347,32 @@ def _timestamp(text: object) -> float:
         return -1.0
 
 
-def force_push_epoch(cli: Runner, repo: str, pr_number: str) -> tuple[bool, float]:
-    """When this pull request's head was last FORCE-PUSHED (0.0: never).
+def force_push_epoch(cli: Runner, repo: str, pr_number: str
+                     ) -> tuple[bool, float, frozenset]:
+    """When this pull request's head was last FORCE-PUSHED, and onto what.
 
-    Answers (readable, epoch seconds). Any head that predates a force push can
-    only be the current head again through a push made after it: the force
-    push left some commit as the head, and getting back to the one in question
-    (by a second force push, or by an ordinary fast-forward after rewinding to
-    an ancestor) is a later transition. So a head's evidence counts only from
-    the latest force push of the PR onward, whichever commit that push named.
-    The `head_ref_force_pushed` timeline event records the push itself rather
-    than inferring it from whichever review-gate runs are listed yet.
+    Answers (readable, epoch seconds or 0.0 for never, the commits that push
+    (or pushes, when several share the second) left as the head). Any head that
+    predates a force push can only be the current head again through a push
+    made after it: the force push left some commit as the head, and getting
+    back to the one in question (by a second force push, or by an ordinary
+    fast-forward after rewinding to an ancestor) is a later transition. So a
+    head's evidence counts only from the latest force push of the PR onward,
+    whichever commit that push named. The `head_ref_force_pushed` timeline
+    event records the push itself rather than inferring it from whichever
+    review-gate runs are listed yet.
     """
     events = _paged(cli, f"repos/{repo}/issues/{pr_number}/timeline", None)
     if events is None:
-        return False, 0.0
-    stamps = [_timestamp(event.get("created_at")) for event in events
+        return False, 0.0, frozenset()
+    pushes = [(_timestamp(event.get("created_at")), event.get("commit_id"))
+              for event in events
               if isinstance(event, dict)
               and event.get("event") == "head_ref_force_pushed"]
-    return True, max(stamps, default=0.0)
+    if not pushes:
+        return True, 0.0, frozenset()
+    epoch = max(stamp for stamp, _ in pushes)
+    return True, epoch, frozenset(commit for stamp, commit in pushes if stamp == epoch)
 
 
 def _run_prs(run: dict) -> set[str]:
@@ -416,7 +423,7 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # is not its evidence, whatever branch it ran on (forks share branch
     # names), and an unattributable run leaves the head unverified.
     scoped = [run for run in runs if pr_number in _run_prs(run)]
-    readable, epoch = force_push_epoch(cli, repo, pr_number)
+    readable, epoch, epoch_commits = force_push_epoch(cli, repo, pr_number)
     if not readable:
         return False, None
     # A head can be revisited (H, then X, then a force push back to H). Only
@@ -427,9 +434,20 @@ def fetch_dismissal(cli: Runner, repo: str, pr_number: str, head_ref: str,
     # ... and, when the timeline records any force push, only runs created at
     # or after the latest one: it is the transition being admitted, and
     # it is visible even while the runs it triggered are not yet listed.
+    #
+    # Timestamps have one-second precision, so ordering is proven only
+    # STRICTLY: a run created after the push counts; a run created in the very
+    # same second counts only when it is for the commit that push left as the
+    # head (the run that push triggered); anything else, an unreadable stamp
+    # included, is not evidence. No allowance is made for clock skew.
+    def after_push(run: dict) -> bool:
+        if not epoch:
+            return True
+        created = _timestamp(run.get("created_at"))
+        return created > epoch or (created == epoch and run.get("head_sha") in epoch_commits)
+
     mine = [run for run in scoped
-            if run.get("head_sha") == sha and run["id"] > latest_other
-            and (not epoch or _timestamp(run.get("created_at")) >= epoch - 2)]
+            if run.get("head_sha") == sha and run["id"] > latest_other and after_push(run)]
     unsettled = Dismissal("queued", "")
     if not mine:
         return True, unsettled
@@ -521,8 +539,9 @@ def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str,
     sha, this head): the same commit can head two pull requests, probe
     selection, the expensive gates and the save-schema comparison depend on
     the base, and a dispatched run's record names neither. Automatic and
-    dispatched runs are judged alike, and the NEWEST that ran CI wins, so a
-    manual recovery run supersedes the automatic failure it recovered. A run
+    dispatched runs are judged alike, and the one that most recently FINISHED
+    executing wins (a rerun counts from its rerun), so a manual recovery run
+    supersedes the automatic failure it recovered. A run
     that is not finished is ignored: same-head admitting runs are serialized
     by the workflow's concurrency group, so one still running is an
     unrelated-label run in its own group, which skips every job.
@@ -533,7 +552,14 @@ def find_prior_run(cli: Runner, repo: str, sha: str, my_run_id: str,
     runs = _runs(cli, repo, "ci.yml", head_sha=sha)
     if runs is None:
         return "unreadable", None
-    for run in sorted(runs, key=lambda item: item["id"], reverse=True):
+    # Newest LATEST EXECUTION first: a rerun keeps its run id, so an older run
+    # that was re-run later is the newest result, and the run id cannot order
+    # results. `updated_at` is when the run last finished executing.
+    def latest(item: dict) -> tuple[float, int]:
+        return (max(_timestamp(item.get("updated_at")), _timestamp(item.get("created_at"))),
+                item["id"])
+
+    for run in sorted(runs, key=latest, reverse=True):
         if str(run["id"]) == str(my_run_id) or run.get("status") != "completed" \
                 or run.get("event") not in ("pull_request", "workflow_dispatch"):
             continue
@@ -881,7 +907,7 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
                head: str = HEAD, prs: tuple = ("7",), audits: str | None = "success",
                build: str | None = "success", probes: str | None = "success",
                base_ref: str = "master", base_sha: str = BASE, title: str = "",
-               pr: str = "7", identity: bool = True) -> dict:
+               pr: str = "7", identity: bool = True, updated: int | None = None) -> dict:
         jobs = [job(run_id * 10 + 1, "completed", audits, "static-audits"),
                 job(run_id * 10 + 2, "completed", build, "build-test"),
                 job(run_id * 10 + 3, "completed", probes, "behavior-probes")]
@@ -889,7 +915,8 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
             jobs.append(job(run_id * 10 + 4, "completed", "success",
                             identity_for(pr, base_ref, base_sha, head)))
         return {"id": run_id, "event": event, "status": status, "head_sha": head,
-                "jobs": jobs, "display_title": title,
+                "jobs": jobs, "display_title": title, "created_at": stamp(run_id),
+                "updated_at": stamp(updated if updated is not None else run_id),
                 "pull_requests": [{"number": int(n), "base": {"ref": base_ref, "sha": base_sha}}
                                   for n in prs]}
 
@@ -1183,6 +1210,29 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
           wait(Gate(old_h, old_h + [gate_run(101, job(12, "in_progress", None))],
                     old_h + [gate_run(101, job(12, "completed", "success"))],
                     force_pushes=[(100, OLD)]), require=True), (True, _OK))
+    # Round 7: one-second timestamps prove order only strictly; no slack.
+    old100 = [gate_run(100, ok_job)]
+    check("await: an old run 2s before a rewind is not this transition's evidence",
+          wait(Gate(old100, force_pushes=[(102, OLD)]), require=True), (True, Dismissal("queued", "")))
+    check("await: ... nor one 1s before",
+          wait(Gate([gate_run(101, ok_job)], force_pushes=[(102, OLD)]), require=True),
+          (True, Dismissal("queued", "")))
+    check("await: a run in the SAME second for another commit is not evidence (ordering unprovable)",
+          wait(Gate([gate_run(102, ok_job)], force_pushes=[(102, OLD)]), require=True),
+          (True, Dismissal("queued", "")))
+    check("await: a run in the same second for the commit the push left IS the push's own run",
+          wait(Gate([gate_run(102, ok_job)], force_pushes=[(102, HEAD)]), require=True), (True, _OK))
+    check("await: a run after the push is evidence",
+          wait(Gate(old100 + [gate_run(103, ok_job)], force_pushes=[(102, OLD)]), require=True),
+          (True, _OK))
+    check("await: a run with no usable timestamp is never evidence after a force push",
+          wait(Gate([{**gate_run(150, ok_job), "created_at": "garbage"}],
+                    force_pushes=[(102, OLD)]), require=True), (True, Dismissal("queued", "")))
+    for label, event in (("synchronize", sync), ("labeled", approve),
+                         ("dispatch", _event("workflow_dispatch", ""))):
+        check(f"admit: {label} with an old success 2s before the rewind is not admitted",
+              admit(event, pull=pull_json(), gate=Gate(old100, force_pushes=[(102, OLD)])).code,
+              "dismissal-pending")
     check("await: a force push older than the head's own runs does not matter",
           wait(Gate([gate_run(150, ok_job)], force_pushes=[(100, OLD)]), require=True), (True, _OK))
     check("await: an unreadable timeline is unverified, never 'no force push'",
@@ -1303,6 +1353,18 @@ def _self_test(workflow: Path = CI_WORKFLOW) -> int:  # noqa: C901 - a flat list
     r = admit(approve, pull=pull_json(),
               gate=done(ci=[ci_run(500), ci_run(600, event="workflow_dispatch", prs=(),
                                                 build="failure", probes="failure")]))
+    # Round 7: reruns keep their run id, so results order by latest execution.
+    rerun_dispatch = lambda i, build, updated: ci_run(  # noqa: E731
+        i, event="workflow_dispatch", prs=(), build=build,
+        probes=build, updated=updated)
+    r = admit(approve, pull=pull_json(), gate=done(ci=[
+        rerun_dispatch(500, "success", 900), rerun_dispatch(600, "failure", 700)]))
+    check("duplicate: an older run re-run after a newer one is the newest result (success)",
+          (r.mirror_build_test, r.mirror_probes), ("success", "success"))
+    r = admit(approve, pull=pull_json(), gate=done(ci=[
+        rerun_dispatch(500, "failure", 900), rerun_dispatch(600, "success", 700)]))
+    check("duplicate: ... and a rerun's newer failure replaces an older success",
+          (r.mirror_build_test, r.mirror_probes), ("failure", "failure"))
     check("duplicate: a later failed dispatch is the verdict mirrored",
           (r.mirror_build_test, r.mirror_probes), ("failure", "failure"))
     check("duplicate: a dispatch for another PR is not this PR's result",
