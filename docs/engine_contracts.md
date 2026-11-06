@@ -477,9 +477,11 @@ moves afterwards can still require a branch update and a further run under
    stale-approval outcome is known, never taken from the event payload;
 3. the stale-approval evidence for this pull request's head is settled and
    good. It is read from `review-gate.yml`'s own runs and jobs, scoped to the
-   pull request (its head branch and each run's own PR list, so a commit
-   shared by two PRs keeps their outcomes apart), and waited for up to 15
-   minutes. The newest real `dismiss-stale-approval` outcome must have
+   pull request (its head branch and each run's own PR list, which a run
+   must positively name, so a commit shared by two PRs keeps their outcomes
+   apart), and waited for up to 15 minutes. A head that was visited before
+   and pushed back to is judged only on runs newer than the latest run for
+   another head. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
    PR's initial head, proved positively: every review-gate run of the PR is
@@ -506,12 +508,16 @@ survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
 concurrency group of its own, never cancels, and skips every job. Admitting
 events of one head share one concurrency group (per head, no cancel), so they
 run one after another and never cancel each other's work. When an earlier
-run already ran CI for that head (its `static-audits` concluded), the later
+run already ran CI for that head and that pull request's base (its
+`static-audits` concluded and its own record names this PR, base ref and
+base sha; unfinished runs, which can only be unrelated-label runs, are
+ignored), the later
 run's admission is mode `dup`: nothing runs, and `build-test` and
 `behavior-probes` mirror the earlier run's verdicts, so a duplicate event
 neither repeats the expensive work nor turns a green result red. An explicit
 dispatch is never suppressed. Superseding a head is explicit: admission
-cancels the pull request's live runs for any other head.
+cancels the pull request's live runs for any other head, dispatched runs
+included (their record names no PR, so `ci.yml`'s `run-name` does).
 
 **A gated-out run never counts as passing.** GitHub reports a skipped required
 job as success, and the newest check run of a name wins. So the required
