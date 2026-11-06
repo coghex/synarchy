@@ -137,6 +137,21 @@ jobs:
             --pr "$PR_NUMBER" \
             --repo "$REPO"
 
+  # Names the transition this run judges, for tools/ci_pr_admission.py. The
+  # run API carries neither head of a synchronize, and one-second timestamps
+  # cannot tell a force-pushed head's own run from an older run for the same
+  # commit, so ci.yml's admission reads the (before, after) pair back from
+  # THIS job's name and matches it against the force-push event's heads.
+  dismissal-transition:
+    name: ${{ format('dismissal-transition before={0} after={1}', github.event.before, github.event.after) }}
+    if: github.event.action == 'synchronize'
+    runs-on: ubuntu-26.04
+    steps:
+      - run: echo "synchronize $BEFORE -> $AFTER"
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+
   # This job name is the required-status-check context.
   #
   # It used to answer from `github.event.pull_request.labels`, on the
