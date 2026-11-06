@@ -485,13 +485,13 @@ moves afterwards can still require a branch update and a further run under
    timeline, any commit: a rewind to an ancestor and a fast-forward back
    leaves a force push of the ancestor). Timestamps have one-second precision,
    so order is proven strictly, with no slack: the run must be created
-   strictly after that push and the outcome is taken only from a job that
-   started strictly after it. A run created in the same second as the push
-   is never evidence (a later job start does not associate it with the
-   transition) and a missing or unusable stamp is no evidence, so unprovable
-   ordering stays pending. Known cost: the head a force push itself creates
-   stays pending when its own dismissal run lands in the push's second,
-   until the next push. Run, job and timeline history is always read to the
+   strictly after that push, or in the same second AND positively tied to it.
+   `review-gate.yml` records each synchronize's (before, after) heads in the
+   name of a `dismissal-transition` job, and the PR timeline (GraphQL) names
+   the heads the force push moved between, so the push's own run matches and
+   an older run for the same commit does not. A missing or unusable stamp, or
+   a same-second run with no matching transition, is no evidence and stays
+   pending. Run, job and timeline history is always read to the
    end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
@@ -519,8 +519,9 @@ survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
 concurrency group of its own, never cancels, and skips every job. Admitting
 events of one head share one concurrency group (per head, no cancel), so they
 run one after another and never cancel each other's work. When an earlier
-run already ran CI for that exact identity (its `static-audits` concluded
-and its `ci-identity` job is named for this PR, base ref, base sha and head;
+run was admitted for that exact identity (its `ci-identity` job ran, named
+for this PR, base ref, base sha and head, and `build-test` concluded, so an
+image-stage failure is a verdict too;
 automatic and dispatched runs alike; the run that most recently finished
 executing wins (a rerun keeps its id), so a successful manual recovery
 supersedes the failure it recovered; unfinished runs, which can only
