@@ -490,8 +490,10 @@ moves afterwards can still require a branch update and a further run under
    review-gate run: `review-gate.yml` records each synchronize's (before,
    after) heads in the name of a `dismissal-transition` job, and the PR
    timeline (GraphQL) names the heads the push moved between, which finds the
-   push's own run. A same-second run counts only if its id (allocated in
-   creation order) is at or after that run's. A rewind plus fast-forward in
+   push's own run. Pairs can repeat (X to H, H to X, X to H), so the PR's
+   pushes in that second are counted and the anchor is trusted only once a run
+   is visible for every one of them. A same-second run counts only if its id
+   (allocated in creation order) is at or after that anchor's. A rewind plus fast-forward in
    one second is therefore accepted, an older run with the same marker is
    not, and when the push's own run is not listed yet, or a stamp is missing
    or unusable, the head stays pending. Run, job and timeline history is always read to the
