@@ -492,8 +492,14 @@ moves afterwards can still require a branch update and a further run under
    timeline (GraphQL) names the heads the push moved between, which finds the
    push's own run. Pairs can repeat (X to H, H to X, X to H), so the PR's
    pushes in that second are counted and the anchor is trusted only once a run
-   is visible for every one of them. A same-second run counts only if its id
-   (allocated in creation order) is at or after that anchor's. A rewind plus fast-forward in
+   is visible for every one of them. Once a PR has been force-pushed, every outcome
+   is tied to the transition through that anchor, whatever second its run
+   was created in: it counts only if its run id (allocated in creation order)
+   is at or after the anchor's, and without a trusted anchor nothing counts.
+   Known cost: a PR whose latest force push predates the
+   `dismissal-transition` job (or whose push run has aged out of run
+   retention) stays pending; one more force push (for example `git commit
+   --amend --no-edit` then `git push --force-with-lease`) makes a new anchor. A rewind plus fast-forward in
    one second is therefore accepted, an older run with the same marker is
    not, and when the push's own run is not listed yet, or a stamp is missing
    or unusable, the head stays pending. Run, job and timeline history is always read to the
