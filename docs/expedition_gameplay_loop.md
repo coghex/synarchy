@@ -781,9 +781,9 @@ shared texture rather than a per-definition art matrix.
 *Consequence:* **`LifecycleHinted` now has no planned producer, ever.** It was
 reserved for a class of locations revealed by information rather than
 proximity; D-14 and D-21 remove that class from the design entirely. The state
-nonetheless stays in the enum: `LocationLifecycle` derives `Serialize` and is
-guarded by `tools/enum_append_only_audit.py`, so deleting a constructor is a
-wire-format break the audit refuses to record. Leave it in place and leave the
+nonetheless stays in the enum: `LocationLifecycle` derives `Serialize` and is included in the compiled
+current-schema guard. A persisted change requires the affected carrier version
+to advance and the prior version to be refused. Leave it in place and leave the
 `Location.Instance` comment explaining it, corrected to say the reserved use was
 dropped rather than that it is pending.
 
@@ -1018,8 +1018,8 @@ location mechanic rather than deferred.
 
 Consequently `LifecycleHinted` has **no planned producer, ever**. It stays in the
 enum anyway: `LocationLifecycle` derives `Serialize` and
-`tools/enum_append_only_audit.py` refuses to record a constructor removal as
-anything but a wire-format break. The `Location.Instance` comment reserving it
+The compiled current-schema guard requires an affected persisted carrier
+version change and current-only acceptance after a constructor removal. The `Location.Instance` comment reserving it
 for a future class must be corrected to say the reserved use was dropped.
 
 ### Q-11. What happens to `discovery_margin` once nothing consumes it?

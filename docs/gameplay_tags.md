@@ -341,23 +341,17 @@ clearance.
   publication leaves the old session and its tags intact and paused, and
   a load never merges registries or reads scenario YAML.
 - **Tooling.** `exe:synarchy-save-codec`'s canonical summary lists each
-  page's assignments by target id, and its `seed-tags` operation writes
-  assignments into a save through the real codec, for fixtures and the
-  probe only.
+  page's assignments by target id. Its `seed-tags` operation writes
+  assignments through the real codec for the current fixture and probe.
 
 ### Gates
 
-- Hspec `--match "Gameplay.Tags"`, which includes
-  `Gameplay.Tags.Persistence`: every live edit and lifecycle path above
-  through the real handlers, page replacement through all three
-  transitions, nonempty codec round trips, migrated empty defaults,
-  dangling and wrong-page handling, and pre-publication failure.
-- `--match "save migrations"`: the tracked `z9-gameplay-tags` fixture
-  (nonempty assignments in all three categories) and every older
-  fixture's empty default, compared exactly.
-- `python3 tools/test_save_compat_audit.py --only-reproducibility`:
-  seeded fixtures are byte-reproducible, and the summary reads none off
-  `z8` and nonempty ones off `z9`.
+- Hspec `--match "Gameplay.Tags.Persistence"` covers live edits, lifecycle
+  transitions, current codec round trips, empty defaults, dangling and
+  wrong-page handling, and pre-publication failure.
+- Hspec `--match "current tag admission"` covers current-format tile and
+  plant assignments through load staging. The compiled current-schema guard
+  and current-fixture codec audit cover the persisted carrier shape.
 - `tools/gameplay_tag_persistence_probe.py` (manual-only): generated
   world, autosave and arena fresh-process cycles over codec-seeded tags.
 - `tools/persistence_inventory_audit.py` for the inventory rows.
@@ -498,10 +492,9 @@ refunds are new identities.
   epoch guard, the attachment boundary, and save, load, dangling,
   pre-publication failure and v1 migration. Both index directions are
   checked after each transition.
-- `--match "save migrations"`: the tracked `z10-item-tags` fixture
-  (nonempty, `core-session` v2), the `z12-item-scenario-refs` fixture
-  (nonempty references, `core-session` v3) and every older fixture's
-  empty default.
+- `--match "Gameplay.Tags.Persistence"` covers current-format save, load,
+  dangling-reference, pre-publication failure and replacement behavior.
+  The current-schema guard checks the carrier version and accepted shape.
 - `tools/gameplay_tag_persistence_probe.py` (manual-only): item
   assignments across owner categories and nested contents, through
   ownership changes, consumption and ground destruction, fresh-process
@@ -659,16 +652,11 @@ does not remove the plot, and no new plot removal rule was invented.
   - a save made while a tagged chunk is evicted, the real codec round
     trip, load install, reverse index rebuild, replacement and
     pre-publication failure, the dangling plot, and v4 migration.
-- `--match "save migrations"`: the tracked `z11-tile-flora-tags`
-  fixture (nonempty cells and both occurrence namespaces, `world-edits`
-  v5; z12 and z13 inherit them) and every older fixture's empty default.
-  Every manifest-declared fixture's cell and occurrence assignments must
-  also survive the real load staging unchanged, with the chunk owning each
-  target resident (reconciliation leaves an absent chunk's assignments
-  alone, so an unbuilt chunk would pass vacuously), so a codec-seeded
-  fixture cannot ship tags admission discards (#2894). The v5 payload the
-  corpus keeps is written by `downgradeWorldEditsV5`, which the same group
-  pins as the inverse of the v5 migration.
+- `--match "current tag admission"` covers current tile and plant tag
+  assignments through load staging, including resident target chunks and
+  admission reconciliation. `--match "world-edits current persistence"`
+  covers the current world-edits payload. The fresh-process
+  `persistence_contract` probe covers whole-session tag round trips.
 - `tools/gameplay_tag_persistence_probe.py`'s place leg: real cells, a
   wild occurrence and a wheat plot through a fresh-process save made
   while their chunk is absent, readmission, real digging and an
