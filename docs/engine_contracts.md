@@ -480,9 +480,10 @@ moves afterwards can still require a branch update and a further run under
    pull request (its head branch and each run's own PR list, which a run
    must positively name, so a commit shared by two PRs keeps their outcomes
    apart), and waited for up to 15 minutes. A head that was visited before
-   and pushed back to (a force push, which the PR timeline records) is judged
-   only on runs newer than the latest run for another head and newer than
-   that recorded push. Run, job and timeline history is always read to the
+   and pushed back to is judged only on runs newer than the latest run for
+   another head and newer than the PR's latest recorded force push (the PR
+   timeline, any commit: a rewind to an ancestor and a fast-forward back
+   leaves a force push of the ancestor). Run, job and timeline history is always read to the
    end (`--paginate --slurp`), never as a first page. The newest real `dismiss-stale-approval` outcome must have
    completed and succeeded. The job's skipped records (on `opened`/`labeled`
    events) are not outcomes. Absence of any outcome is accepted only for the
@@ -510,10 +511,11 @@ survived. An unrelated label (`tooling`, `reviewed:changes`) is put in a
 concurrency group of its own, never cancels, and skips every job. Admitting
 events of one head share one concurrency group (per head, no cancel), so they
 run one after another and never cancel each other's work. When an earlier
-run already ran CI for that head and that pull request's base (its
-`static-audits` concluded and its own record names this PR, base ref and
-base sha; unfinished runs, which can only be unrelated-label runs, are
-ignored), the later
+run already ran CI for that exact identity (its `static-audits` concluded
+and its `ci-identity` job is named for this PR, base ref, base sha and head;
+automatic and dispatched runs alike, newest wins, so a successful manual
+recovery supersedes the failure it recovered; unfinished runs, which can only
+be unrelated-label runs, are ignored), the later
 run's admission is mode `dup`: nothing runs, and `build-test` and
 `behavior-probes` mirror the earlier run's verdicts, so a duplicate event
 neither repeats the expensive work nor turns a green result red. An explicit
