@@ -17,7 +17,8 @@
 --   Nothing here is a save component. The two records that reach disk
 --   ('EntryRecord', 'RegistryFile') are the library's OWN files, written
 --   and read only by "World.GeneratedLibrary", and are single-
---   constructor so the enum append-only audit has nothing to guard.
+--   constructor and never enter a save, so they are outside the current
+--   save-schema guard's serialized-type set.
 module World.GeneratedLibrary.Types
     ( -- * Configuration
       LibraryConfig(..)

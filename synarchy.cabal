@@ -31,8 +31,7 @@ extra-doc-files:    CHANGELOG.md
 -- READS from a relative path (#2175) — game-data YAML, image/font
 -- assets, the compiled unit atlas indexes, the Lua game scripts, the
 -- versioned config templates, the headless suite's own on-disk data,
--- and the two save-compat documents plus the one playtest module the
--- suite reads out of docs/ and tools/.
+-- and the one playtest module the suite reads out of tools/.
 --
 -- Three deliberate exclusions, each of which the completeness audit
 -- (tools/sdist_manifest_audit.py, run by CI and `make ci`) enforces as
@@ -52,13 +51,10 @@ extra-doc-files:    CHANGELOG.md
 --     binary or the packaged headless suite runs reads them. The
 --     tarball is the buildable source tree, not the development
 --     workflow: the Python audits, probes and design documents are
---     read only from a git checkout. The exceptions below are exactly
---     three files -- the two a test example opens by relative path
---     (docs/save_compat/manifest.json, whose fixtures the save-compat
---     suite decodes, and tools/playtest/critic_click.py, which
---     Test.Headless.UI.InteractiveBounds reads), and the one a shipped
---     audit maintains as its baseline
---     (docs/save_compat/enum_baseline.json).
+--     read only from a git checkout. The exception below is the one
+--     file a test example opens by relative path:
+--     tools/playtest/critic_click.py, which
+--     Test.Headless.UI.InteractiveBounds reads.
 --
 -- cabal.project ships too, and is the one entry that is neither a
 -- runtime nor a test resource. It carries the index-state pin (#1354),
@@ -70,8 +66,8 @@ extra-doc-files:    CHANGELOG.md
 -- solver's view has to travel with the source it describes.
 --
 -- Everything else is a GLOB over a resource family rather than a list
--- of names, so adding a texture, a save-compat fixture or an atlas
--- index needs no edit here. That is also what the audit compares
+-- of names, so adding a texture or an atlas index needs no edit here.
+-- That is also what the audit compares
 -- against: the tracked files matching each family, enumerated at run
 -- time, never a frozen count.
 --
@@ -95,7 +91,6 @@ extra-source-files: cabal.project
                     assets/**/*.ttf
                     assets/**/*.json
                     scripts/**/*.lua
-                    test-headless/data/**/*.bin
                     test-headless/data/**/*.json
                     test-headless/data/**/*.txt
                     test-headless/data/audio/*.wav
@@ -109,7 +104,6 @@ extra-source-files: cabal.project
                     tools/generate_audio_fixtures.py
                     docs/audio_authoring.md
                     docs/audio_runtime.md
-                    docs/save_compat/*.json
                     tools/playtest/critic_click.py
                     config/keybinds_default.yaml
                     config/pathing.yaml
@@ -1737,12 +1731,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.SweatMassScaling
                    Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.GenConfigDomain
-                   Test.Headless.World.Save.Compat
-                   Test.Headless.World.Save.Compat.B1Fixture
-                   Test.Headless.World.Save.Compat.Baselines
-                   Test.Headless.World.Save.Compat.Historical
-                   Test.Headless.World.Save.Compat.Legacy
                    Test.Headless.World.Save.Compat.TagTargets
+                   Test.Headless.World.Save.CurrentPageCore
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract

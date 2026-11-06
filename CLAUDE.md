@@ -137,11 +137,15 @@ another owner's processes. User cancellation still ends the wait immediately.
   the combined `test-and-audits` and `static-audits` CI gate set; parity is
   enforced by `tools/ci_parity_audit.py`. Details: engine contracts
   §The `make ci` gate set. It is not a prerequisite to opening a PR.
-- Expensive gate selection is owned by `tools/ci_expensive_gates.py`.
-  Save-compat reproducibility runs only when its `save-compat` inputs change;
-  `test_save_compat_audit.py --without-reproducibility` covers the rest.
-  Neither form starts GHCi since #2273: every real-codec operation execs
-  the compiled `exe:synarchy-save-codec` that `cabal build all` produces.
+- The current save-schema guard runs on every merged code revision and every
+  local tracked edit. CI compares the committed base record with a freshly
+  compiled candidate; local checks use `origin/master` plus tracked working
+  edits. Run `python3 tools/current_save_schema_audit.py --self-test`,
+  `python3 tools/current_save_schema_audit.py --base-ref origin/master`,
+  `python3 tools/test_save_compat_audit.py`, and the focused Hspec save-schema
+  group. This compiled-schema guard cannot prove custom serializer or Lua payload
+  behavior. See `src/World/Save/CLAUDE.md` and
+  `docs/persistence_contract.md` §5.
 - GPU-free specs belong in `test-headless/`; automated gates only compile
   `test/`, whose GLFW initialization prevents assertions without a display.
   Boot fixtures through `Test.Headless.Harness.Log`; use
@@ -194,12 +198,11 @@ another owner's processes. User cancellation still ends the wait immediately.
   `EngineEnv` full access is a closed allowlist; use capabilities. Read the
   capability inventory §2.1 before adding one; §6.4(c)/(d) exceptions need
   maintainer approval. Run the affected inventory/capability audits.
-- **`Generic Serialize` constructors and their fields are positional.**
-  Append enum constructors only; other schema changes need a component migration.
-  A save-version bump does not repair incompatible serialization. Every
-  retained legacy wire type must preserve its original nested enum shapes;
-  freezing only the latest outgoing type is insufficient. Follow
-  `src/World/Save/CLAUDE.md` and `tools/enum_append_only_audit.py`.
+- **`Generic Serialize` constructors and their fields are positional.** Before
+  public release, any persisted shape change advances each affected component
+  version and disables its prior-version route. Pre-release historical saves
+  are unsupported. `currentSaveVersion` is not an on-disk guard. Follow
+  `src/World/Save/CLAUDE.md` and `docs/persistence_contract.md` §5.
 - **Content changes can break saves without changing a codec.** Before
   renaming/removing authored definition identifiers, check persisted references
   and the persistence contract's content-integrity rules. A human-readable

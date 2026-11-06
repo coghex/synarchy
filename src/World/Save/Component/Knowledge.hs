@@ -16,9 +16,8 @@
 --   component in 'World.Save.Component.saveComponentRegistry' is
 --   required, and 'World.Save.Envelope.Codec.decodeEnvelope' refuses a
 --   modern envelope missing one. A container-knowledge payload cannot
---   be required, because every supported baseline the compatibility
---   manifest tracks (@docs/save_compat/manifest.json@) from before
---   #1087 predates this feature and legitimately carries no such
+--   be required, because supported layouts from before #1087
+--   predate this feature and legitimately carries no such
 --   component. An ABSENT
 --   payload therefore leaves every page at 'blankPageSnapshot''s empty
 --   default — so every container in a pre-#1087 session reads as

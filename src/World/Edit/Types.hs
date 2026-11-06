@@ -107,8 +107,9 @@ data WorldEdit
                                            --   'WePlaceFloraWithId' below took
                                            --   its place. It stays because the
                                            --   sum is positionally serialized
-                                           --   and append-only
-                                           --   (tools\/enum_append_only_audit.py):
+                                           --   and positional. A changed
+                                           --   carrier must advance its version
+                                           --   under the current-save policy (#2919):
                                            --   deleting it, or growing its
                                            --   payload in place, would
                                            --   reinterpret tag 8 in every

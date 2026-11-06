@@ -8,9 +8,9 @@ had no counterpart in `tools/ci-local.sh` at all, so a broken
 path-to-probe or path-to-expensive-gate mapping surfaced only after a
 push, as a PR mis-selecting its own gates. Every other cross-file
 contract in this repository is mechanically enforced (persistence
-inventory, EngineEnv capability inventory, findings-report status, enum
-append-only, cabal module inventory); this one — the gate that decides
-whether a change is safe to push — was not.
+inventory, EngineEnv capability inventory, findings-report status,
+current-save schema policy, cabal module inventory); this one — the gate
+that decides whether a change is safe to push — was not.
 
 What this compares
 ------------------
@@ -95,7 +95,7 @@ nothing below imports this file.
                                  gate-set comparison over the audited
                                  jobs' union, and the aggregate, static-
                                  audit, probe and unit-asset topology.
-  tools/ci_parity_save_compat.py the save-compat reproducibility wiring
+  tools/ci_parity_save_policy.py the active current-save policy wiring
                                  (#1360): the executable local block and
                                  the pinned CI guards.
   tools/test_ci_parity_audit.py  every fixture and self-test case,
@@ -144,7 +144,7 @@ from ci_parity_config import (
     WORKFLOW_UNION_LABEL,
     workflow_label,
 )
-from ci_parity_save_compat import audit_save_compat_reproducibility_wiring
+from ci_parity_save_policy import audit_current_save_policy_wiring
 from ci_parity_shell import (
     AuditError,
     cabal_subcommand,
@@ -208,7 +208,7 @@ __all__ = [
     "audit_headless_lane_wiring",
     "audit_parallel_gate_wiring",
     "audit_probe_prerequisite_build",
-    "audit_save_compat_reproducibility_wiring",
+    "audit_current_save_policy_wiring",
     "audit_unit_asset_gate_wiring",
     "probe_prerequisite_step",
     "probe_prerequisite_targets",
@@ -243,7 +243,7 @@ def run_repository_audit() -> int:
         # The gate SET agreeing is not enough for a check both files run
         # conditionally (#1360): they must also agree on the condition.
         problems.extend(
-            audit_save_compat_reproducibility_wiring(yaml_text, shell_text))
+            audit_current_save_policy_wiring(yaml_text, shell_text))
         # Nor for CI's own conditional gate, whose selector and guard now
         # live in the split-out worker (#2272).
         problems.extend(audit_unit_asset_gate_wiring(yaml_text))

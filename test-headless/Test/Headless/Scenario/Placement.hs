@@ -11,8 +11,6 @@ module Test.Headless.Scenario.Placement (spec) where
 import UPrelude
 import Test.Hspec
 import Data.IORef (atomicModifyIORef', modifyIORef', readIORef)
-import qualified Data.ByteString as BS
-import System.Environment (lookupEnv)
 import Data.List (intercalate, sort, sortOn)
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
@@ -76,7 +74,6 @@ spec = do
     bindingSpec
     storageSpec
     saveSpec
-    fixtureSpec
     roundTripSpec
     propertySpec
 
@@ -1052,46 +1049,6 @@ saveSpec = describe "an ordinary save (no scenario document)" $ do
         -- and the restored document is itself clean YAML that decodes
         (_, _) ← roundTrip fx after
         pure ()
-
--- * The retained compatibility fixture
-
--- | Writes @z17-scenario-placement@ when asked to: a finite 20x10 arena
---   page carrying placed content as the current build saves it — a
---   damaged-variant floor and a wall on one tile, a charged battery and a
---   crate holding a bar (each with its scenario reference), and a real
---   @ruin_small@ location with its significant item bound and its own
---   reference — so @buildings@ v4 and @world-pages@ v16 are retained with
---   their identity mappings populated. The page is built by the real
---   adapters and saved through the real envelope encoder; the donor
---   save (@z16-scenario-world@) supplies the metadata and Lua components
---   the page does not own. The example does nothing unless
---   @SYNARCHY_WRITE_PLACEMENT_FIXTURE@ names the output path
---   (@docs/pr-proofs/issue-2712-make-z17.py.txt@ is the recipe).
-fixtureSpec ∷ SpecWith Fx
-fixtureSpec = describe "retained save-compat fixture" $
-    it "builds the page the z17 fixture is saved from, and writes it when asked" $ \fx → do
-        resetRegistries fx
-        (pid, ws) ← newArenaAs (fxEnv fx) (WorldPageId "finite_arena") 20 10
-        ab ← either (fail ∘ show) pure (mkArenaBounds 20 10)
-        sc ← clean fx $ doc
-            [ "structures:"
-            , "  - {id: floor, pack: dungeon_1, piece: floor, x: 3, y: 0, variant: damaged}"
-            , "  - {id: wall, pack: dungeon_1, piece: wall_ne, x: 3, y: 0}"
-            , "buildings:"
-            , "  - {id: battery, definition: high_voltage_battery, x: 5, y: 2, power_charge: 1500}"
-            , "  - {id: crate, definition: cargo_hold_S, x: 6, y: 2, storage: [{id: bar, definition: steel_bar}]}"
-            , "locations:"
-            , "  - {id: ruin, definition: ruin_small, x: -3, y: 0, significant_items: {1: salvage}}"
-            , "ground_items:"
-            , "  - {id: salvage, definition: processing_unit, x: -2.5, y: 0.5}" ]
-        mz ← materialize fx pid ws ab sc
-        mzDiagnostics mz `shouldBe` []
-        c ← capturePage fx pid ws ab
-        (length (cpStructures c), length (cpBuildings c), length (cpLocations c)) `shouldBe` (2, 2, 1)
-        out ← lookupEnv "SYNARCHY_WRITE_PLACEMENT_FIXTURE"
-        forM_ out $ \path → do
-            donor ← BS.readFile "test-headless/data/save-compat/z16-scenario-world.bin"
-            savedEnvelopeFrom fx pid ws donor ≫= BS.writeFile path
 
 -- * The instance owners the adapters rely on
 

@@ -49,7 +49,7 @@ DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which 
 # and runnable on demand with `python3 tools/run_probes.py --only KEY --exact`.
 # A set here, not a census deferral: a deferral is owner-policy state the census
 # tools write and a targeted run could clear, and this policy must not depend on it.
-OPT_IN_ONLY = {"save_compat_migration": "optional; about an hour per run; run on request via tools/run_probes.py --only save_compat_migration --exact"}
+OPT_IN_ONLY = {}
 # The run-level outcome of a protocol probe, beside its declared checks: a probe
 # can report every check PASS and still exit nonzero, which probe_flake records
 # as a failed run.

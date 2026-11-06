@@ -743,10 +743,8 @@ luaCid ∷ Text → ComponentId
 luaCid name = ComponentId ("lua." <> name)
 
 -- | The real Lua persistence registry's module names (mirrors
---   @app-save-codec/Main.hs@'s @luaComponentNames@ and
---   @save_compat_migration_probe.py@'s identical @luaNames@; the first
---   of those was @save_compat_audit@'s @GHCI_DUMP_SUMMARY_TEMPLATE@
---   until #2273 compiled it) -- decode
+--   @app-save-codec/Main.hs@'s @luaComponentNames@; the compiled codec
+--   and runtime probe share the production registry contract -- decode
 --   must be told which component ids are known/required the same way
 --   encode declared them, or an unrecognized-but-required component id
 --   fails decode outright (the same "unknown required component" gate

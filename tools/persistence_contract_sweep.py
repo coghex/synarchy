@@ -17,17 +17,9 @@ richer scenario and a real (not tiny) world size. Since #2274 that
 comparison execs the compiled ``exe:synarchy-save-codec`` rather than a
 ``cabal repl`` of the headless test suite.
 
-This sweep nonetheless RETAINS its exclusive ``cabal-build``
-declaration, and requirement 3 of #2274 asks the reason to be recorded:
-``save_compat_migration`` is selectable (opt-in since #2912, no longer part
-of the default selection), it still declares that resource exclusively on
-its own direct path, and an ancestor's SHARED hold cannot cover that
-child's EXCLUSIVE request. A sweep holding it merely shared would leave
-its nested runner waiting forever on its own ancestor whenever
-``--cross-probe-keys save_compat_migration`` is passed. Retaining the
-conservative exclusive declaration is deliberate; relaxing it would need
-safe nested lock inheritance. See that module's comment for the full
-argument.
+This sweep retains its conservative exclusive ``cabal-build`` declaration.
+The historical migration probe was its only nested exclusive child; PSP-5
+retires that child without changing this sweep's scheduling policy.
 
 This sweep does NOT re-implement the domain-specific scenarios (chop/
 till/crop/plant designations, power-node placement, the assembled
@@ -38,8 +30,9 @@ final behavior". Instead it actually RUNS them (via the existing
 ``tools/run_probes.py --only ... --exact`` aggregate runner -- round-1
 review: a mere "does this file exist" check proves nothing and was
 replaced) and propagates any failure, so requirement 11 (the assembled
-failure contract) and requirement 13 (every maintained migration
-baseline) genuinely stay gated, not merely documented:
+failure contract) stays gated, not merely documented. The compiled
+current-save schema policy is enforced separately by the dedicated CI
+guard:
 
   tools/chop_probe.py, tools/till_probe.py, tools/crop_probe.py,
   tools/plant_probe.py, tools/construction_probe.py (designations),
@@ -49,9 +42,7 @@ baseline) genuinely stay gated, not merely documented:
   (interrupted write / corrupt envelope / restart-and-select fallback),
   tools/save_barrier_probe.py (write-failure surfacing),
   tools/persistence_integrity_probe.py (dangling Haskell/Lua reference
-  tolerance), tools/save_compat_migration_probe.py (every maintained
-  migration baseline, requirement 13; OPT-IN since #2912 -- about an hour
-  per run, so only ``--cross-probe-keys save_compat_migration`` runs it).
+  tolerance).
 
 This is genuinely slow (each cross-referenced probe pays its own real
 engine-boot/worldgen cost on top of this sweep's own scenario) -- that
@@ -65,29 +56,14 @@ coverage, never silently).
 This sweep's OWN scenario, AND every cross-referenced probe it can
 invoke, always uses an isolated resource root, a unique port, and a
 fresh process, and never touches the developer's real saves/
-(requirement 15). Round-5 found only 3 of the 12 cross-referenced
-probes satisfied that (save_storage/persistence_integrity/
-save_compat_migration) and made the other 9 entirely uninvocable from
-this script rather than risk them touching real saves/ -- but that left
-this sweep unable to fulfil its own stated requirement-11/13 coverage.
-Round-6's real fix: those 9 probes (chop/till/crop/plant/construction/
-power/transactional_load/save_barrier/craft_bill) now take
---resource-root themselves and use an isolated root exactly like this
-sweep's own scenario (verified individually against real engines --
-none of them touch this repo's real saves/ any more). All 12 are
-therefore SELECTABLE via ``--cross-probe-keys``
-(SELECTABLE_CROSS_REFERENCED_PROBE_KEYS) -- an unrecognized key exits
-with an error rather than silently running it. craft_bill is the one
-exception kept OUT of the DEFAULT set (not out of selectability): it's
-independently flaky per `tools/ci_probes.py --status` ("craft_job AI
+(requirement 15). The eleven cross-referenced probes are SELECTABLE via
+``--cross-probe-keys`` (``SELECTABLE_CROSS_REFERENCED_PROBE_KEYS``); an
+unrecognized key exits with an error rather than silently running it.
+``craft_bill`` remains outside the DEFAULT set (not out of selectability):
+it is independently flaky per `tools/ci_probes.py --status` ("craft_job AI
 claim/work timing flakes run-to-run on CI"), unrelated to persistence,
 and would make this sweep spuriously fail on unrelated AI timing if
-defaulted on. save_compat_migration is the other one, for a different
-reason (#2912): it is optional, takes about an hour, and the owner decided
-pre-release saves need no routine migration protection, so it runs only
-when listed explicitly. The DEFAULT therefore covers 10 of the 12 keys;
-omitting an optional key never fails the sweep, and a default pass does
-not claim migration-baseline (requirement 13) coverage.
+defaulted on. The DEFAULT therefore covers ten of eleven keys.
 
 Usage:
   python3 tools/persistence_contract_sweep.py [--port 9278] \\
@@ -197,36 +173,15 @@ AI_SCRIPTS = (
 # (round-1 review: an existence-only check proves nothing). Keys, not
 # filenames, since that is what run_probes.py --exact matches against.
 #
-# Round-6 review: previously only save_storage/persistence_integrity/
-# save_compat_migration passed their own --resource-root, and the other
-# 9 (chop/till/crop/plant/construction/power/transactional_load/
-# save_barrier/craft_bill) called engine.saveWorld/loadSave straight
-# against this repo's real saves/ directory -- so round-5 made them
-# entirely uninvocable from this script (no opt-in escape hatch), which
-# left this sweep unable to fulfil its own stated requirement-11/13
-# coverage for anything past the 3 isolated probes. The real fix (this
-# round): those 9 probes themselves now take --resource-root and use an
-# isolated root exactly like this sweep's own scenario (verified live,
-# each individually, against a real engine -- none of them touch this
-# repo's real saves/ any more). All 12 are therefore SELECTABLE via
-# --cross-probe-keys now. craft_bill is still excluded from the DEFAULT
-# (not from selectability): it's independently flaky per
-# `tools/ci_probes.py --status` ("craft_job AI claim/work timing flakes
-# run-to-run on CI"), unrelated to persistence, and would make this
-# sweep spuriously fail on unrelated AI timing if defaulted on.
-# save_compat_migration is also excluded from the DEFAULT (#2912), in its
-# own OPT_IN list because the reason differs: not flakiness but cost and
-# policy -- it replays every tracked legacy fixture (about an hour) and the
-# owner decided on 2026-11-05 that pre-release saves need no routine
-# migration protection. It stays selectable and runs when listed in
-# --cross-probe-keys.
+# PSP-5 retains these isolated current persistence probes and their
+# resource-root contract; historical fixture migration is retired.
 SELECTABLE_CROSS_REFERENCED_PROBE_KEYS = [
     "chop", "till", "crop", "plant", "construction", "power",
     "transactional_load", "save_barrier", "craft_bill",
-    "save_storage", "persistence_integrity", "save_compat_migration",
+    "save_storage", "persistence_integrity",
 ]
 FLAKY_CROSS_REFERENCED_PROBE_KEYS = ["craft_bill"]
-OPT_IN_CROSS_REFERENCED_PROBE_KEYS = ["save_compat_migration"]
+OPT_IN_CROSS_REFERENCED_PROBE_KEYS: list[str] = []
 DEFAULT_CROSS_REFERENCED_PROBE_KEYS = [
     k for k in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
     if k not in FLAKY_CROSS_REFERENCED_PROBE_KEYS
@@ -346,7 +301,7 @@ def get_attack_target(port: int, uid: int):
 def assert_nondefault_map_mode(chk: "Checks", tmpdir: str, save_path: str, page: str) -> None:
     """world.setMapMode has no live query counterpart, so the non-default
     value is verified through the same dump_canonical_summary decode
-    tools/save_compat_migration_probe.py already uses."""
+    the selected probe already uses."""
     import json
     out_path = os.path.join(tmpdir, "map_mode_check.json")
     ok, tail = dump_canonical_summary(Path(save_path), Path(out_path))
@@ -725,9 +680,7 @@ def main() -> int:
                           " are accepted (every one isolated, requirement 15); "
                           "default: all of them except craft_bill (isolated but "
                           "independently flaky per `ci_probes.py --status`) and "
-                          "save_compat_migration (optional, about an hour; the "
-                          "default therefore does not exercise the migration "
-                          "baselines); each must be listed explicitly to opt in")
+                          "each accepted key is run by the persistence sweep")
     ap.add_argument("--cross-probe-jobs", type=int, default=2,
                      help="run_probes.py --jobs for the cross-referenced probes")
     ap.add_argument("--cross-probe-retries", type=nonnegative_int, default=1,

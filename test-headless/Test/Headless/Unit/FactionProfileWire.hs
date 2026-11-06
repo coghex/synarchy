@@ -24,9 +24,7 @@ import UPrelude
 import Test.Hspec
 import Data.IORef (atomicModifyIORef', newIORef, writeIORef)
 import Data.List (sort)
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Serialize as S
 import qualified Data.Text as T
@@ -67,7 +65,6 @@ import World.Save.Component.Types (ComponentCodec(..))
 import World.Save.Compat.SessionV90
     ( SaveDataV90(..), UnitSnapshotV90(..), WorldPageSaveV90(..)
     , migrateSessionV90 )
-import World.Save.Envelope (decodeSessionEnvelope)
 import Test.Headless.World.Save.Components.Fixture
     ( minimalSaveDataV90, minimalSaveMetadataV90, minimalWorldPageSaveV90 )
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
@@ -413,29 +410,6 @@ exactWireSpec = describe "units v3 exactness" $ do
                 usnInstances (toUnitSnapshot pageA um)
                     `shouldBe` usnInstances snap0
 
-    it "the tracked units v3 fixture (z6) decodes every legacy spawn \
-       \source's profile from real stored bytes" $ do
-        bytes ← BS.readFile
-            "test-headless/data/save-compat/z6-unit-faction-profile.bin"
-        let luaNames = HS.fromList ["unit_ai", "building_spawn"]
-        case decodeSessionEnvelope luaNames luaNames bytes of
-            Left err → expectationFailure (T.unpack err)
-            Right (_, snap, _, _) → do
-                let factions = HM.unions
-                        [ HM.map uisFaction (usnInstances (pgsUnits p))
-                        | p ← HM.elems (snapPages snap) ]
-                    acolyte = resolveSpawnFaction [tagAcolyte] ∘ Just
-                -- the spawns tools/save_compat_audit.py recorded, in id
-                -- order (docs/save_compat/manifest.json, z6)
-                factions `shouldBe` HM.fromList (zip (map UnitId [1 ..])
-                    (map FactionProfileSnap
-                        [ acolyte FactionPlayer
-                        , acolyte FactionHostile
-                        , acolyte FactionDebug
-                        , acolyte FactionNeutral
-                        , resolveSpawnFaction [tagWildlife] Nothing
-                        , resolveSpawnFaction [] Nothing
-                        , resolveSpawnFaction [tagAcolyte] Nothing ]))
 
 -- * Spawn ingress
 

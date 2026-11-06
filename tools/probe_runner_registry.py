@@ -294,11 +294,6 @@ PROBES = [
      "swaps nothing and raises nothing"),
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
-    ("save_compat_migration", "save_compat_migration_probe.py",
-     "fresh-process migration probe: EVERY complete-session fixture the "
-     "save-compat manifest declares loads, publishes, dwells paused, "
-     "re-saves current-format, and reloads cleanly across a real process "
-     "restart (#766, #1485)"),
     ("autosave", "autosave_probe.py",
      "interval autosave (#913): default-off dwell, a real one-minute interval "
      "firing, pause/time-scale restoration and its player-intent suppression, "
@@ -503,16 +498,8 @@ DEFAULT_TIMEOUT = 900.0
 
 # Per-key defaults for registered scenarios whose complete, expected workload
 # exceeds DEFAULT_TIMEOUT. An explicit CLI --timeout remains authoritative for
-# every selected key. save_compat_migration runs every manifest-declared
-# complete-session fixture through two real engine processes and two real-codec
-# dumps (a `cabal repl` each until #2273, the compiled
-# `exe:synarchy-save-codec` since -- which the runner's preflight now
-# resolves and hands down, #2274); after #2893/#2894, a clean run with every
-# manifest fixture loading took 3657 s on PR #2895's head, so 5400 s gives
-# useful loaded-machine and manifest-growth margin without weakening the normal
-# 900 s hang bound for the rest of the registry.
+# every selected key.
 PROBE_TIMEOUT_OVERRIDES: dict[str, float] = {
-    "save_compat_migration": 5400.0,
     # The documented ~30-minute, two-boot scenario (docs/engine_contracts.md,
     # "The expedition loop") gets a 3600s budget with margin, not a measured runtime.
     "expedition_loop": 3600.0,

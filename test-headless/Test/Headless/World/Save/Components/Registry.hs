@@ -115,11 +115,9 @@ spec = do
             -- #1233's buildings/units/world-activity bumps left the
             -- same three literals stale for the same reason.
             --
-            -- Genuine frozen-shape coverage is not lost by this: every
-            -- historical version has real frozen bytes behind it in
-            -- "Test.Headless.World.Save.Compat", which encodes each
-            -- vN DTO explicitly instead of hoping the current encoder
-            -- still happens to emit that layout.
+            -- Current wire-shape coverage comes from the compiled
+            -- current-schema guard and focused current-format assertions;
+            -- historical fixture bytes are no longer maintained here.
             let check c = case ccDecode c (ccVersion c) (ccEncode c richSnapshot) of
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))

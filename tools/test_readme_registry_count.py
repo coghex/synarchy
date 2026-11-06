@@ -957,7 +957,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "Most registered probes use the ordinary 900-second default.",
             "Its manifest-wide 2-process path is slow, and 120-second "
             "timeouts stay available.",
-            "`save_compat_migration` uses 3600 seconds because its measured "
+            "`worldgen_output` uses 3600 seconds because its measured "
             "runtime is above 2300 seconds.",
             "Run everything, sequentially (slow — low tens of minutes).",
             "A span that covers the user's GUI port 8008 is refused.",
@@ -1003,7 +1003,7 @@ def test_the_readme_states_no_registry_total() -> None:
             # An identifier's underscores and an expression's star are not
             # emphasis, so neither dissolves into a fake number.
             "`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES` and "
-            "`save_compat_migration` name 3600 between them.",
+            "`worldgen_output` name 3600 between them.",
             "The span is 2*3 wide.",
             # The three subset words the count-noun class must NOT swallow.
             # Each is placed exactly where a count noun would make it a
@@ -1023,7 +1023,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "scenario time, and CI's selective gate (#530) relies on it.",
             # A hyphenated word that merely BEGINS with a count noun is not
             # one -- "manifest-wide" describes a path, not a total.
-            "`save_compat_migration` uses 3600 seconds because its "
+            "`worldgen_output` uses 3600 seconds because its "
             "manifest-wide two-process path is slow.",
             # A comparison is not an opening tag, so nothing downstream of
             # it is swallowed as markup.
@@ -1053,7 +1053,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "With `--jobs > 1` the spans are laid out from it instead of "
             "from the default `9400`.",
             "`debug_console_boot_probe.py` boots its checks on `--port + 1`.",
-            "`save_compat_migration` uses `PROBE_TIMEOUT_OVERRIDES`' 3600 s.",
+            "`worldgen_output` uses `PROBE_TIMEOUT_OVERRIDES`' 3600 s.",
             "Run up to 4 probes concurrently, each its own engine.",
             "Up to `N` probes run at once, each on its own port span.",
             "This doc states no total of its own: a hand-written one drifted "

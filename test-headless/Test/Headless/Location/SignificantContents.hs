@@ -10,8 +10,8 @@
 --   coverage (a real pickup latching through the ground boundary, and
 --   the discovery tick promoting) lives in
 --   'Test.Headless.World.LocationDiscovery'; the wire round trip lives
---   in 'Test.Headless.World.Save.Contract' and
---   'Test.Headless.World.Save.Compat'.
+--   in 'Test.Headless.World.Save.Contract' and the current tag-admission
+--   group 'Test.Headless.World.Save.Compat.TagTargets'.
 module Test.Headless.Location.SignificantContents (spec) where
 
 import UPrelude

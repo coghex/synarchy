@@ -1,14 +1,12 @@
 -- | The REAL @lua.unit_ai@ and @lua.building_spawn@ components, their
 --   post-load reconciliation, the version bounds every component is
---   held to, and the tracked v1 fixtures on disk -- one of the four
+--   held to and the current unit-ai schema behavior -- one of the four
 --   owners 'Test.Headless.Lua.SaveModules' composes (issue #2047).
 --
---   Five groups: the unit_ai component itself (issue #761
+--   Four groups: the unit_ai component itself (issue #761
 --   requirements 13/14), its transient runtime defaults (issue
---   #2055), post-load reference reconciliation (issue #1589),
---   component version bounds, and the tracked
---   @test-headless/data/save-compat/*.bin@ payloads read from disk
---   (issue #766, save-overhaul C4).
+--   #2055), post-load reference reconciliation (issue #1589), and
+--   component version bounds.
 --
 --   Its domain fixture lives here with it: 'unitAiReconcilePrelude'
 --   and the settable-clock 'unitAiDefaultsPrelude' built on it.
@@ -16,10 +14,9 @@ module Test.Headless.Lua.SaveModules.Components (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 
 import Test.Headless.Lua.SaveModules.Support
-    (lns, runsOk, runsOkWithPayloads)
+    (lns, runsOk)
 
 -- | Everything the REAL @lua.unit_ai@ component and
 --   @scripts/unit_ai_reconcile.lua@ reach outside a live engine, plus
@@ -183,16 +180,7 @@ spec = do
             , "assert(o and o.gid == 0 and o.issuedAt == 12 and o.stalledFor == 4.5"
             , "  and o.bestDist == 3.25, 'the order comes back whole, as a "
               <> "bare id, with its stall accounting')"
-            , "-- v10: the same row without the order it could not have had."
-            , "for k in pairs(live) do live[k] = nil end"
-            , "local v10 = { [1] = { __owner = { __ref = 'unit', id = 1 },"
-            , "                      currentAction = 'idle' } }"
-            , "prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 10, payload = codec.encode(v10) } })"
-            , "assert(prep.ok, table.concat(prep.errors or {}, '; '))"
-            , "saveModules.applyAll()"
-            , "assert(live[1] ~= nil and live[1].openOrder == nil,"
-            , "  'a v10 payload decodes with openOrder ABSENT')"
+
             ]
 
         it "rejects a load whose craftJob/repairJob reference a recipe or \
@@ -212,9 +200,10 @@ spec = do
             , "unitAiSave.register({})"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
-            , "    { id = 'unit_ai', version = 1, payload = codec.encode(state) },"
+            , "    { id = 'unit_ai', version = 11, payload = codec.encode(refs.wrapAiState(state)) },"
             , "  })"
             , "end"
             , "local removedRecipe = prepareWith({ [1] = { craftJob = {"
@@ -266,9 +255,10 @@ spec = do
             , "unitAiSave.register(fakeAiState)"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
-            , "    { id = 'unit_ai', version = 2, payload = codec.encode(state) },"
+            , "    { id = 'unit_ai', version = 11, payload = codec.encode(refs.wrapAiState(state)) },"
             , "  })"
             , "end"
             , "local noBillId = prepareWith({ [1] = { craftJob = {"
@@ -289,7 +279,7 @@ spec = do
             , "-- job saved in an earlier phase legitimately carries none,"
             , "-- and requiring it would reject a real repair job."
             , "local repairNoBid = prepareWith({ [2] = { repairJob = {"
-            , "  instanceId = { __ref = 'item_instance', id = 900 },"
+            , "  instanceId = 900,"
             , "  recipeId = 'x', defName = 'wood' } } })"
             , "assert(repairNoBid.ok,"
             , "  'repairJob.bid must stay optional (it is only set once the '"
@@ -318,6 +308,7 @@ spec = do
             , "local unitAiSave = require('scripts.unit_ai_save')"
             , "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
             , "-- Register BEFORE any prepareLoad call -- prepareLoad only"
             , "-- validates components already present in the registry, so"
             , "-- registering after would leave every prepareWith() call"
@@ -330,7 +321,7 @@ spec = do
             , "unitAiSave.register(fakeAiState)"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
-            , "    { id = 'unit_ai', version = 1, payload = codec.encode(state) },"
+            , "    { id = 'unit_ai', version = 11, payload = codec.encode(refs.wrapAiState(state)) },"
             , "  })"
             , "end"
             -- #1844 requirement 20: a structurally valid structure job
@@ -465,127 +456,6 @@ spec = do
             , "  if r.kind == 'unit' and r.id == 42 then found = true end"
             , "end"
             , "assert(found, 'the outer unit id itself must be a declared reference')"
-            ]
-
-        it "types every persisted reference field on the wire (issue #764, \
-           \save-overhaul C3 requirement 13): a v1 payload with BARE-NUMBER \
-           \reference fields migrates to the typed {__ref=,id=} shape, \
-           \references() reads it correctly, and apply() unwraps it back \
-           \to a bare number in the LIVE aiState (every other module \
-           \still sees plain numbers)" $ runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(id)"
-            , "  if id == 'x' then return { id = 'x' } end return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "-- A v1 payload: every reference field is a BARE NUMBER,"
-            , "-- exactly as #761 originally shipped it."
-            , "local v1 = { [7] = {"
-            , "  attackTargetUid = 8, buildTarget = 20,"
-            , "  craftJob = { billId = 3, bid = 21, recipeId = 'x' },"
-            , "} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 1, payload = codec.encode(v1) },"
-            , "})"
-            , "assert(prep.ok, 'v1 payload must migrate cleanly: '"
-            , "  .. table.concat(prep.errors or {}, '; '))"
-            , "local found = {}"
-            , "for _, r in ipairs(prep.references) do"
-            , "  found[r.kind .. ':' .. tostring(r.id)] = r.owner"
-            , "end"
-            , "assert(found['unit:8'] == 7,"
-            , "  'attackTargetUid must resolve through the wrapped v1->v2 shape')"
-            , "assert(found['building:20'] == 7,"
-            , "  'buildTarget must resolve through the wrapped v1->v2 shape')"
-            , "assert(found['craft_bill:3'] == 7,"
-            , "  'craftJob.billId must resolve through the wrapped v1->v2 shape')"
-            , "assert(found['building:21'] == 7,"
-            , "  'craftJob.bid must resolve through the wrapped v1->v2 shape')"
-            , "saveModules.applyAll()"
-            , "assert(fakeAiState[7].attackTargetUid == 8,"
-            , "  'apply() must unwrap attackTargetUid back to a bare number in LIVE aiState')"
-            , "assert(type(fakeAiState[7].attackTargetUid) == 'number',"
-            , "  'LIVE aiState must never hold a wrapped table -- every OTHER '"
-            , "  .. 'module (unit_ai_combat.lua etc.) reads a bare number')"
-            , "assert(fakeAiState[7].craftJob.billId == 3,"
-            , "  'apply() must unwrap nested craftJob.billId too')"
-            , "-- Round-trip through the engine's OWN encoder: snapshot() on"
-            , "-- this now-live (unwrapped) state must re-wrap it as v2 --"
-            , "-- the wire format is typed even for freshly-written saves,"
-            , "-- not merely a migration-only artifact."
-            , "local snap = saveModules.registry.unit_ai.snapshot()"
-            , "assert(type(snap[7].attackTargetUid) == 'table'"
-            , "  and snap[7].attackTargetUid.__ref == 'unit'"
-            , "  and snap[7].attackTargetUid.id == 8,"
-            , "  'snapshot() must write the TYPED structured-reference shape, '"
-            , "  .. 'not a bare number, for a fresh v2 save')"
-            , "-- Round-6 review: the OUTER per-unit key (7) is ALSO typed,"
-            , "-- via a self-describing __owner field on the row."
-            , "assert(type(snap[7].__owner) == 'table'"
-            , "  and snap[7].__owner.__ref == 'unit' and snap[7].__owner.id == 7,"
-            , "  'snapshot() must write a __owner field typing the outer '"
-            , "  .. 'per-unit key too')"
-            , "assert(fakeAiState[7].__owner == nil,"
-            , "  '__owner must never leak into the LIVE aiState apply() writes back')"
-            ]
-
-        it "migrates a v2 unit_ai payload (every reference field wrapped, \
-           \but no __owner yet) to v3 by adding ONLY __owner, without \
-           \re-wrapping fields that are already wrapped (round-6 review, \
-           \issue #764)" $
-            runsOk $ lns
-            [ "unit = { exists = function(_uid) return true end }"
-            , "craft = { get = function(_id) return nil end }"
-            , "item = { listDefs = function() return {} end }"
-            , "local unitAiSave = require('scripts.unit_ai_save')"
-            , "local fakeAiState = {}"
-            , "unitAiSave.register(fakeAiState)"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local v2 = { [7] = {"
-            , "  attackTargetUid = { __ref = 'unit', id = 8 },"
-            , "} }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 2, payload = codec.encode(v2) },"
-            , "})"
-            , "assert(prep.ok, 'a v2 payload must migrate to v3 cleanly: '"
-            , "  .. table.concat(prep.errors or {}, '; '))"
-            , "saveModules.applyAll()"
-            , "assert(fakeAiState[7].attackTargetUid == 8,"
-            , "  'a v2-shaped attackTargetUid must still unwrap correctly after '"
-            , "  .. 'the v2->v3 __owner-only migration')"
-            ]
-
-        it "keeps historical building_spawn v1 and v2 migrations until PSP-5" $
-            runsOk $ lns
-            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-            , "local buildingSpawn = require('scripts.building_spawn')"
-            , "buildingSpawn.init('test')"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "-- v1 has no lastUid: migration still synthesizes __owner."
-            , "local v1 = { [12] = { lastSpawnedAt = 1.0 } }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 1, payload = codec.encode(v1) },"
-            , "})"
-            , "assert(prep.ok, 'v1 without lastUid must migrate: ' .. table.concat(prep.errors or {}, '; '))"
-            , "saveModules.applyAll()"
-            , "local snap = saveModules.registry.building_spawn.snapshot()"
-            , "assert(snap[12].__owner.__ref == 'building' and snap[12].__owner.id == 12)"
-            , "-- v2 already wraps lastUid; migration adds only __owner."
-            , "local v2 = { [12] = { lastUid = { __ref = 'unit', id = 4 } } }"
-            , "local prep2 = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 2, payload = codec.encode(v2) },"
-            , "})"
-            , "assert(prep2.ok, 'v2 must migrate to v3: ' .. table.concat(prep2.errors or {}, '; '))"
-            , "saveModules.applyAll()"
-            , "local snap2 = saveModules.registry.building_spawn.snapshot()"
-            , "assert(snap2[12].__owner.__ref == 'building' and snap2[12].__owner.id == 12)"
-            , "assert(snap2[12].lastUid.__ref == 'unit' and snap2[12].lastUid.id == 4)"
             ]
 
         describe "current Lua reference validation" $ do
@@ -835,38 +705,6 @@ spec = do
             , "  'building_spawn must declare a real dependency on units')"
             ]
 
-        it "types building_spawn's lastUid reference field on the wire too \
-           \(issue #764, save-overhaul C3 requirement 13): a v1 payload \
-           \with a BARE-NUMBER lastUid migrates to the typed shape, \
-           \references() reads it, apply() unwraps it back to a bare \
-           \number, and a fresh snapshot() re-wraps it as v2" $ runsOk $ lns
-            [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-            , "local buildingSpawn = require('scripts.building_spawn')"
-            , "buildingSpawn.init('test')"
-            , "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local v1 = { [9] = { lastUid = 4, lastSpawnedAt = 1.0 } }"
-            , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'building_spawn', version = 1, payload = codec.encode(v1) },"
-            , "})"
-            , "assert(prep.ok, 'v1 payload must migrate cleanly: '"
-            , "  .. table.concat(prep.errors or {}, '; '))"
-            , "local found = false"
-            , "for _, r in ipairs(prep.references) do"
-            , "  if r.kind == 'unit' and r.id == 4 then found = true end"
-            , "end"
-            , "assert(found, 'lastUid must resolve through the wrapped v1->v2 shape')"
-            , "saveModules.applyAll()"
-            , "local snap = saveModules.registry.building_spawn.snapshot()"
-            , "assert(type(snap[9].lastUid) == 'table'"
-            , "  and snap[9].lastUid.__ref == 'unit' and snap[9].lastUid.id == 4,"
-            , "  'a fresh snapshot() must write the TYPED structured-reference '"
-            , "  .. 'shape -- if apply() had left lastUid wrapped in LIVE state '"
-            , "  .. 'this would double-wrap or crash instead')"
-            , "local errs = saveModules.registryStaticErrors()"
-            , "assert(#errs == 0, 'the real registrations must resolve their "
-              <> "own deps cleanly: ' .. table.concat(errs, '; '))"
-            ]
 
 
     -- Issue #2055. A row restored from an accepted schema version need
@@ -881,60 +719,28 @@ spec = do
     -- pin all three reasons it has to be there rather than at decode()
     -- or apply(): the restored clock is live by then, a rolled-back
     -- load never reaches it, and nothing has ticked yet. It is also one
-    -- stage rather than a back-fill per migration branch, which is what
-    -- lets the version matrix below be a loop.
+    -- stage on the current payload before the restored-session reconcile.
     describe "unit_ai transient runtime defaults (issue #2055)" $ do
-        it "supplies every declared runtime default a restored row \
-           \omits, for EVERY accepted inputVersion -- one stage that \
-           \every version's decode branch has already converged on by \
-           \reconcile time, so a payload from any accepted version \
-           \comes out tickable" $ runsOk $ lns $ unitAiDefaultsPrelude ⧺
+        it "supplies every declared runtime default omitted by a current \
+           \unit_ai row at restored-session reconcile time" $ runsOk $ lns $ unitAiDefaultsPrelude ⧺
             [ "local refs = require('scripts.unit_ai_save_refs')"
             , "local defaults = require('scripts.unit_ai_defaults')"
-            , "-- The accepted set comes off the registration itself, so a"
-            , "-- version added there is covered by this loop the moment it"
-            , "-- exists. The exact-set assertion below is the deliberate"
-            , "-- tripwire beside that: a new version also needs its WIRE"
-            , "-- shape taught to payloadFor, which no derived loop can"
-            , "-- infer, so adding one must be a conscious act here."
-            , "local accepted = saveModules.registry.unit_ai.inputVersions"
-            , "assert(table.concat(accepted, ',') == '1,2,3,4,5,6,7,8,9,10,11',"
-            , "  'expected inputVersions {1..11} (1-10 legacy, 11 current), got {'"
-            , "  .. table.concat(accepted, ',') .. '}')"
-            , "-- The tracked b3-lua-versioned-session-v1 fixture's own v1"
-            , "-- row, verbatim: sparse, one reference field, none of the"
-            , "-- runtime fields."
+            , "-- Exercise the current v11 shape only."
+            , "local version = 11"
             , "local function sparseRow() return { buildTarget = 1 } end"
-            , "-- Each version's WIRE shape, built with the component's own"
-            , "-- helpers rather than hand-rolled: v1 is bare, v2 is wrapped"
-            , "-- without __owner, v3+ carries __owner too. #1844's v8 is a"
-            , "-- SEMANTIC bump on v7's layout (a constructJob gained the"
-            , "-- attempt it claimed) and #1845's v9 another on v8's (that"
-            , "-- job gained the building it staked, as a typed reference),"
-            , "-- and #2642's v10 another still (a treatClaim gained the"
-            , "-- order it was taken in), and #2528's v11 another (a unit"
-            , "-- gained a pending Open order). A sparse row carries none of"
-            , "-- a constructJob, a treatClaim or an openOrder, so all five"
-            , "-- share one wire shape here."
-            , "local function payloadFor(version)"
+            , "local function payloadFor()"
             , "  local rows = { [1] = sparseRow() }"
-            , "  if version == 1 then return codec.encode(rows) end"
-            , "  local wrapped = refs.wrapAiState(rows)"
-            , "  if version == 2 then wrapped[1].__owner = nil end"
-            , "  return codec.encode(wrapped)"
+            , "  return codec.encode(refs.wrapAiState(rows))"
             , "end"
-            , "for _, version in ipairs(accepted) do"
+            , "for _, version in ipairs({ version }) do"
             , "  for k in pairs(aiState) do aiState[k] = nil end"
             , "  local prep = saveModules.prepareLoad({"
-            , "    { id = 'unit_ai', version = version,"
-            , "      payload = payloadFor(version) },"
+            , "    { id = 'unit_ai', version = version, payload = payloadFor() },"
             , "  }, 1, false, { unit = { [1] = true }, building = {} })"
-            , "  assert(prep.ok, 'a sparse v' .. version .. ' payload must "
-              <> "still be accepted: ' .. table.concat(prep.errors or {}, '; '))"
+            , "  assert(prep.ok, 'current v' .. version .. ' payload must be accepted: ' .. table.concat(prep.errors or {}, '; '))"
             , "  saveModules.applyAll()"
-            , "  assert(aiState[1] ~= nil, 'v' .. version .. ': the row must apply')"
-            , "  assert(aiState[1].buildTarget == 1, 'v' .. version .. ': the "
-              <> "row\\'s own field must survive unwrapped')"
+            , "  assert(aiState[1] ~= nil, 'the current row must apply')"
+            , "  assert(aiState[1].buildTarget == 1, 'its own field must survive unwrapped')"
             , "  -- STAGING must not have filled anything: gameTimeRef is"
             , "  -- still the outgoing session's until publish."
             , "  for _, f in ipairs(defaults.FIELDS) do"
@@ -979,7 +785,7 @@ spec = do
             , "-- unit_ai_needs.lua's wanderUtility does arithmetic for:"
             , "--   timeInSession = engine.gameTime() - s.actionStartedAt"
             , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 7,"
+            , "  { id = 'unit_ai', version = 11,"
             , "    payload = codec.encode(refs.wrapAiState("
             , "      { [1] = { currentAction = 'wander', nextActionAt = 0 } })) },"
             , "}, 1, false, { unit = { [1] = true }, building = {} })"
@@ -1021,7 +827,7 @@ spec = do
             , "  [2] = { nextActionAt = 7.5 },"
             , "}"
             , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 7,"
+            , "  { id = 'unit_ai', version = 11,"
             , "    payload = codec.encode(refs.wrapAiState(rows)) },"
             , "}, 1, false, { unit = { [1] = true, [2] = true }, building = {} })"
             , "assert(prep.ok, table.concat(prep.errors or {}, '; '))"
@@ -1060,7 +866,7 @@ spec = do
             , "local consumerRef = aiState"
             , "local rows = { [1] = { buildTarget = 1 }, [9] = { buildTarget = 1 } }"
             , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 7,"
+            , "  { id = 'unit_ai', version = 11,"
             , "    payload = codec.encode(refs.wrapAiState(rows)) },"
             , "}, 1, false, { unit = { [1] = true }, building = {} })"
             , "assert(prep.ok, 'an absent owner is tolerated-dangling: '"
@@ -1109,7 +915,7 @@ spec = do
             , "saveModules.registerResetHook('boom', function()"
             , "  error('reset hook failed') end)"
             , "local prep = saveModules.prepareLoad({"
-            , "  { id = 'unit_ai', version = 7,"
+            , "  { id = 'unit_ai', version = 11,"
             , "    payload = codec.encode(refs.wrapAiState("
             , "      { [9] = { buildTarget = 1 } })) },"
             , "}, 1, false, { unit = { [9] = true }, building = {} })"
@@ -1183,10 +989,9 @@ spec = do
            \so a same-numbered bill on another page is a different \
            \entity and a page A ground item is absent for a page B unit" $
             runsOk $ lns $ unitAiReconcilePrelude ⧺
-            [ "-- v1 (bare ids) so the migration + wire wrap/unwrap run"
-            , "-- before the reconcile ever sees a row."
-            , "local prep = saveModules.prepareLoad({ { id = 'unit_ai',"
-            , "  version = 1, payload = codec.encode({"
+            [ "-- A current v11 payload enters the real path before reconcile."
+            , "local refs = require('scripts.unit_ai_save_refs')"
+            , "local rows = {"
             , "  [1] = { attackTargetUid = 99,"
             , "          craftJob = { billId = 5, bid = 3,"
             , "                       recipeId = 'known_recipe' },"
@@ -1200,7 +1005,9 @@ spec = do
             , "          harvestLoot = { 70 }, harvestPhase = 'collecting' },"
             , "  [2] = { craftJob = { billId = 5, bid = 42,"
             , "                       recipeId = 'known_recipe' },"
-            , "          pickupOrder = { gid = 7 }, openOrder = { gid = 7 } } }) } },"
+            , "          pickupOrder = { gid = 7 }, openOrder = { gid = 7 } } }"
+            , "local prep = saveModules.prepareLoad({ { id = 'unit_ai',"
+            , "  version = 11, payload = codec.encode(refs.wrapAiState(rows)) } },"
             , "  1, false, { unit = { [1] = true, [2] = true },"
             , "              building = { [42] = true },"
             , "              unitPage = { [1] = 'A', [2] = 'B' } })"
@@ -1305,145 +1112,3 @@ spec = do
             , "local ok5 = tryRegister(1, { 1 })"
             , "assert(ok5, 'an ordinary positive integer version must still register')"
             ]
-
-    -- Issue #766 (save-overhaul C4): docs/save_compat/manifest.json's
-    -- "b3-lua-versioned" baseline tracks these two .bin fixtures --
-    -- REAL v1 unit_ai/building_spawn payloads encoded through the
-    -- genuine scripts/lib/data_codec.lua (via a real HsLua VM, see
-    -- tools/save_compat_audit.py's "add tracked Lua payload/session
-    -- fixtures with canonical expectations and exercise them through
-    -- the real Lua preparation path" requirement) -- not re-synthesized
-    -- inline via codec.encode the way every OTHER test above does. This
-    -- proves the tracked BYTES ON DISK are what saveModules.prepareLoad
-    -- accepts, matching test-headless/data/save-compat/
-    -- lua-unit-ai-v1.expected.json / lua-building-spawn-v1.expected.json.
-    describe "tracked v1 fixtures from disk (issue #766, save-overhaul C4)" $ do
-        it "migrates the tracked lua-unit-ai-v1.bin fixture through \
-           \saveModules.prepareLoad/applyAll to exactly the canonical \
-           \unwrapped aiState and reference edges its .expected.json \
-           \records" $ do
-            bytes ← BS.readFile
-                "test-headless/data/save-compat/lua-unit-ai-v1.bin"
-            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
-                [ "unit = { exists = function(_uid) return true end }"
-                , "craft = { get = function(id)"
-                , "  if id == 'x' then return { id = 'x' } end return nil end }"
-                , "item = { listDefs = function() return {} end }"
-                , "local unitAiSave = require('scripts.unit_ai_save')"
-                , "local fakeAiState = {}"
-                , "unitAiSave.register(fakeAiState)"
-                , "local saveModules = require('scripts.lib.save_modules')"
-                , "local prep = saveModules.prepareLoad({"
-                , "  { id = 'unit_ai', version = 1, payload = FIXTURE },"
-                , "})"
-                , "assert(prep.ok, 'the tracked v1 fixture must migrate cleanly: '"
-                , "  .. table.concat(prep.errors or {}, '; '))"
-                , "local found = {}"
-                , "for _, r in ipairs(prep.references) do"
-                , "  found[r.kind .. ':' .. tostring(r.id)] = r.owner"
-                , "end"
-                , "assert(found['unit:7'] == 7,"
-                , "  'the outer per-unit key itself must be a reference')"
-                , "assert(found['unit:8'] == 7, 'attackTargetUid must resolve')"
-                , "assert(found['building:20'] == 7, 'buildTarget must resolve')"
-                , "assert(found['craft_bill:3'] == 7, 'craftJob.billId must resolve')"
-                , "assert(found['building:21'] == 7, 'craftJob.bid must resolve')"
-                , "saveModules.applyAll()"
-                , "assert(fakeAiState[7].attackTargetUid == 8,"
-                , "  'apply() must unwrap attackTargetUid to a bare number')"
-                , "assert(fakeAiState[7].buildTarget == 20,"
-                , "  'apply() must unwrap buildTarget to a bare number')"
-                , "assert(fakeAiState[7].craftJob.billId == 3,"
-                , "  'apply() must unwrap craftJob.billId to a bare number')"
-                , "assert(fakeAiState[7].craftJob.bid == 21,"
-                , "  'apply() must unwrap craftJob.bid to a bare number')"
-                , "assert(fakeAiState[7].craftJob.recipeId == 'x',"
-                , "  'non-reference fields must survive the migration untouched')"
-                ]
-
-        it "decodes the tracked lua-unit-ai-v4.bin fixture's per-unit \
-           \location memories (#915) through saveModules.prepareLoad/ \
-           \applyAll, keeping each entry's page, id and remembered anchor, \
-           \and reporting one page-qualified location_instance edge each" $ do
-            -- The complete-session baseline's canonical summary is
-            -- Lua-OPAQUE (SessionSnapshot carries no Lua state), so
-            -- save_compat_audit alone would pass even if this typed
-            -- memory were dropped or mis-encoded. THIS is the assertion
-            -- that would fail: real tracked bytes, produced by the real
-            -- wrapAiState encoder, driven through the real preparation
-            -- path — the same shape the e1 session fixture carries.
-            bytes ← BS.readFile
-                "test-headless/data/save-compat/lua-unit-ai-v4.bin"
-            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
-                [ "unit = { exists = function(_uid) return true end }"
-                , "item = { listDefs = function() return {} end }"
-                , "local unitAiSave = require('scripts.unit_ai_save')"
-                , "local fakeAiState = {}"
-                , "unitAiSave.register(fakeAiState)"
-                , "local saveModules = require('scripts.lib.save_modules')"
-                , "local prep = saveModules.prepareLoad({"
-                , "  { id = 'unit_ai', version = 4, payload = FIXTURE },"
-                , "})"
-                , "assert(prep.ok, 'the tracked v4 fixture must prepare cleanly: '"
-                , "  .. table.concat(prep.errors or {}, '; '))"
-                -- Each memory is reported as its OWN page-qualified edge:
-                -- an id alone would be ambiguous, since the fixture
-                -- deliberately carries the SAME instance id (1) on two
-                -- different pages.
-                , "local edges = {}"
-                , "for _, r in ipairs(prep.references) do"
-                , "  if r.kind == 'location_instance' then"
-                , "    edges[r.path] = r end end"
-                , "local a = edges['unit[7].knownLocations[1]']"
-                , "local b = edges['unit[7].knownLocations[2]']"
-                , "assert(a and a.id == 1 and a.page == 'generated_page'"
-                , "       and a.owner == 7, 'first memory edge wrong')"
-                , "assert(b and b.id == 1 and b.page == 'other_page'"
-                , "       and b.owner == 7, 'second memory edge wrong')"
-                , "saveModules.applyAll()"
-                , "local ks = fakeAiState[7].knownLocations"
-                , "assert(type(ks) == 'table' and #ks == 2,"
-                , "  'apply() must restore both memories')"
-                , "assert(ks[1].page == 'generated_page' and ks[1].id == 1"
-                , "       and ks[1].x == 104 and ks[1].y == 40,"
-                , "  'the first memory lost its page/id/anchor')"
-                , "assert(ks[2].page == 'other_page' and ks[2].id == 1"
-                , "       and ks[2].x == 3 and ks[2].y == 4,"
-                , "  'the second memory lost its page/id/anchor')"
-                -- aiState's LIVE shape never grows the wire tag.
-                , "assert(ks[1].__ref == nil and ks[2].__ref == nil,"
-                , "  'apply() must strip the __ref wire tag')"
-                -- …and the sibling reference fields still migrate.
-                , "assert(fakeAiState[7].attackTargetUid == 8,"
-                , "  'a v4 payload must still unwrap its other references')"
-                ]
-
-        it "migrates the tracked lua-building-spawn-v1.bin fixture through \
-           \saveModules.prepareLoad/applyAll to exactly the canonical \
-           \unwrapped state and reference edges its .expected.json \
-           \records" $ do
-            bytes ← BS.readFile
-                "test-headless/data/save-compat/lua-building-spawn-v1.bin"
-            runsOkWithPayloads [("FIXTURE", bytes)] $ lns
-                [ "building = { getInfo = function(_bid) return { id = _bid } end }"
-                , "local buildingSpawn = require('scripts.building_spawn')"
-                , "buildingSpawn.init('test')"
-                , "local saveModules = require('scripts.lib.save_modules')"
-                , "local prep = saveModules.prepareLoad({"
-                , "  { id = 'building_spawn', version = 1, payload = FIXTURE },"
-                , "})"
-                , "assert(prep.ok, 'the tracked v1 fixture must migrate cleanly: '"
-                , "  .. table.concat(prep.errors or {}, '; '))"
-                , "local found = {}"
-                , "for _, r in ipairs(prep.references) do"
-                , "  found[r.kind .. ':' .. tostring(r.id)] = true"
-                , "end"
-                , "assert(found['building:12'],"
-                , "  'the outer per-building key itself must be a reference')"
-                , "assert(found['unit:4'], 'lastUid must be a reference')"
-                , "saveModules.applyAll()"
-                , "assert(buildingSpawn.state[12].lastUid == 4,"
-                , "  'apply() must unwrap lastUid to a bare number in LIVE state')"
-                , "assert(buildingSpawn.state[12].lastSpawnedAt == 123.5,"
-                , "  'non-reference fields must survive the migration untouched')"
-                ]

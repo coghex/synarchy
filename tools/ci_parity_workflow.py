@@ -4,7 +4,7 @@
 The middle layer of the CI/`make ci` parity audit
 (`tools/ci_parity_audit.py`). It consumes `tools/ci_parity_shell.py`'s
 lexer and `tools/ci_parity_config.py`'s production constants, and knows
-nothing about save-compat policy or the self-test.
+nothing about save policy or the self-test.
 
 What it owns
 ------------
@@ -32,10 +32,9 @@ What it deliberately does NOT do
 --------------------------------
 Compare `if:` expressions as part of the gate-set audit. That comparison
 is over the gate SET, not over the conditions guarding it, because CI is
-path-selective where `make ci` is unconditional by design. The one check
-that IS conditional on both sides -- the save-compat reproducibility
-member -- gets its own owner, `tools/ci_parity_save_compat.py`, which
-consumes the primitives here.
+path-selective where `make ci` is unconditional by design. The current-save guard is audited independently by
+`tools/ci_parity_save_policy.py`; it must run on every code revision and
+compare with the event base.
 
 This module is a library: it has no command line of its own. Run the
 audit through `python3 tools/ci_parity_audit.py`.
@@ -285,7 +284,7 @@ def audit_gate_sets(
 def normalise_expression(text: str) -> str:
     """Collapse an expression's whitespace for comparison.
 
-    Public because tools/ci_parity_save_compat.py compares
+    Public because tools/ci_parity_save_policy.py compares
     `if:` expressions with the same normalization these
     topology checks use; two spellings of it would be two
     different notions of "the same guard".
@@ -855,8 +854,8 @@ def audit_unit_asset_gate_wiring(yaml_text: str) -> list[str]:
     reads the output the selector writes. A guard left naming
     `test-and-audits`' selector id would read an always-empty value and
     silently stop running the gate on every pull request, exactly the
-    false green the save-compat wiring check exists to prevent for its own
-    conditional member.
+    false green the current-save wiring check exists to prevent for its own
+    required command.
     """
     where = workflow_label(STATIC_AUDIT_JOB)
     problems: list[str] = []

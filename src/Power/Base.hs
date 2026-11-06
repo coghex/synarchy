@@ -16,8 +16,9 @@
 --
 --   Deliberately NOT 'Power.Types.PowerRole'. That enum is the
 --   RUNTIME/persistence role, positionally serialized into the
---   @power-nodes@ component and frozen append-only by
---   @tools\/enum_append_only_audit.py@ (#1145). This type is the
+--   @power-nodes@ component. Changes to its serialized shape require a
+--   carrier version advance under the current-save schema policy (#2919).
+--   This type is the
 --   editable content vocabulary in front of it; 'Power.Types.powerNodeRole'
 --   is the one total mapping between the two. Keeping them separate is
 --   what lets the YAML vocabulary grow without touching a wire enum.

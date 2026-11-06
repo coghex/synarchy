@@ -17,36 +17,29 @@ module Test.Headless.Unit.PhysiologyModes.Persistence (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.List (nub, sort)
+import Data.List (sort)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Unit.PhysiologyFixture
     ( exemptPhysiology, profilePhysiology, readShippedPhysiologyRegistry
     , richPhysiology )
 import Test.Headless.Unit.PhysiologyModes.Harness
-import Test.Headless.Unit.PhysiologySpeciesProfiles
-    ( shippedDefs, withShipped )
 import Test.Headless.World.Save.Components.Fixture
     ( minimalGlobals, minimalPage, minimalSimState, minimalUnitInstance
     , page1 )
 import Unit.Physiology.Types
-import Unit.Physiology (PhysioContext(..), engagementApplied, resolveMode)
-import Unit.Blood (bloodViewOf)
 import Unit.Thread.Command.Body (recomputeBodyDerivedStats)
-import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Types
 import World.Page.Types (WorldPageId)
-import World.Page.GeneratedId (newGeneratedWorldId)
 import Equipment.Types (emptyEquipmentClassManager)
 import Infection.Types (emptyInfectionManager)
 import Item.Types (emptyItemManager)
 import World.Save.Envelope
-    ( LuaComponentSpec(..), decodeSessionEnvelope, encodeSessionSnapshot )
+    ( decodeSessionEnvelope, encodeSessionSnapshot )
 import World.Save.Physiology
     ( PhysiologyLoadDefinition(..), PhysiologyNormalization(..)
     , physiologyLoadDefinition, physiologyLoadGate, rebuiltCacheStats
@@ -54,9 +47,8 @@ import World.Save.Physiology
 import World.Save.Snapshot
     ( PageSnapshot(..), SessionSnapshot(..), captureSessionSnapshot )
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
-import Combat.Resolution.Common (woundsPain)
 import World.Save.Types
-    ( SaveMetadata(..), UnitInstanceSnapshot(..), UnitSnapshot(..)
+    ( UnitInstanceSnapshot(..), UnitSnapshot(..)
     , fromUnitSnapshot, toUnitSnapshot )
 
 -----------------------------------------------------------------------
@@ -156,194 +148,11 @@ shouldReject (Left msgs) needles =
 
 spec ∷ Spec
 spec = describe "persistence of the physiology modes" $ do
-    legacyUnbodiedSpec
     beforeAll readShippedPhysiologyRegistry $ do
         canonicalSpec
         normalizationSpec
         policySpec
     engineSpec
-
-legacyUnbodiedSpec ∷ Spec
-legacyUnbodiedSpec = describe "legacy unbodied units (#2893)" $ do
-    it "loads the five original fixture byte streams, backfills acolyte inputs, seeds, and round-trips idempotently" $ do
-        reg ← readShippedPhysiologyRegistry
-        withShipped $ \(env, _) → do
-            defs ← shippedDefs env
-            let names =
-                    [ "b2-split-haskell-lua-state"
-                    , "b3-lua-versioned-session-v1"
-                    , "c3-typed-reference-v1"
-                    , "c3-typed-reference-v1-multipage"
-                    , "c3-typed-reference-v1-with-items" ]
-                luaNames = HS.fromList ["unit_ai", "building_spawn"]
-            forM_ names $ \name → do
-                bytes ← BS.readFile ("test-headless/data/save-compat/"
-                                     <> T.unpack name <> ".bin")
-                case decodeSessionEnvelope luaNames luaNames bytes of
-                    Left err → expectationFailure (T.unpack err)
-                    Right (meta, snap, lua, _) → case physiologyLoadGate reg
-                            (HM.map physiologyLoadDefinition defs) 0
-                            [ (pid, pgsUnits pg)
-                            | (pid, pg) ← HM.toList (snapPages snap) ] of
-                        Left errs → expectationFailure (show errs)
-                        Right (unitsByPage, notes) → do
-                            let pageUnits = lookup page1 unitsByPage
-                                target = pageUnits >>= HM.lookup (UnitId 1) ∘ usnInstances
-                                unitNotes = [n | n ← notes, pnPage n ≡ page1, pnUnit n ≡ 1]
-                                normPages = HM.mapWithKey
-                                    (\pid pg → case lookup pid unitsByPage of
-                                        Just units → pg { pgsUnits = units }
-                                        Nothing → pg) (snapPages snap)
-                                normSnap = snap { snapPages = normPages }
-                            target `shouldSatisfy` isJust
-                            case (target, unitNotes) of
-                                (Just u, [n]) → do
-                                    stat "height" u >>= \v → near 1e-6 1.8 (realToFrac v)
-                                    stat "body_mass" u >>= \v → near 1e-5 71.28 (realToFrac v)
-                                    stat "frame_mass" u >>= \v → near 1e-5 71.28 (realToFrac v)
-                                    stat "fat_mass" u >>= \v → near 1e-5 14.256 (realToFrac v)
-                                    stat "lean_mass" u >>= \v → near 1e-5 28.512 (realToFrac v)
-                                    stat "strength_base" u >>= \v → near 1e-6 1 (realToFrac v)
-                                    stat "endurance" u >>= \v → near 1e-6 1 (realToFrac v)
-                                    let rebuilt = recomputeBodyDerivedStats (uisStats u)
-                                    forM_ rebuiltCacheStats $ \key →
-                                        HM.lookup key (uisStats u) `shouldBe` HM.lookup key rebuilt
-                                    stat "max_hydration" u >>= \v → near 1e-5 (0.6 * 71.28) (realToFrac v)
-                                    stat "hydration" u >>= \v → near 1e-5 42.768 (realToFrac v)
-                                    stat "salt" u >>= \v → near 1e-5 71.28 (realToFrac v)
-                                    stat "salt_store" u >>= \v → near 1e-5 (2 * 71.28) (realToFrac v)
-                                    stat "exhaustion" u >>= \v → near 1e-5 10 (realToFrac v)
-                                    stat "sleep_pressure" u >>= \v → near 1e-5 10 (realToFrac v)
-                                    length [() | note ← pnNotes n,
-                                        "from the definition's species averages" `T.isInfixOf` note]
-                                        `shouldBe` 1
-                                    forM_ ["height", "body_mass", "frame_mass", "lean_mass", "fat_mass",
-                                           "strength_base", "endurance"] $ \key →
-                                        (key, any (key `T.isInfixOf`) (pnNotes n)) `shouldBe` (key, True)
-                                    assertSimulatedSeeds reg defs u
-                                _ → expectationFailure ("expected exactly one page1/unit#1 normalization record for "
-                                                        <> show name <> ", got " <> show unitNotes)
-                            stagedPages ← traverse stagePage (snapPages normSnap)
-                            let reSaveSnap = normSnap { snapPages = stagedPages }
-                                generatedIds = sort (nub
-                                    [gid | pg ← HM.elems stagedPages
-                                         , Just gid ← [pgsGeneratedId pg]])
-                                reSaveMeta = meta { smGeneratedWorldIds = generatedIds }
-                                encoded = encodeSessionSnapshot reSaveMeta reSaveSnap
-                                    (completeRequiredLua lua)
-                            case decodeSessionEnvelope luaNames luaNames encoded of
-                                Left err → expectationFailure (T.unpack err)
-                                Right (_, snap2, _, _) → do
-                                    case physiologyLoadGate reg
-                                            (HM.map physiologyLoadDefinition defs) 0
-                                            [ (pid, pgsUnits pg)
-                                            | (pid, pg) ← HM.toList (snapPages snap2) ] of
-                                        Left errs → expectationFailure (show errs)
-                                        Right (again, secondNotes) → do
-                                            HM.fromList again `shouldBe` HM.fromList
-                                                [ (pid, pgsUnits pg)
-                                                | (pid, pg) ← HM.toList (snapPages snap2) ]
-                                            secondNotes `shouldBe` []
-
-    it "rebuilds every missing cache, preserves durable stats, and silently replaces stale caches" $ do
-        reg ← readShippedPhysiologyRegistry
-        let canonical = recomputeBodyDerivedStats (HM.fromList (body70 ⧺ seeds70))
-            original = saved "acolyte" (HM.toList canonical) []
-            defs = [("acolyte", richPhysiology)]
-            durable stats = HM.filterWithKey (\k _ → k `notElem` rebuiltCacheStats) stats
-        forM_ rebuiltCacheStats $ \missing → do
-            let input = original { uisStats = HM.delete missing (uisStats original) }
-            shouldNormalize (gate1Bodied reg defs input) $ \(out, notes) → do
-                length notes `shouldBe` 1
-                durable (uisStats out) `shouldBe` durable (uisStats input)
-                let expected = recomputeBodyDerivedStats (uisStats out)
-                forM_ rebuiltCacheStats $ \key →
-                    HM.lookup key (uisStats out) `shouldBe` HM.lookup key expected
-                pg ← codecRoundTrip ((minimalPage page1) { pgsUnits =
-                    UnitSnapshot (HM.singleton (UnitId 1) out) 10 mempty mempty })
-                gate1Bodied reg defs (fromMaybe out
-                    (HM.lookup (UnitId 1) (usnInstances (pgsUnits pg))))
-                    `shouldBe` Right (out, [])
-        let allMissing = original { uisStats = foldl' (flip HM.delete)
-                                    (uisStats original) rebuiltCacheStats }
-        shouldNormalize (gate1Bodied reg defs allMissing) $ \(out, notes) → do
-            length notes `shouldBe` 1
-            forM_ rebuiltCacheStats $ \key →
-                HM.lookup key (uisStats out) `shouldBe`
-                    HM.lookup key (recomputeBodyDerivedStats (uisStats out))
-            durable (uisStats out) `shouldBe` durable (uisStats allMissing)
-        let stale = original { uisStats = HM.insert "max_hydration" 999
-                                        (uisStats original) }
-        shouldNormalize (gate1Bodied reg defs stale) $ \(out, notes) → do
-            notes `shouldBe` []
-            statOf' out "max_hydration" `shouldBe` Just (0.6 * 70)
-
-    it "rejects partial bodies, leaves a non-bodied empty stat map alone, and preserves present inputs" $ do
-        reg ← readShippedPhysiologyRegistry
-        let defs = [("acolyte", richPhysiology)]
-            partials =
-                [ [("height", 1.8)]
-                , [("body_mass", 70)]
-                , [("lean_mass", 56)]
-                , [("height", 1.8), ("body_mass", 70)]
-                , [("fat_mass", 14)] ]
-        forM_ partials $ \stats → do
-            let required = ["height", "body_mass", "lean_mass"]
-                missing = filter (\key → key `notElem` map fst stats) required
-            gate1Bodied reg defs (saved "acolyte" stats []) `shouldReject`
-                (["page1", "unit #1", "acolyte", "malformed body"] ⧺ missing)
-        let nonBodied = saved "white_tailed_deer" [] []
-        gate1 reg [("white_tailed_deer", noUnitPhysiology)] nonBodied
-            `shouldBe` Right (nonBodied, [])
-        withShipped $ \(env, _) → do
-            shipped ← shippedDefs env
-            let defs' = HM.map physiologyLoadDefinition shipped
-                present = saved "acolyte" [("endurance", 1.3), ("strength", 0.8)] []
-            case physiologyLoadGate reg defs' 0 (pageOf [(1, present)]) of
-                Left errs → expectationFailure (show errs)
-                Right ([(_, units)], notes) → case HM.lookup (UnitId 1) (usnInstances units) of
-                    Nothing → expectationFailure "unit vanished"
-                    Just out → do
-                        statOf' out "endurance" `shouldBe` Just 1.3
-                        statOf' out "strength_base" `shouldBe` Just 0.8
-                        let backfillNotes = [note | norm ← notes, note ← pnNotes norm,
-                                "backfilled " `T.isPrefixOf` note]
-                        backfillNotes `shouldSatisfy` (not ∘ null)
-                        backfillNotes `shouldSatisfy`
-                            (all (not ∘ T.isInfixOf "endurance"))
-                Right _ → expectationFailure "unexpected page shape"
-
-stat ∷ Text → UnitInstanceSnapshot → IO Float
-stat key u = case HM.lookup key (uisStats u) of
-    Just value → pure value
-    Nothing → expectationFailure ("missing stat " <> show key) >> pure (-1)
-
-assertSimulatedSeeds ∷ PhysiologyRegistry → HM.HashMap Text UnitDef
-                    → UnitInstanceSnapshot → IO ()
-assertSimulatedSeeds registry defs u = case HM.lookup (uisDefName u) defs of
-    Nothing → expectationFailure "fixture unit definition is missing"
-    Just def → do
-        let owned = concat
-                [ [okKey key | key ← psOwns system, isNothing (okField key)] ⧺ psMeters system
-                | system ← prSystems registry
-                , resolveMode system (udPhysiology def)
-                    (engagementApplied (uisStats u))
-                    (HM.lookup (psId system) (uisPhysioOverrides u)) ≡ ModeSimulated ]
-            stripped = foldl' (flip HM.delete) (uisStats u) owned
-            context = PhysioContext
-                { pcRegistry = registry, pcPhysiology = udPhysiology def
-                , pcOverrides = uisPhysioOverrides u, pcNow = 0
-                , pcStats = stripped, pcModifiers = uisModifiers u
-                , pcBlood = bloodViewOf stripped (uisBlood u) 0
-                , pcPain = woundsPain (uisWounds u) }
-        case reconcileStoredKeys context of
-            Left err → expectationFailure ("fixture seed authority rejected: " <> show err)
-            Right (expected, _) → forM_ owned $ \key →
-                (key, HM.lookup key (uisStats u)) `shouldBe` (key, HM.lookup key expected)
-
------------------------------------------------------------------------
--- Unchanged content: zero normalizations
------------------------------------------------------------------------
 
 canonicalSpec ∷ SpecWith PhysiologyRegistry
 canonicalSpec = describe "unchanged content" $
@@ -753,22 +562,3 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
                     readOwned ls 1 "salt_conc" `shouldReturn` "1|nominal"
                     luaNum ls "unit.readPhysio(1, 'consciousness')" >>= near 1e-9 1
                 Right _ → expectationFailure "unexpected page shape"
-
--- Legacy fixtures predate required Lua modules. Supply the current required
--- component envelopes when re-saving their migrated Haskell snapshots.
-completeRequiredLua ∷ [LuaComponentSpec] → [LuaComponentSpec]
-completeRequiredLua components = foldl' add components required
-  where
-    required =
-        [ LuaComponentSpec "unit_ai" 4 True BS.empty
-        , LuaComponentSpec "building_spawn" 2 True BS.empty ]
-    add present spec
-        | any (\component → lcsId component ≡ lcsId spec) present = present
-        | otherwise = present ⧺ [spec]
-
-stagePage ∷ PageSnapshot → IO PageSnapshot
-stagePage pg = case pgsGeneratedId pg of
-    Just _ → pure pg
-    Nothing → do
-        gid ← newGeneratedWorldId
-        pure pg { pgsGeneratedId = Just gid }

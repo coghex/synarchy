@@ -133,13 +133,10 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
     measurement cannot overlap it either. Since #1570 the build directory is
     one of the scheduled resources rather than an unguarded one: every probe
     here execs the binaries the preflight already resolved -- the engine,
-    and since #2274 the compiled save codec -- and the two
-    probes that can still run Cabal themselves hold `cabal-build`
-    EXCLUSIVELY: `save_compat_migration`, through the codec helper's own
-    freshness build on its direct path (#2273), and
-    `persistence_contract_sweep`, whose nested runner selects it.
-    `tools/probe_runner_resources.py` names which is
-    which, and why `persistence_contract` is no longer among them.
+    and since #2274 the compiled save codec -- and `persistence_contract_sweep` retains its `cabal-build` EXCLUSIVE
+    declaration. Its nested runner no longer selects a Cabal-driving child;
+    the established hold remains conservative and preserves the sweep's
+    resource contract. `tools/probe_runner_resources.py` names the hold.
     Anything not named by either resource table is still
     unguarded. Retries run SOLO afterward, since parallel contention is
     exactly what a retry needs to escape.

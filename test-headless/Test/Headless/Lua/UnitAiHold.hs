@@ -449,31 +449,3 @@ spec = describe "position hold after a completed move order" $ do
                 , "       and a.combatWithdrawalCompletedAt == 87.5,"
                 , "  'with its return accounting intact')"
                 ]
-
-        it "accepts every older input version, each decoding as NOT \
-           \holding — a hold is never inferred from a payload that \
-           \could not record one" $
-            runsOk $ lns
-                [ savePrelude
-                , "for _, v in ipairs({ 1, 2, 3, 4, 5, 6 }) do"
-                , "  assert(saveModules.registry.unit_ai.inputVersions,"
-                , "    'the component declares its accepted inputs')"
-                , "  local old = { [1] = { currentAction = 'wander',"
-                , "    __owner = { __ref = 'unit', id = 1 },"
-                , "    commandedTask = { x = 40, y = 0, startedAt = 0 } } }"
-                , "  if v == 1 then old[1].__owner = nil end"
-                , "  local decoded = spec.decode(v, old)"
-                , "  for k in pairs(aiState) do aiState[k] = nil end"
-                , "  spec.apply(decoded, nil)"
-                , "  assert(aiState[1], 'v' .. v .. ' decodes')"
-                , "  assert(aiState[1].holdAnchor == nil,"
-                , "    'v' .. v .. ' must decode as not holding')"
-                , "  assert(aiState[1].commandedTask.player == nil,"
-                , "    'and its pending order carries no invented player intent')"
-                , "end"
-                , "local accepted = {}"
-                , "for _, v in ipairs(spec.inputVersions) do accepted[v] = true end"
-                , "for v = 1, 7 do"
-                , "  assert(accepted[v], 'v' .. v .. ' must stay an accepted input')"
-                , "end"
-                ]

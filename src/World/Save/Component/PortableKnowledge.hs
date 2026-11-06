@@ -20,14 +20,14 @@
 --   @"transfer-orders"@, and
 --   @docs/persistence_contract.md@ admits an optional one only when
 --   ABSENCE has an honest default rather than an invented one. It does
---   here, for the same reason it did for both of those: every baseline
---   in @docs/save_compat/manifest.json@ predates portable containers
+--   here, for the same reason it did for both of those: older supported
+--   layouts predate portable containers
 --   entirely, so a session written before this slice had nowhere to
 --   record an observation and genuinely knew nothing about any crate.
 --   An absent payload therefore restores 'Item.Knowledge.emptyPortableKnowledge'
 --   — every portable container NEVER-INSPECTED, never known-empty and
 --   never back-filled from whatever the live item happens to hold now.
---   Requiring it instead would refuse every tracked baseline outright.
+--   Requiring it instead would refuse those older layouts outright.
 --
 --   \"Optional\" governs ABSENCE only. A PRESENT payload that is
 --   malformed, or encoded at a version this reader does not accept,

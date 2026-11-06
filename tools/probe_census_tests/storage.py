@@ -804,6 +804,35 @@ def test_unusable_docs_worktree() -> None:
            "a valueless porcelain attribute parses as an empty string")
 
 
+def test_scoped_retirement() -> None:
+    print("\n-- named-row retirement is locked and preserves every other record --")
+    with registry():
+        before = census_records.build_manifest()
+        retired = copy.deepcopy(before["probes"][0])
+        retired["key"] = "retired_probe"
+        retired["script"] = "retired_probe.py"
+        before["probes"].insert(1, retired)
+        original_rows = copy.deepcopy(before["probes"])
+        with scratch() as root:
+            path = root / "census.json"
+            path.write_text(census_records.render_manifest(before), encoding="utf-8")
+            census_storage.retire_probe(path, "retired_probe")
+            after = json.loads(path.read_text(encoding="utf-8"))
+            expect(after["probes"] == [original_rows[0], *original_rows[2:]],
+                   "retirement removes exactly its named row and preserves every other record")
+            expect([row["key"] for row in after["probes"]] == ["alpha", "beta", "gamma"],
+                   "retirement preserves the relative order of all other rows")
+
+            registered = [*census_records.probe_runner_registry.PROBES,
+                          ("retired_probe", "retired_probe.py", "still live")]
+            with registry(probes=registered):
+                expect_refusal(
+                    lambda: census_storage.retire_probe(path, "retired_probe"),
+                    "a registered key cannot be retired")
+            expect(json.loads(path.read_text(encoding="utf-8")) == after,
+                   "a refused retirement leaves the census byte-content unchanged")
+
+
 #: The seven groups the aggregate runs first: what a record is, how an
 #: older one migrates into it, and how a measurement or a harness error
 #: enters one.
@@ -817,14 +846,15 @@ TESTS_RECORDS_AND_INGESTION = (
     test_ingest_harness_error,
 )
 
-#: The five #1428 groups the aggregate runs after the validation family:
-#: where the writer may write, and what it guarantees while writing.
+#: The storage groups run after the validation family: where the writer
+#: may write, how it preserves records, and the scoped retired-row exception.
 TESTS_PATHS_AND_PERSISTENCE = (
     test_path_substitution,
     test_atomicity,
     test_preservation_guard,
     test_independent_process_contention,
     test_unusable_docs_worktree,
+    test_scoped_retirement,
 )
 
 #: This family's complete ordered inventory. The facade reconstructs it

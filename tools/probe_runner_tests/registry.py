@@ -40,8 +40,6 @@ def test_timeout_overrides_are_validated_registry_data() -> None:
     print("\n-- per-probe timeout defaults are validated registry data")
     expect(probe_runner_registry.timeout_override_problems() == [],
            "the shipped timeout declarations are valid")
-    expect(probe_runner_registry.effective_timeout("save_compat_migration") == 5400.0,
-           "save_compat_migration receives its declared 5400s default")
     expect(probe_runner_registry.effective_timeout("expedition_loop") == 3600.0,
            "expedition_loop receives its declared 3600s default")
     expect(probe_runner_registry.DEFAULT_TIMEOUT == 900.0,
@@ -49,8 +47,6 @@ def test_timeout_overrides_are_validated_registry_data() -> None:
     expect(probe_runner_registry.effective_timeout("movement")
            == probe_runner_registry.DEFAULT_TIMEOUT,
            "an ordinary registered probe keeps the shared default")
-    expect(probe_runner_registry.effective_timeout("save_compat_migration", 17.0) == 17.0,
-           "an explicit CLI value wins over the key-specific default")
     expect(probe_runner_registry.effective_timeout("expedition_loop", 17.0) == 17.0,
            "an explicit CLI value wins over the expedition_loop default")
 
@@ -196,7 +192,7 @@ def test_persistence_contract_declares_no_exclusive_interest() -> None:
            .get(probe_runner_resources.ENV_HELD_EXCLUSIVE)
            == probe_runner_resources.BUILD_RESOURCE,
            "while the sweep still exports the hold its nested runner's "
-           "`save_compat_migration` child would otherwise wait on")
+           "the sweep retains its conservative exclusive hold")
 
 
 def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
@@ -213,16 +209,11 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     for key in sorted(config_probes):
         expect("repo-config" in probe_runner_resources.exclusive_resources(key),
                f"{key} still takes repo-config exclusively")
-    # The two probes that can still drive Cabal themselves, which is NOT
-    # an engine boot (#1570): `save_compat_migration`, through the codec
-    # helper's own freshness build on its direct path (#2273), and
-    # `persistence_contract_sweep`, whose nested runner selects it and
-    # which therefore has to stay exclusive so that hold is inheritable
-    # (#2274).
-    cabal_drivers = {"persistence_contract_sweep", "save_compat_migration"}
+    # PSP-5 retires the nested migration probe but keeps the sweep's
+    # conservative Cabal reservation unchanged.
+    cabal_drivers = {"persistence_contract_sweep"}
     expect(cabal_drivers <= declared,
-           f"every Cabal-driving probe is an exclusive holder too "
-           f"(missing: {sorted(cabal_drivers - declared)})")
+           "the persistence sweep retains its exclusive cabal-build hold")
     for key in sorted(cabal_drivers):
         expect("cabal-build" in probe_runner_resources.exclusive_resources(key),
                f"{key} takes the shared Cabal build state exclusively")

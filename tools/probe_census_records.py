@@ -511,9 +511,11 @@ def reconcile_inventory(document: dict) -> dict:
     It never deletes a row and never rewrites a census record beyond
     #1430's single policy initialization: a record whose
     `acceptable_failures` is still null gets the default. A probe that
-    left `probe_runner_registry.PROBES` keeps its measurements and is reported by
-    `validate_manifest` as an extra entry, which is a decision for a
-    person.
+    left `probe_runner_registry.PROBES` keeps its measurements and is
+    reported by `validate_manifest` as an extra entry until a person
+    explicitly retires that named row through `retire_probe`. Retirement
+    is separate from reconciliation: it refuses a still-registered key and
+    removes only that key's row under the census update lock.
     """
     result = migrate_document(document)
     live = {key: script for key, script, _purpose in probe_runner_registry.PROBES}
@@ -604,6 +606,28 @@ def target_row(document, probe: str, what: str) -> dict:
         raise CensusError(
             f"probe {probe!r} has no census record to append to")
     return matches[0]
+
+
+def retire_inventory_row(document, probe: str) -> dict:
+    """Remove one named row after its key has left the live registry.
+
+    This is deliberately not part of ordinary reconciliation: only the
+    explicit retirement command may delete a census row.
+    """
+    if probe in _registered_keys():
+        raise CensusError(
+            f"cannot retire probe {probe!r} while it is still registered")
+    rows = document.get("probes")
+    if not isinstance(rows, list):
+        raise CensusError("census probes must be a list for retirement")
+    matches = [row for row in rows if isinstance(row, dict)
+               and row.get("key") == probe]
+    if len(matches) != 1:
+        raise CensusError(
+            f"expected exactly one census row for {probe!r}, found {len(matches)}")
+    result = dict(document)
+    result["probes"] = [row for row in rows if row is not matches[0]]
+    return result
 
 
 def result_target(result) -> tuple[str, str]:

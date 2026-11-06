@@ -28,7 +28,6 @@ import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, finally, throwIO, try)
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
-import qualified Data.ByteString as BS
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Engine.Scripting.Lua.API.World.Lifecycle (worldInitArenaFn)
@@ -491,30 +490,6 @@ restoreSpec = describe "staged restoration" $ do
         wtdBounds ⊚ readIORef (wsTilesRef ws) `shouldReturn` Nothing
         residentKeys ws `shouldReturn` sort arenaFootprint
 
-    it "restores a LEGACY arena save (no bounds) as expandable, on the corrected foundation" $ \env → do
-        bytes ← BS.readFile legacyFixture
-        snap ← case decodeSessionEnvelope (HS.fromList ["unit_ai", "building_spawn"])
-                       (HS.fromList ["unit_ai", "building_spawn"]) bytes of
-            Left err → expectationFailure (T.unpack err) ≫ error "unreachable"
-            Right (_, s, _, _) → pure s
-        let pid = WorldPageId "legacy_arena"
-            page0 = snapPages snap HM.! pid
-        wgpArenaBounds (pgsGenParams page0) `shouldBe` Nothing
-        logger ← quietLog
-        matReg ← readIORef (materialRegistryRef env)
-        staged ← stageSession env logger
-                    (snapshotToSaveData (SaveRequestMeta "legacy" "2026-10-18T00:00:00.000000Z" False) snap)
-                    matReg
-        case staged of
-            Left e → expectationFailure (T.unpack (renderStageError e))
-            Right ss → case filter ((≡ pid) ∘ spPageId) (ssPages ss) of
-                [] → expectationFailure "the legacy page is missing"
-                (p : _) → do
-                    wtdBounds ⊚ readIORef (wsTilesRef (spWorldState p)) `shouldReturn` Nothing
-                    residentKeys (spWorldState p) `shouldReturn` sort arenaFootprint
-        -- reading it did not rewrite it
-        BS.readFile legacyFixture `shouldReturn` bytes
-
     it "lets a restored finite arena load its remaining valid chunks and refuse the outside" $ \env →
         (`finally` writeIORef (enginePausedRef env) False) $ do
             let ab = bounds 200 200
@@ -534,9 +509,6 @@ restoreSpec = describe "staged restoration" $ do
             lc ← awaitChunk ws (ChunkCoord 5 0)
             lc `shouldBe` generateArenaChunkIn (Just ab) 0 (ChunkCoord 5 0)
             sendWorldCommand env (WorldDestroy pid)
-
-legacyFixture ∷ FilePath
-legacyFixture = "test-headless/data/save-compat/z14-arena-legacy-shallow.bin"
 
 -- * The real codec
 

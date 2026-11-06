@@ -7,10 +7,10 @@
 --   __Only 'PhysioMode' is serialized__, because it is the one value a
 --   save carries: a unit's per-system override (S3, #2829), keyed by
 --   system id in @uiPhysioOverrides@. It is a positional @Generic
---   Serialize@ enum, so it is append-only: @PhysioNominal@ is tag 0 and
---   @PhysioSimulated@ tag 1, and @tools/enum_append_only_audit.py@
---   guards it through @docs/save_compat/enum_baseline.json@ (a pure
---   append is recorded with @--update-baseline@, never by hand).
+--   Serialize@ enum: @PhysioNominal@ is tag 0 and @PhysioSimulated@ tag
+--   1. The compiled current-schema guard records its current shape; any
+--   constructor change, including an append, requires the owning save
+--   carrier's versioned migration.
 --   'ResolvedMode' is deliberately NOT serialized: Unsupported is a
 --   resolver verdict about a definition, never an override a unit can
 --   hold. The registry, the profiles and 'UnitPhysiology' are all
@@ -65,9 +65,11 @@ import GHC.Generics (Generic)
 --   default, or by a per-unit override. 'Unsupported' is not a choice
 --   but a capability verdict, so it is 'ResolvedMode''s.
 --
---   Positional @Generic Serialize@ (S3, #2829): constructors are
---   append-only. An unknown tag fails decoding as malformed (cereal's
---   generic sum decoder), and is never reinterpreted as a mode.
+--   Positional @Generic Serialize@ (S3, #2829): constructor tags are
+--   positional and covered by the current-schema guard. Any constructor
+--   change requires the owning save carrier's versioned migration. An
+--   unknown tag fails decoding as malformed (cereal's generic sum decoder)
+--   and is never reinterpreted as a mode.
 data PhysioMode = PhysioNominal | PhysioSimulated
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 

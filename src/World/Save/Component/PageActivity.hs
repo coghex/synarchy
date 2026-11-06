@@ -790,9 +790,8 @@ fromSpoilDTO = HM.map fromSpoilPileDTO
 --   then decodes and is refused by 'validateWorldActivity' naming the
 --   page and the record's key, where a closed enum would fail the whole
 --   component decode with a positional-tag error naming neither. The
---   indices are the 'Generic' 'Serialize' tags of enums
---   @tools\/enum_append_only_audit.py@ already freezes, so the
---   vocabulary can only grow.
+--   indices are the 'Generic' 'Serialize' tags of enums; a changed
+--   carrier must advance its version under the current-save schema policy.
 --
 --   The species is the authored NAME (#2243) and the tile is the
 --   occurrence's canonical global tile; see "World.Flora.Condition" for

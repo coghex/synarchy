@@ -47,11 +47,10 @@ The two targets are `exe:synarchy`, which every probe boots, and
 through. Each preflight is itself
 a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
 aggregate runs cannot build at once, and neither can a build and another
-runner's Cabal-driving probe. The probes that legitimately still drive
-Cabal on their DIRECT path (`save_compat_migration`'s codec freshness
-build, and `persistence_contract_sweep`, which nests a runner that
-selects it) declare `cabal-build` EXCLUSIVELY instead, which is the same
-scheduling mechanism keeping them off everyone else's toes. Since #1436
+runner's Cabal-driving probe. The `persistence_contract_sweep` still declares `cabal-build` EXCLUSIVELY
+on its direct path. Its nested runner now selects only probes that use the
+preflighted binaries, but the hold is retained to preserve its established
+resource contract. Since #1436
 the SAME two tables are also
 enforced ACROSS processes, through `tools/probe_resource_lock.py`, so a
 `/deflake` measurement or a second runner cannot overlap what this one is

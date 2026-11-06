@@ -53,8 +53,8 @@ import World.Flora.Types
 
 -- | A durable reference to a flora species.
 --
---   Append-only like every other positionally-serialized sum
---   (@tools\/enum_append_only_audit.py@): 'FloraByName' is tag 0 and is
+--   Positionally serialized: changing it requires a carrier version
+--   advance under the current-save schema policy (#2919). 'FloraByName' is tag 0 and is
 --   the only one anything writes.
 data FloraRef
     = FloraByName !Text

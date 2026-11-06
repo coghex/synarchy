@@ -98,8 +98,8 @@ import World.Flora.Types
 --   token. A persisted record needs all three, because it snapshots the
 --   outcome that applies to ITS context.
 --
---   Positional like every enum: append-only
---   (@tools\/enum_append_only_audit.py@).
+--   Positional like every enum: changes require a current carrier version
+--   under the current-save schema policy (#2919).
 data RetentionSuccessor
     = RetainReseed
     | RetainAbsent
@@ -372,8 +372,8 @@ renderConditionProblem p = case p of
 --   value outside the vocabulary DECODES and is then refused by
 --   validation with the page and key named, instead of failing the whole
 --   component decode with a positional-tag error that names neither.
---   The index is the 'Generic' 'Serialize' tag of the same enum, which
---   @tools\/enum_append_only_audit.py@ already freezes.
+--   The index is the 'Generic' 'Serialize' tag of the same enum; its
+--   owning carrier's version is covered by the current-save schema guard.
 type VocabTag = Word8
 
 toVocabTag ∷ Enum a ⇒ a → VocabTag

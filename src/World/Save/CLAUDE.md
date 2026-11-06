@@ -12,30 +12,28 @@ row). Read the contract before adding state to `EngineEnv`,
 (`UnitManager`, `BuildingManager`, `UnitThreadState`), or
 `scripts/lib/save_modules.lua`'s registry.
 
-## Enum schema policy — append-only
+## Current-only save schema policy
 
-`Direction`, `Pose`, `UnitActivity` (and any enum serialized via
-`Generic Serialize`) are positional by constructor tag — **append-only**.
-Inserting/reordering silently corrupts saves. A constructor's own FIELDS
-are positional too, so reordering them or changing one field's
-serialized type corrupts saves the same way while moving no tag (#1270).
+Before the first public release, the repository accepts only the schema
+recorded for the current source tree. Any shape or meaning change to a
+persisted Haskell or Lua value advances each affected component's version
+and disables its prior-version route. Do not add frozen DTOs, migration
+routes, fixture baselines, or compatibility promises for pre-release
+saves. Unsupported saves fail during staging, before publication, and leave
+the old session paused. A structurally incompatible generation must not be
+recovered from `.prev`.
 
-Anything beyond appending is a **per-component migration**, never a
-`currentSaveVersion` change: find EVERY component storing the enum,
-raise its `csVersion`, freeze the outgoing DTO, register the frozen type
-in `csOlderVersions` via `atVersion` with an explicit migration. Every
-version left in `csOlderVersions` must still DECODE, which today's
-frozen DTOs do not fully satisfy — the full procedure and that caveat:
-`docs/engine_contracts.md` §Enum append-only audit.
+`tools/current_save_schema_audit.py` compares the freshly compiled candidate
+schema record with the record in the committed base. It is a compiled-schema
+guard, not proof of successful serialization or restoration; the retained
+Hspec groups and `persistence_contract` probe provide that behavioral
+evidence. It cannot infer custom serializers or Lua payload meaning, so
+those changes need explicit version updates and current behavior coverage.
+`currentSaveVersion` describes only the in-memory bridge and is not an
+on-disk compatibility guard.
 
-Enforced since #1145 by `tools/enum_append_only_audit.py` (CI +
-`make ci`, with its own `--self-test`), which guards **every**
-multi-constructor `data` declaration under `src/`/`app/` deriving
-`Serialize` through `Generic` — read its module docstring before
-adding, moving, or changing one. `docs/save_compat/enum_baseline.json`
-is the GENERATED golden constructor list; don't hand-edit it — a pure
-append ratchets it with `--update-baseline`, and anything else is a
-wire-format break the audit refuses to record.
+See [`docs/persistence_contract.md`](../../../docs/persistence_contract.md)
+§5 for the policy and public-release checklist.
 
 ## Architecture (epic #756-#768, landed)
 
@@ -62,11 +60,11 @@ wire-format break the audit refuses to record.
   memory is keyed by the crate and a relation cause relates session-wide
   tags. `relation-causes` is captured from the global
   `relationCauseStoreRef` and replaced by the load publish on the
-  `texPaletteRef` seam, and Exit to Menu empties it. Component evolution = per-component schema version bumps +
-  explicit migrations from frozen vN DTOs, NOT a global save-version
-  bump. `currentSaveVersion` versions only the transitional in-memory
-  load bridge (`SaveData`) and is bumped freely — don't trust any number
-  written in docs. `listSaves` decodes only the `metadata` component.
+  `texPaletteRef` seam, and Exit to Menu empties it. Before public release, a persisted shape or meaning change advances every
+  affected on-disk carrier version, which then accepts only its current version.
+  Unchanged carriers retain their accepted versions. Do not add pre-release
+  migrations or frozen DTOs. `currentSaveVersion` versions only the transitional
+  in-memory load bridge (`SaveData`) and is not on-disk protection. `listSaves` decodes only the `metadata` component.
   Pre-envelope flat saves are a clean break (rejected), and
   `world_gen.yaml` no longer exists.
 - Lua-owned state persists via `scripts/lib/save_modules.lua` (see
@@ -113,12 +111,11 @@ session through the real codec, every field via derived `Eq`),
 `--match "persistence reference integrity"`,
 `--match "Lua persistence components"`, `--match "save envelope"` /
 `"save components"` / `"atomic save storage"`.
-`tools/test_save_compat_audit.py --only-reproducibility` (cheap since
-#2273, which replaced its `cabal repl` with the compiled
-`exe:synarchy-save-codec`) when the save
-format, the tracked fixture corpus, `save_compat_audit.py`, or a Cabal
-path changed — `ci_expensive_gates.py --gate save-compat` is the
-authority. Probes — `persistence_contract_probe.py` (CI-eligible smoke:
+`python3 tools/current_save_schema_audit.py --self-test`,
+`python3 tools/current_save_schema_audit.py --base-ref origin/master`,
+and `python3 tools/test_save_compat_audit.py` on every non-docs code
+change; the compiled-schema check is not path-selected. Probes —
+`persistence_contract_probe.py` (CI-eligible smoke:
 three real fresh-process save→load→save cycles compared via
 `tools/persistence_snapshot.compare_session_files`, which since #2274
 execs the compiled `exe:synarchy-save-codec` rather than a `cabal repl`

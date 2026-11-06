@@ -7,9 +7,6 @@
 --     * @summary@         — derive a fixture's canonical-summary JSON
 --                           from its decoded @SessionSnapshot@\/
 --                           @SaveMetadata@.
---     * @set-timestamp@   — rewrite ONLY a fixture's @metadata@
---                           component's @smTimestamp@, re-encoding
---                           every other component's bytes verbatim.
 --     * @descriptors@     — dump a batch of fixtures' RAW envelope
 --                           manifests (id\/version\/required) as one
 --                           JSON object keyed by fixture path.
@@ -48,7 +45,7 @@
 --   contact at all.
 --
 --   Every operation reports success with the SAME stdout marker its
---   GHCi predecessor printed (@DUMP_OK@ \/ @NORMALIZE_OK@ \/
+--   GHCi predecessor printed (@DUMP_OK@ \/
 --   @DESCRIPTOR_DUMP_OK@ \/ @COMPARE_OK@) and, on failure, exits
 --   non-zero after naming the offending fixture path and the codec's own
 --   error text on stderr (requirement 5), so a broken fixture is
@@ -90,7 +87,6 @@ import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..), fnv1
                                  , EnvelopeManifest(..)
                                  , defaultEnvelopeLimits)
 import World.Save.Component (componentKnownIds)
-import World.Save.Compat.SessionV90 (sessionComponentId)
 import World.Save.Snapshot
 import World.Save.Physiology (withoutRebuiltCaches)
 import World.Save.Types
@@ -140,37 +136,18 @@ import World.Save.Component.PageEdits (worldEditsCodec, downgradeWorldEditsV5)
 luaComponentNames ∷ HS.HashSet Text
 luaComponentNames = HS.fromList ["unit_ai", "building_spawn"]
 
--- | The known-id set used for a STRUCTURAL re-encode (@set-timestamp@):
+-- | The known-id set for current summary and comparison operations:
 --   every Haskell-owned component plus the two live Lua ones.
---
---   It widens what may APPEAR; the reader-required set stays empty.
---   Reusing it for both would demand that whatever fixture is being
---   rewritten carry every component the current build knows about —
---   including any OPTIONAL one added after the fixture was captured
---   (#1087's container-knowledge), which by definition it need not.
 structuralKnownIds ∷ HS.HashSet ComponentId
 structuralKnownIds =
     HS.insert metadataComponentId
       (HS.insert (ComponentId "lua.unit_ai")
         (HS.insert (ComponentId "lua.building_spawn") componentKnownIds))
 
--- | The known-id set used for a raw DESCRIPTOR dump: 'structuralKnownIds'
---   widened with BOTH retired legacy ids (@session@ and @lua-state@).
---
---   One universal set serves every fixture regardless of which shape it
---   actually is, because a descriptor dump needs only the envelope's
---   STRUCTURAL manifest to decode — no application-level decode or
---   migration — which succeeds for any of B1\/B2\/B3\/C3's tracked
---   shapes.
-universalKnownIds ∷ HS.HashSet ComponentId
-universalKnownIds =
-    HS.insert sessionComponentId
-      (HS.insert (ComponentId "lua-state") structuralKnownIds)
 
 main ∷ IO ()
 main = getArgs ≫= \case
     ("summary" : rest)       → runSummary rest
-    ("set-timestamp" : rest) → runSetTimestamp rest
     ("descriptors" : rest)   → runDescriptors rest
     ("compare" : rest)       → runCompare rest
     ("seed-tags" : rest)     → runSeedTags rest
@@ -185,8 +162,6 @@ usageFailure args = do
     hPutStrLn stderr $ unlines
         [ "usage:"
         , "  " ⧺ prog ⧺ " summary --fixture PATH --output PATH"
-        , "  " ⧺ prog ⧺ " set-timestamp --fixture PATH --timestamp TS "
-              ⧺ "[--output PATH]"
         , "  " ⧺ prog ⧺ " descriptors --output PATH FIXTURE [FIXTURE ...]"
         , "  " ⧺ prog ⧺ " compare --output PATH FIXTURE FIXTURE [FIXTURE ...]"
         , "  " ⧺ prog ⧺ " seed-tags --fixture PATH --spec PATH --output PATH "
@@ -658,62 +633,6 @@ fluidTypeNames ∷ [(FluidType, T.Text)]
 fluidTypeNames = [ (ft, fluidTypeName ft)
                  | ft ← [Ocean, Lake, River, Lava] ]
 
--- * set-timestamp
-
--- | Overwrite ONLY the @metadata@ component's @smTimestamp@, leaving
---   every other component's version\/required\/payload bytes completely
---   untouched, and write the result to @--output@ (defaulting to the
---   input, i.e. in place).
---
---   @engine.saveWorld@ — the real production save path
---   @--generate-session@ deliberately reuses — always stamps the
---   CURRENT wall-clock time into @smTimestamp@ (by design: an ordinary
---   player save needs each save to carry a distinct real timestamp).
---   That means two @--generate-session@ runs over IDENTICAL
---   seed\/world-size\/plate-count\/spawn arguments produce DIFFERENT
---   envelope bytes and sha256s purely from wall-clock drift, defeating
---   the reproducibility a tracked fixture's checksum depends on. This
---   normalizes that ONE field post-generation, via the real envelope
---   codec (decode the raw manifest\/payloads, rebuild every component's
---   spec verbatim except metadata's, re-encode) rather than a
---   hand-rolled binary patch — so the fix stays correct through any
---   future envelope framing change.
---
---   The @--output@ form is what lets the save-compat self-test build two
---   envelopes differing ONLY in that field, and is the same code path
---   normalization itself takes.
-runSetTimestamp ∷ [String] → IO ()
-runSetTimestamp args = do
-    (fixturePath, rest0) ← orUsageFailure (requireFlag "--fixture" args)
-    (timestamp, rest1)   ← orUsageFailure (requireFlag "--timestamp" rest0)
-    (mOutput, rest2)     ← orUsageFailure (takeFlag "--output" rest1)
-    unless (null rest2) (orUsageFailure (Left ("unexpected arguments: "
-                                               ⧺ unwords rest2)))
-    let outputPath = fromMaybe fixturePath mOutput
-    bytes ← BS.readFile fixturePath
-    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-                        structuralKnownIds HS.empty bytes of
-        Left e → failWith "NORMALIZE_FAILED" fixturePath
-                          ("decode: " ⧺ show e)
-        Right decoded → case decodeMetadata decoded of
-            Left e → failWith "NORMALIZE_FAILED" fixturePath
-                              ("metadata decode: " ⧺ e)
-            Right meta →
-                let fixedMeta = meta { smTimestamp = T.pack timestamp }
-                    newSpecs =
-                        [ ( cdId d, cdVersion d, cdRequired d
-                          , if cdId d ≡ metadataComponentId
-                               then S.encode fixedMeta
-                               else HM.lookupDefault BS.empty (cdId d)
-                                        (dePayloads decoded) )
-                        | d ← emComponents (deManifest decoded) ]
-                in case encodeEnvelope defaultEnvelopeLimits
-                                       currentEnvelopeVersion newSpecs of
-                    Left e → failWith "NORMALIZE_FAILED" fixturePath
-                                      ("encode: " ⧺ show e)
-                    Right outBytes → do
-                        BS.writeFile outputPath outBytes
-                        putStrLn "NORMALIZE_OK"
 
 decodeMetadata ∷ DecodedEnvelope → Either String SaveMetadata
 decodeMetadata decoded =
@@ -727,13 +646,9 @@ decodeMetadata decoded =
 --   codec sees them — and write them all out as one JSON object keyed
 --   by fixture path.
 --
---   The save-compat audit's version-coverage checks previously trusted a
---   baseline's declared @components[]@ versions as-is, entirely from the
---   manifest JSON, never cross-checked against what a fixture's OWN
---   bytes contain: bumping only the manifest's declared version (with no
---   fixture change at all) satisfied every coverage check while
---   validating nothing. This dump is what grinds that claim against
---   real, decoded descriptors.
+--   Current-fixture verification compares the committed descriptor summary
+--   with descriptors decoded from the fixture's actual bytes. This dump
+--   keeps the codec evidence grounded in real envelopes.
 --
 --   EVERY fixture must decode: one failure fails the whole batch, so a
 --   corrupt fixture can never be silently omitted from an object the
@@ -755,7 +670,7 @@ describeOne ∷ FilePath → IO (FilePath, Either String [Aeson.Value])
 describeOne path = do
     bytes ← BS.readFile path
     pure $ case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-                               universalKnownIds HS.empty bytes of
+                               structuralKnownIds HS.empty bytes of
         Left e → (path, Left (show e))
         Right decoded → (path, Right
             [ Aeson.object

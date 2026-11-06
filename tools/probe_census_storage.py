@@ -66,7 +66,7 @@ from probe_census_contract import (  # noqa: E402
 from probe_census_records import (  # noqa: E402
     _deep_copy, _is_x, _refuse_policy, build_manifest, find_entry, find_outcome,
     ingest_claim, ingest_outcome, ingest_result, policy_invariants,
-    reconcile_inventory, render_manifest, set_deferral, set_policy,
+    reconcile_inventory, render_manifest, retire_inventory_row, set_deferral, set_policy,
 )
 
 
@@ -551,6 +551,20 @@ def _check_preserved(before, after, touched) -> list[str]:
     if before is None:
         return []
     problems: list[str] = []
+    if isinstance(touched, dict) and set(touched) == {"__retire__"}:
+        probe = touched["__retire__"]
+        old_rows = before.get("probes") if isinstance(before, dict) else None
+        new_rows = after.get("probes") if isinstance(after, dict) else None
+        old_rows = old_rows if isinstance(old_rows, list) else []
+        new_rows = new_rows if isinstance(new_rows, list) else []
+        matches = [row for row in old_rows
+                   if isinstance(row, dict) and row.get("key") == probe]
+        expected = [row for row in old_rows if row not in matches]
+        if len(matches) != 1:
+            return [f"retirement expected exactly one existing row for {probe!r}"]
+        if new_rows != expected:
+            return ["retirement changed rows other than its one named census row"]
+        return []
     inventory = touched is TOUCH_ANY
     before_keys = [e.get("key") for e in (before.get("probes") or [])
                    if isinstance(e, dict)]
@@ -954,6 +968,16 @@ def record_policy(path: Path, probe: str, **fields) -> str:
         document = require_current_schema(before, path)
         candidate, key = set_policy(document, probe, **fields)
         return candidate, {key: {"policy"}}
+    update(path, mutate)
+    return probe
+
+
+def retire_probe(path: Path, probe: str) -> str:
+    """Retire one unregistered probe row through the shared locked writer."""
+    def mutate(before):
+        document = require_current_schema(before, path)
+        candidate = retire_inventory_row(document, probe)
+        return candidate, {"__retire__": probe}
     update(path, mutate)
     return probe
 

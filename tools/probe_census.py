@@ -213,6 +213,7 @@ Usage:
   # `--record` and the policy operations refuse an unmigrated census by
   # name.
   python3 tools/probe_census.py --validate         # check the docs-wip copy
+  python3 tools/probe_census.py --retire KEY       # remove one retired key under the census lock
   python3 tools/probe_census.py --record RESULT    # ingest one measurement
   python3 tools/probe_census.py --summary          # the current statistics
   python3 tools/probe_census.py --summary --probe KEY --json
@@ -298,7 +299,7 @@ from probe_census_records import (  # noqa: E402,F401
     reconcile_inventory, render_manifest, require_acceptable_failures,
     require_deferral, require_deferral_text, result_target, set_deferral,
     set_policy, summarize_attempt, summarize_sample, target_row,
-    tolerance_state, validate_manifest,
+    tolerance_state, validate_manifest, retire_inventory_row,
 )
 from probe_census_storage import (  # noqa: E402,F401
     APPENDING_ASPECTS, ASPECT_FIELDS, ASPECT_LABEL, CLAIM_FIELDS,
@@ -311,7 +312,7 @@ from probe_census_storage import (  # noqa: E402,F401
     _worktree_records, ensure_document, load, lock_path, manifest_path,
     read_for_update, record_claim, record_deferral, record_outcome,
     record_outcome_installed, record_policy, record_result,
-    record_result_installed, refuse_ci_eligible_measurement,
+    record_result_installed, refuse_ci_eligible_measurement, retire_probe,
     require_current_schema, resolve_docs_worktree, seed, update,
 )
 from probe_census_summary import (  # noqa: E402,F401
@@ -563,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
                             f"census data")
     group.add_argument("--validate", action="store_true",
                        help=f"check the {DOCS_BRANCH} worktree's inventory")
+    group.add_argument("--retire", metavar="KEY",
+                       help="remove one named row after its probe is retired from the live registry")
     group.add_argument("--record", metavar="RESULT",
                        help=f"ingest one {RESULT_SCHEMA} document")
     group.add_argument("--summary", action="store_true",
@@ -646,6 +649,10 @@ def main(argv: list[str] | None = None) -> int:
             document = ensure_document(path)
             print(f"census at {path}: {len(document['probes'])} probes "
                   f"({CENSUS_SCHEMA})")
+            return 0
+        if args.retire:
+            retired = retire_probe(path, args.retire)
+            print(f"retired {retired} from {path}")
             return 0
         if args.record:
             try:

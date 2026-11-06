@@ -538,7 +538,10 @@ def _rule_attempts_reconcile_with_samples(census, where, name) -> list[str]:
     Safe to enforce as an EQUALITY because nothing prunes or caps either
     collection: `_archive_current` MOVES the current cohort into
     `history`, `reconcile_inventory` promotes through that same move,
-    and no operation deletes a row, a cohort, a sample or an attempt.
+    and no operation deletes a cohort, a sample or an attempt from a
+    retained row. The scoped `retire_probe` operation may delete one
+    named row in full, but cannot leave a retained row with only one
+    side of this equality.
     """
     accepted = _accepted_attempts(census)
     retained = sum(len(cohort["samples"])

@@ -874,7 +874,7 @@ worldPagesVersion = 16
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-      -- A literal, not 'worldPagesVersion': the save-compat audit parses
+      -- A literal, not 'worldPagesVersion': the current schema audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
     , csVersion       = 16

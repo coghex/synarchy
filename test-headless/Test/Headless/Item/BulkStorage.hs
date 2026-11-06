@@ -21,10 +21,7 @@ import UPrelude
 import Test.Hspec
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (sort)
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
-import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
@@ -41,10 +38,6 @@ import World.Save.Component.Page
     ( ItemInstanceDTOv1, toItemInstanceDTO, fromItemInstanceDTO
     , toItemInstanceDTOv1, migrateItemInstanceDTOv1
     , itdBulk, itdStorage, itdContents )
-import World.Save.Envelope (decodeSessionEnvelope)
-import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
-import World.Save.Types
-    (ItemWalkOrder(..), pageItemContainers, flattenItemInstances)
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The shipped item-definition directory, exactly as boot loads it.
@@ -422,50 +415,6 @@ spec = do
                     back `shouldBe`
                         mintedCrate { iiBulk = Nothing, iiStorage = Nothing }
 
-        it "a REAL save written by a REAL engine carries a materialized \
-           \bulk on every one of its item instances" $ do
-            -- The end-to-end half of requirement 6, and the one thing a
-            -- pure test cannot reach: the eight production mint paths
-            -- really do snapshot the definition's bulk. This fixture's
-            -- items came from a unit's starting kit, `unit.addItem`,
-            -- `unit.depositToCargo` into a building, and
-            -- `item.spawnGround` — four different mint sites, three
-            -- different item containers.
-            bytes ← BS.readFile m1FixturePath
-            let luaNames = HS.fromList ["unit_ai", "building_spawn"]
-            case decodeSessionEnvelope luaNames luaNames bytes of
-                Left err → expectationFailure (T.unpack err)
-                Right (_, snap, _, _) → do
-                    let items =
-                            [ i
-                            | page       ← HM.elems (snapPages snap)
-                            , (_, insts) ← pageItemContainers ItemsGroundFirst
-                                               pgsGroundItems pgsUnits
-                                               pgsBuildings page
-                            , inst ← insts
-                            , i    ← flattenItemInstances inst ]
-                    -- Non-vacuous: a fixture that happened to carry no
-                    -- items would satisfy an all-quantified check.
-                    length items `shouldSatisfy` (≥ 3)
-                    [ (iiDefName i, iiBulk i)
-                      | i ← items, not (isPositiveFinite (iiBulk i)) ]
-                        `shouldBe` []
-                    -- And the values are the DEFINITIONS' authored ones,
-                    -- not some uniform placeholder.
-                    lookup "rations" [ (iiDefName i, iiBulk i) | i ← items ]
-                        `shouldBe` Just (Just 0.20)
-
--- | The #1233 baseline fixture: a real save written by a real engine
---   through the real production path, whose items were all minted by
---   real production mint paths (a unit's starting kit and `unit.addItem`,
---   a `depositToCargo` into a building, a `item.spawnGround` drop).
---
---   Reading it back is the only assertion here that covers what a pure
---   test structurally cannot: that those mint paths actually SNAPSHOT the
---   definition's bulk. A test that constructs its own instance can only
---   restate its own assignment.
-m1FixturePath ∷ FilePath
-m1FixturePath = "test-headless/data/save-compat/m1-item-bulk-storage.bin"
 
 -- | An instance as the eight production mint paths build one: the
 --   physical values snapshotted from a crate-shaped definition
@@ -487,10 +436,6 @@ roundTrip i =
 
 -- | Is this an authored bulk at all: present, finite, strictly positive
 --   — the same three conditions the loader enforces.
-isPositiveFinite ∷ Maybe Float → Bool
-isPositiveFinite Nothing  = False
-isPositiveFinite (Just v) = not (isNaN v) ∧ not (isInfinite v) ∧ v > 0
-
 dedup ∷ [Text] → [Text]
 dedup = go []
   where

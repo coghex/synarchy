@@ -27,10 +27,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_GATE_PATH = REPO_ROOT / "tools" / "ci-local.sh"
 
-#: The Cabal-backed worker: the build, hspec, the two save-compatibility
-#: steps and world_check. Named on its own as well as in AUDITED_JOBS
-#: because the save-compat wiring checks inspect THIS job specifically --
-#: the commands they guard are the ones #2272 deliberately left here.
+#: The Cabal-backed worker: the build, hspec, current-save checks and
+#: world_check. Named on its own as well as in AUDITED_JOBS
+#: because current-save policy wiring checks inspect THIS job specifically --
+#: the compiled guard and current fixture checks live here.
 AUDITED_JOB = "test-and-audits"
 
 #: The engine-free worker #2272 split out of it: every `python3 tools/*.py`
@@ -233,18 +233,17 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "--self-test form is NOT exempt and does run locally.",
     ),
     (
-        "python3 tools/ci_expensive_gates.py --local-changed-paths",
-        "LOCAL-only, and the one entry that runs here rather than in CI "
-        "(#1360). It resolves the changed-path list `make ci` judges "
-        "itself by -- paths differing from the merge base with the "
-        "default branch, tracked working-tree edits included -- because "
-        "`make ci` has no pull-request base sha to be handed. CI already "
-        "has one and pipes it in directly. The DECISION both files then "
-        "reach is NOT exempt: both run "
-        "`ci_expensive_gates.py --stdin --gate save-compat`, and "
-        "audit_save_compat_reproducibility_wiring over in "
-        "tools/ci_parity_save_compat.py checks they feed "
-        "it into the same guarded command.",
+        "python3 tools/current_save_schema_audit.py --base-ref $BASE_REF",
+        "CI-only current-save schema comparison: `$BASE_REF` is the exact "
+        "pull-request base or master-push before revision. `make ci` has no "
+        "event base and the local entry point instead compares with "
+        "`origin/master`.",
+    ),
+    (
+        "python3 tools/current_save_schema_audit.py --base-ref origin/master",
+        "LOCAL-only current-save schema comparison: `origin/master` is the "
+        "available conservative base for `make ci`; CI compares with the "
+        "exact pull-request base or master-push before revision.",
     ),
     (
         "python3 tools/ci_cache_report.py",

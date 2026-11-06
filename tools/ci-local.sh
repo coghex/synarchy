@@ -67,7 +67,7 @@ cd "$(dirname "$0")/.."
 # re-review apiece. The numbers carried no information git could merge.
 #
 # `step` announces and advances; `substep` re-announces the CURRENT step
-# for a gate that reports more than once (the save-compat selection
+# for a gate that reports more than once (the path-relevant selection
 # below). M is counted from this file's own `step ` call sites, so
 # adding a gate is now a genuine three-line insertion.
 STEP_TOTAL="$(grep -c '^step ' "$SELF")"
@@ -103,17 +103,6 @@ if [ -e "$LOCAL" ]; then
   BACKUP="$(mktemp)"
   cp "$LOCAL" "$BACKUP"
 fi
-
-# Resolve THIS working tree's own changed paths before the scratch
-# cabal.project.local below exists (#1360). The order is load-bearing,
-# not incidental: cabal.project.local is not gitignored, so a change can
-# legitimately track one -- and CI's save-compat gate selects on it,
-# because cabal would apply it there. Capturing after the write would
-# report this gate's own scratch edit to a tracked file as if it were
-# the candidate's, which is exactly what requirement 7 forbids;
-# capturing before reports the candidate's real edit and nothing else.
-# The list feeds the save-compat decision at step 13.
-SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
 
 # -fforce-recomp so a warm build can't mask a warning a fresh build would
 # catch; see the header comment above for why -Werror itself no longer
@@ -260,62 +249,11 @@ step "EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
-# Local `make ci` keeps both commands unconditional. CI runs them for
-# every non-docs-only change and every save-compat input change, but skips
-# this Cabal-backed step after its docs-only selector proves the range is
-# unrelated documentation.
-# --without-reproducibility (#1360) drops exactly ONE member of the
-# self-test module -- the one that builds two timestamp variants to prove
-# fixture generation is reproducible (its own `cabal repl` until #2273,
-# the compiled exe:synarchy-save-codec since) -- and the block below runs
-# that member when
-# this working tree's own changes touch a path that can move its result.
-# Every other member and the whole real audit still run on every local
-# invocation.
-step "save compatibility audit"
-python3 tools/test_save_compat_audit.py --without-reproducibility
+step "current save policy"
+python3 tools/current_save_schema_audit.py --self-test
+python3 tools/current_save_schema_audit.py --base-ref origin/master
+python3 tools/test_save_compat_audit.py
 python3 tools/save_compat_audit.py
-
-# The reproducibility member, selected by the SAME decision CI takes
-# (#1360, requirement 7): $SAVE_COMPAT_PATHS was resolved at the top of
-# this script, against the merge base with the default branch and before
-# the scratch cabal.project.local existed, and is piped here into the
-# very same `ci_expensive_gates.py --stdin --gate save-compat` command
-# .github/workflows/ci.yml runs. Not a second matcher that could drift:
-# one script, one pattern table, one answer. An unresolvable base yields
-# the selector's conservative sentinel, which selects the gate, so a
-# detached or shallow checkout runs the coverage rather than skipping it.
-# tools/ci_parity_audit.py fails if the two files stop agreeing about
-# which gate decides this or which command it guards.
-# >>> save-compat reproducibility selection >>>
-# tools/ci_parity_audit.py EXTRACTS the lines between these two markers
-# and EXECUTES them against synthetic changed-path lists (supplied as
-# $SAVE_COMPAT_PATHS), so this block's real behaviour -- not a grep for
-# its text -- is what proves `make ci` selects the reproducibility
-# member from the same decision CI's `if:` takes. Keep the markers, and
-# keep the block reading $SAVE_COMPAT_PATHS rather than re-deriving it:
-# re-deriving it here would put the resolution back after the scratch
-# write.
-#
-# That extraction runs this block through `bash -c` with nothing but the
-# text between the markers, so the `substep` helper defined at the top of
-# this file does not exist there. Announcing through a no-op fallback
-# keeps the isolated run working (and keeps what the audit measures --
-# which command the selection guards -- exactly the same) while the real
-# `make ci` run still prints the numbered sub-report.
-command -v substep >/dev/null 2>&1 || substep() { :; }
-SAVE_COMPAT_REPRO="$(printf '%s\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
-if [ "$SAVE_COMPAT_REPRO" = true ]; then
-  substep "save compatibility fixture reproducibility (selected)"
-  python3 tools/test_save_compat_audit.py --only-reproducibility
-else
-  substep "save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
-fi
-# <<< save-compat reproducibility selection <<<
-
-step "enum append-only audit"
-python3 tools/enum_append_only_audit.py --self-test
-python3 tools/enum_append_only_audit.py
 
 step "cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py

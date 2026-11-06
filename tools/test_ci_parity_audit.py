@@ -9,7 +9,7 @@ parity exemption of its own, and exposes no command line.
 Where the assertions point
 --------------------------
 At the CANONICAL owners -- `ci_parity_shell`, `ci_parity_config`,
-`ci_parity_workflow`, `ci_parity_save_compat` -- never at a facade
+`ci_parity_workflow`, `ci_parity_save_policy` -- never at a facade
 alias. A constant read through `ci_parity_audit` would let a mutation of
 it pass while production kept reading the real one, which is exactly the
 drift a self-test exists to catch.
@@ -46,7 +46,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_parity_audit  # noqa: E402
 import ci_parity_config  # noqa: E402
-import ci_parity_save_compat  # noqa: E402
+import ci_parity_save_policy  # noqa: E402
 import ci_parity_shell  # noqa: E402
 import ci_parity_workflow  # noqa: E402
 import ci_expensive_gates  # noqa: E402
@@ -59,11 +59,7 @@ from ci_parity_config import (  # noqa: E402
     WORKFLOW_LABEL,
     WORKFLOW_UNION_LABEL,
 )
-from ci_parity_save_compat import (  # noqa: E402
-    LOCAL_BLOCK_BEGIN,
-    LOCAL_BLOCK_END,
-    audit_save_compat_reproducibility_wiring,
-)
+from ci_parity_save_policy import audit_current_save_policy_wiring  # noqa: E402
 from ci_parity_shell import (  # noqa: E402
     AuditError,
     cabal_subcommand,
@@ -342,12 +338,9 @@ def _self_test() -> list[str]:
                                 "fixture") == [],
             "`python3 -m pip install` is environment preparation, not a gate")
 
-    # 13. The save-compat reproducibility wiring (#1360). Built from
-    #     synthetic fixtures so the cases are mutations of a known-good
-    #     pair, not of this repository's live files -- and the local half
-    #     is genuinely EXECUTED, so "the block still selects correctly"
-    #     is observed rather than asserted about its text.
-    failures.extend(_save_compat_wiring_self_test())
+    # 13. Current-save schema checks must be wired on both sides, while
+    #     retired historical routes fail the parity self-test.
+    failures.extend(_current_save_policy_wiring_self_test())
 
     # 14. The stable build-test context must aggregate every parallel
     #     worker, and the split-out audit worker must keep its topology.
@@ -1242,224 +1235,29 @@ def _cabal_verbosity_self_test() -> list[str]:
     return failures
 
 
-_WIRING_LOCAL_GOOD = """#!/usr/bin/env bash
-set -euo pipefail
-SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
-printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' > "$LOCAL"
-python3 tools/test_save_compat_audit.py --without-reproducibility
-python3 tools/save_compat_audit.py
-# >>> save-compat reproducibility selection >>>
-SAVE_COMPAT_REPRO="$(printf '%s\\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
-if [ "$SAVE_COMPAT_REPRO" = true ]; then
-  python3 tools/test_save_compat_audit.py --only-reproducibility
-else
-  echo skipped
-fi
-# <<< save-compat reproducibility selection <<<
-"""
-
-_WIRING_CI_GOOD = """
-name: fixture
-on: push
-jobs:
-  test-and-audits:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Select expensive path-relevant gates
-        id: expensive-gates
-        run: |
-          printf '%s\\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \\
-            sed 's/^/save-compat=/' >> "$GITHUB_OUTPUT"
-      - name: Save compatibility audit
-        if: >-
-          steps.docs-fast-path.outputs.docs_only != 'true'
-          || steps.expensive-gates.outputs.save-compat == 'true'
-        run: |
-          python3 tools/test_save_compat_audit.py --without-reproducibility
-          python3 tools/save_compat_audit.py
-      - name: Save compatibility fixture reproducibility
-        if: steps.expensive-gates.outputs.save-compat == 'true'
-        run: python3 tools/test_save_compat_audit.py --only-reproducibility
-"""
-
-
-def _save_compat_wiring_self_test() -> list[str]:
+def _current_save_policy_wiring_self_test() -> list[str]:
+    local = "\n".join((
+        "python3 tools/current_save_schema_audit.py --self-test",
+        "python3 tools/current_save_schema_audit.py --base-ref origin/master",
+        "python3 tools/test_save_compat_audit.py",
+    ))
+    workflow = "\n".join((
+        "github.event.before",
+        "github.event.pull_request.base.sha",
+        *local.splitlines(),
+    ))
     failures: list[str] = []
-
-    def problems(ci: str = _WIRING_CI_GOOD,
-                 local: str = _WIRING_LOCAL_GOOD) -> list[str]:
-        return audit_save_compat_reproducibility_wiring(ci, local)
-
-    # (a) The known-good pair passes. Every mutation below starts here,
-    #     so a check that never fires would show up as a mutation that
-    #     also passes.
-    _expect(failures, problems() == [],
-            f"the known-good wiring fixture should pass, got {problems()}")
-
-    # (b) The local block that runs the member UNCONDITIONALLY is the
-    #     failure this whole section exists for: the gate sets still
-    #     match exactly, so only executing the block can catch it.
-    unconditional = _WIRING_LOCAL_GOOD.replace(
-        'if [ "$SAVE_COMPAT_REPRO" = true ]; then\n  '
-        'python3 tools/test_save_compat_audit.py --only-reproducibility\n'
-        'else\n  echo skipped\nfi\n',
-        "python3 tools/test_save_compat_audit.py --only-reproducibility\n")
+    _expect(failures, not audit_current_save_policy_wiring(workflow, local),
+            "current-save wiring fixture should pass")
     _expect(failures,
-            any("an unrelated change" in p for p in problems(local=unconditional)),
-            "a local block running the member unconditionally should fail, "
-            f"got {problems(local=unconditional)}")
-
-    # (c) A local block guarded by a DIFFERENT gate's decision reverses
-    #     both directions: worldgen selects on the Lua sample and not on
-    #     the save sample.
-    other_gate = _WIRING_LOCAL_GOOD.replace("--gate save-compat",
-                                            "--gate worldgen")
-    _expect(failures, problems(local=other_gate) != [],
-            "a local block consulting a different gate should fail")
-
-    # (d) A local block that never runs the member at all.
-    never = _WIRING_LOCAL_GOOD.replace(
-        "python3 tools/test_save_compat_audit.py --only-reproducibility\n",
-        "echo would-run\n")
+            any("before/after" in problem for problem in
+                audit_current_save_policy_wiring(workflow.replace(
+                    "github.event.before", ""), local)),
+            "a push without its before revision must fail")
     _expect(failures,
-            any("not reachable at all" in p for p in problems(local=never)),
-            f"a block that never runs the member should fail, "
-            f"got {problems(local=never)}")
-
-    # (e) Reintroducing the BARE invocation on either side runs the
-    #     reproducibility member on every run, selector or no selector.
-    bare_local = _WIRING_LOCAL_GOOD.replace(
-        "python3 tools/test_save_compat_audit.py --without-reproducibility",
-        "python3 tools/test_save_compat_audit.py")
-    _expect(failures,
-            any("runs the bare" in p for p in problems(local=bare_local)),
-            f"a bare local invocation should fail, got {problems(local=bare_local)}")
-    bare_ci = _WIRING_CI_GOOD.replace(
-        "python3 tools/test_save_compat_audit.py --without-reproducibility",
-        "python3 tools/test_save_compat_audit.py")
-    _expect(failures,
-            any("runs the bare" in p for p in problems(ci=bare_ci)),
-            f"a bare CI invocation should fail, got {problems(ci=bare_ci)}")
-
-    # (f) Dropping the markers refuses rather than falling back to
-    #     trusting the shell text.
-    unmarked = _WIRING_LOCAL_GOOD.replace(LOCAL_BLOCK_BEGIN, "(removed)")
-    _expect(failures,
-            any("markers" in p for p in problems(local=unmarked)),
-            f"a block with no markers should fail, got {problems(local=unmarked)}")
-
-    # (f2) ...and so does a DUPLICATED block. Only the first marker pair
-    #      is ever executed, so a second one invoking the member
-    #      unconditionally would otherwise sail through: the gate sets
-    #      still match (same command), the executed block still selects
-    #      correctly, and `make ci` would run the reproducibility member
-    #      on every unrelated change with this audit reporting no problem
-    #      at all.
-    duplicated = _WIRING_LOCAL_GOOD + (
-        "# " + LOCAL_BLOCK_BEGIN + "\n"
-        "python3 tools/test_save_compat_audit.py --only-reproducibility\n"
-        "# " + LOCAL_BLOCK_END + "\n")
-    _expect(failures,
-            any("exactly one of each" in p
-                for p in problems(local=duplicated)),
-            "a duplicated selection block should fail, got "
-            f"{problems(local=duplicated)}")
-
-    # (f3) A duplicated block is refused even when the extra one is
-    #      harmless, because "the block this audit executes" and "the
-    #      block that runs" must be the same block, not merely agree.
-    duplicated_inert = _WIRING_LOCAL_GOOD + (
-        "# " + LOCAL_BLOCK_BEGIN + "\n"
-        "echo nothing-to-see-here\n"
-        "# " + LOCAL_BLOCK_END + "\n")
-    _expect(failures,
-            any("exactly one of each" in p
-                for p in problems(local=duplicated_inert)),
-            "a duplicated selection block should fail even when inert, got "
-            f"{problems(local=duplicated_inert)}")
-
-    # (f4) A lone extra BEGIN marker is a malformed block, not a second
-    #      one -- also refused, so the count check cannot be satisfied by
-    #      pairing up stray markers.
-    stray_begin = _WIRING_LOCAL_GOOD + "# " + LOCAL_BLOCK_BEGIN + "\n"
-    _expect(failures,
-            any("exactly one of each" in p
-                for p in problems(local=stray_begin)),
-            "a stray extra begin marker should fail, got "
-            f"{problems(local=stray_begin)}")
-
-    # (g) Making the reproducibility member unconditional fails, and so
-    #     does swapping either guard for another gate's output.
-    no_selection = _WIRING_CI_GOOD.replace(
-        "        if: steps.expensive-gates.outputs.save-compat == 'true'\n",
-        "        if: always()\n")
-    _expect(failures,
-            any("guarded by" in p for p in problems(ci=no_selection)),
-            f"making the reproducibility member unconditional should fail, "
-            f"got {problems(ci=no_selection)}")
-    unguarded_main = _WIRING_CI_GOOD.replace(
-        "        if: >-\n"
-        "          steps.docs-fast-path.outputs.docs_only != 'true'\n"
-        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
-        "")
-    _expect(failures,
-            any("main audit may skip" in p
-                for p in problems(ci=unguarded_main)),
-            f"making the main audit unconditional should fail, "
-            f"got {problems(ci=unguarded_main)}")
-    wrong_output = _WIRING_CI_GOOD.replace(
-        "steps.expensive-gates.outputs.save-compat == 'true'",
-        "steps.expensive-gates.outputs.worldgen == 'true'")
-    _expect(failures, problems(ci=wrong_output) != [],
-            "a guard reading another gate's output should fail")
-
-    # (h) A selector step that computes the decision but never publishes
-    #     it leaves the guard reading an empty value.
-    unpublished = _WIRING_CI_GOOD.replace("sed 's/^/save-compat=/'",
-                                          "sed 's/^/unrelated=/'")
-    _expect(failures,
-            any("never writes" in p for p in problems(ci=unpublished)),
-            f"an unpublished selector output should fail, "
-            f"got {problems(ci=unpublished)}")
-
-    # (i2) Resolving the local changed paths AFTER the scratch
-    #      cabal.project.local write. Both commands still run, the sets
-    #      still match, and the block still guards correctly -- only the
-    #      ORDER is wrong, which is what would let this gate's own
-    #      scratch edit select the gate once a change tracks that file.
-    late_resolve = _WIRING_LOCAL_GOOD.replace(
-        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
-        '--local-changed-paths)"\n'
-        "printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' "
-        '> "$LOCAL"\n',
-        "printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' "
-        '> "$LOCAL"\n'
-        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
-        '--local-changed-paths)"\n')
-    _expect(failures,
-            any("AFTER" in p for p in problems(local=late_resolve)),
-            "resolving the changed paths after the scratch write should "
-            f"fail, got {problems(local=late_resolve)}")
-
-    # (i3) Dropping the local resolution entirely.
-    no_resolve = _WIRING_LOCAL_GOOD.replace(
-        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
-        '--local-changed-paths)"\n', "")
-    _expect(failures,
-            any("no local changed-path list" in p
-                for p in problems(local=no_resolve)),
-            "dropping the local changed-path resolution should fail, got "
-            f"{problems(local=no_resolve)}")
-
-    # (i) A CI reproducibility step with no `if:` at all -- the exact
-    #     "runs on every PR again" regression, from the other side.
-    unguarded_ci = _WIRING_CI_GOOD.replace(
-        "        if: steps.expensive-gates.outputs.save-compat == 'true'\n",
-        "")
-    _expect(failures,
-            any("guarded by" in p for p in problems(ci=unguarded_ci)),
-            f"an unguarded CI step should fail, got {problems(ci=unguarded_ci)}")
-
+            any("retired" in problem for problem in
+                audit_current_save_policy_wiring(workflow + " --gate save-compat", local)),
+            "historical gate reachability must fail")
     return failures
 
 
@@ -1498,7 +1296,7 @@ FACADE_OWN_BINDINGS = frozenset({"__all__"})
 
 #: The owner modules a re-exported name may be canonically defined by.
 CANONICAL_OWNERS = (ci_parity_config, ci_parity_shell, ci_parity_workflow,
-                    ci_parity_save_compat)
+                    ci_parity_save_policy)
 
 
 def _module_tree(path: Path) -> ast.Module:
@@ -1554,7 +1352,7 @@ def _structural_self_test() -> list[str]:
     #     that resolved to nothing would make every check below vacuous.
     names = {path.name for path in EXTRACTED}
     expected_owners = {"ci_parity_shell.py", "ci_parity_config.py",
-                       "ci_parity_workflow.py", "ci_parity_save_compat.py"}
+                       "ci_parity_workflow.py", "ci_parity_save_policy.py"}
     _expect(failures, expected_owners <= names,
             f"the production owners {sorted(expected_owners - names)} are "
             f"missing from the filesystem scan, which found {sorted(names)}")
@@ -1573,7 +1371,7 @@ def _structural_self_test() -> list[str]:
     #     future edit would have to take to break it.
     shell_tree = _module_tree(TOOLS / "ci_parity_shell.py")
     banned = {"yaml", "ci_parity_config", "ci_parity_workflow",
-              "ci_parity_save_compat", "ci_expensive_gates"}
+              "ci_parity_save_policy", "ci_expensive_gates"}
     imported: set[str] = set()
     for node in ast.walk(shell_tree):
         if isinstance(node, ast.Import):
@@ -1621,21 +1419,6 @@ def _structural_self_test() -> list[str]:
                 getattr(ci_parity_audit, name) is getattr(owners[0], name),
                 f"ci_parity_audit.{name} is not {owners[0].__name__}.{name}; "
                 "a re-export must be the canonical object, never a copy")
-
-    # 20. Every parity module still faces the save-compat coverage whose
-    #     selection it validates. `tools/ci_parity_audit.py` was already
-    #     an exact pattern in ci_expensive_gates.SAVE_COMPAT_GLOBS before
-    #     this split; leaving an extracted owner unmatched would silently
-    #     narrow that selector, so each is checked through the real
-    #     selector rather than by reading the glob list.
-    for path in (FACADE, SELF_TEST_OWNER, *EXTRACTED):
-        relative = f"tools/{path.name}"
-        _expect(failures,
-                ci_expensive_gates.selected("save-compat", [relative]),
-                f"{relative} does not select the save-compat gate; add it to "
-                "SAVE_COMPAT_GLOBS in tools/ci_expensive_gates.py, or an "
-                "edit to it can change WHEN that coverage runs without "
-                "facing the coverage itself")
 
     # 21. `tools/` is an implicit namespace package, so `import
     #     tools.ci_parity_shell` from the repository root leaves `tools/`
