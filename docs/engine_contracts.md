@@ -475,10 +475,14 @@ moves afterwards can still require a branch update and a further run under
 1. the pull request is open and its live head is the head the run is for;
 2. it carries a live `reviewed:approve` label, read from GitHub after the
    stale-approval outcome is known, never taken from the event payload;
-3. on a `synchronize`, `review-gate.yml`'s `dismiss-stale-approval` run for
-   that exact head has completed and succeeded (the run is waited for, up to
-   15 minutes). A successful strip is green too, which is why the live label
-   is also required;
+3. every `review-gate.yml` run for that exact head has settled and its newest
+   real `dismiss-stale-approval` outcome has completed and succeeded; a
+   `synchronize` must have one. The runs are waited for, up to 15 minutes. A
+   head with no registered review-gate run, or a run whose jobs are not yet
+   listed, is pending rather than "never synchronized", and the dismissal
+   job's skipped records (on `opened`/`labeled` events) are not outcomes. A
+   successful strip is green too, which is why the live label is also read,
+   after the outcome, and why an unreadable API denies admission;
 4. the exact head SHA contains the base branch's current tip after a fresh
    fetch. The default `pull_request` checkout is a synthetic merge that
    contains the base even when the branch is behind, so ancestry is never
