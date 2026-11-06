@@ -261,7 +261,7 @@ def lane_stats(lane_runs: list[dict]) -> dict:
     build seconds in the same run (same cache, same change): a lane builds the
     library and the suite but no executable.
     """
-    runs = [r for r in lane_runs if r["event"] == "pull_request" and LANE_JOB.format("rest") in r["jobs"]]
+    runs = [r for r in lane_runs if r["event"] in ("pull_request", "workflow_dispatch") and LANE_JOB.format("rest") in r["jobs"]]
     out: dict = {"n": len(runs), "wall": [r["wall_seconds"] for r in runs]}
     scale, fixed = [], []
     for r in runs:
@@ -286,6 +286,15 @@ def lane_stats(lane_runs: list[dict]) -> dict:
             "run": {"p25": percentile([u for u in run if u], 0.25), "p50": _median([u for u in run if u]),
                     "p75": percentile([u for u in run if u], 0.75)}}
     return out
+
+
+def probe_job(jobs: dict) -> dict:
+    """The real behavior-probe job of a sampled run.
+
+    Since #2927 it is ``behavior-probe-worker``; ``behavior-probes`` is a seconds-long gate over it
+    on those runs, and the probe job itself on the historical ones.
+    """
+    return jobs.get("behavior-probe-worker") or jobs["behavior-probes"]
 
 
 def whole_run(rows: list[dict], runs: list[dict], fits: dict, lanes: dict, policy: str,
@@ -318,7 +327,7 @@ def whole_run(rows: list[dict], runs: list[dict], fits: dict, lanes: dict, polic
         times = {f"lane {lane}": lanes[lane]["overhead"] + lanes["lane_scale"] * build
                  + lanes[lane]["run"][run_quantile] * ratio[lane] for lane in LANES}
         times["audits"] = lanes["audit_fixed"] + build
-        beh = jobs["behavior-probes"]
+        beh = probe_job(jobs)
         prereq = beh["steps"].get(PROBE_BUILD) or 0
         times["probes"] = beh["seconds"] - prereq + prereq * (lib / lib_base if lib_base else 1.0)
         times["static"] = jobs["static-audits"]["seconds"]
@@ -331,6 +340,16 @@ def whole_run(rows: list[dict], runs: list[dict], fits: dict, lanes: dict, polic
 
 
 def self_test() -> int:
+    worker, gate, historic = {"seconds": 900}, {"seconds": 4}, {"seconds": 800}
+    assert probe_job({"behavior-probe-worker": worker, "behavior-probes": gate}) is worker
+    assert probe_job({"behavior-probes": historic}) is historic
+    lane = {"seconds": 100, "steps": {LANE_BUILD: 50, LANE_RUN: 30}}
+    jobs = {LANE_JOB.format(name): lane for name in LANES}
+    jobs["test-and-audits"] = {"seconds": 1000, "steps": {AUDIT_LIB: 300, AUDIT_TESTS: 300}}
+    for event in ("pull_request", "workflow_dispatch"):
+        assert lane_stats([{"event": event, "wall_seconds": 5, "jobs": jobs}])["n"] == 1, event
+    mixed = [{"event": e, "wall_seconds": 5, "jobs": jobs} for e in ("push", "pull_request", "workflow_dispatch")]
+    assert lane_stats(mixed)["n"] == 2, "master pushes stay out of the pull-request lane statistics"
     d = frozenset({("lib", "A"), ("lib", "B")})
     o = frozenset({("lib", "B"), ("lib", "C")})
     u = frozenset({("lib", "A"), ("lib", "B"), ("lib", "C"), ("lib", "D")})

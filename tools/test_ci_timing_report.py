@@ -417,6 +417,90 @@ def check_aggregate_categories() -> None:
     expect("0s" not in rendered, "an empty category renders no zero duration")
 
 
+def _dispatched_case(pr: int = 7, sha: str = "e" * 40) -> model.RunTiming:
+    """The successful pull-request fixture, as ci.yml's dispatch now produces it (#2927)."""
+    directory = FIXTURES / "pr_success"
+    meta = json.loads((directory / "meta.json").read_text(encoding="utf-8"))
+    meta.update(event="workflow_dispatch", displayTitle=f"CI PR {pr} @ {sha}",
+                headBranch="issue-2091-building-destruction-presentation", headSha=sha)
+    jobs = json.loads((directory / "jobs.json").read_text(encoding="utf-8"))
+    return model.build_run(meta, jobs)
+
+
+def check_dispatched_pull_request_runs() -> None:
+    """Pull-request CI is a workflow_dispatch since #2927 and must still be a pull-request sample."""
+    run = _dispatched_case()
+    expect(run.successful and run.category == model.CATEGORY_PULL_REQUEST,
+           f"a successful dispatched run is a pull-request run; got {run.category!r}")
+    expect(run.dispatched_pull_request == 7, "its title names the pull request")
+    history = load_case("pr_success")[0]
+    expect(history.category == model.CATEGORY_PULL_REQUEST
+           and history.dispatched_pull_request is None,
+           "a historical pull_request run is still a pull-request run, with no dispatch identity")
+    blocks, other = model.aggregate([run, load_case("push_success")[0]])
+    by_name = {block.category: block for block in blocks}
+    expect(by_name[model.CATEGORY_PULL_REQUEST].sample_count == 1
+           and by_name[model.CATEGORY_PUSH].sample_count == 1 and not other,
+           "the dispatched run is one pull-request timing sample and the push stays one")
+    expect(("test-and-audits", "Headless test suite") in
+           by_name[model.CATEGORY_PULL_REQUEST].step_samples(),
+           "its steps aggregate like a pull_request run's")
+    mixed, _ = model.aggregate([run, history])
+    expect({b.category: b.sample_count for b in mixed}[model.CATEGORY_PULL_REQUEST] == 2,
+           "dispatched and historical pull-request runs share one category")
+    failed = _dispatched_case()
+    failed = model.RunTiming(**{**failed.__dict__, "conclusion": "failure"})
+    expect(model.aggregate([failed])[0][0].excluded[0].outcome == "failure",
+           "a failed dispatched run is counted under its outcome, not dropped")
+    other_title = model.RunTiming(**{**run.__dict__, "display_title": "something else"})
+    expect(other_title.dispatched_pull_request is None
+           and other_title.category == model.CATEGORY_PULL_REQUEST,
+           "a dispatch with an unreadable title is still a pull-request run, just unidentified")
+
+    # Selection: `--event pull_request` lists both triggers; the lookup needs no API for a dispatch.
+    seen: list[list[str]] = []
+    saved = report.gh_json
+
+    def fake(args: list[str]):
+        seen.append(list(args))
+        if args[:2] == ["run", "list"]:
+            event = args[args.index("--event") + 1] if "--event" in args else None
+            rows = {"pull_request": [{"databaseId": 1, "createdAt": "2026-09-01T00:00:00Z", "event": "pull_request"}],
+                    "workflow_dispatch": [{"databaseId": 2, "createdAt": "2026-11-07T00:00:00Z",
+                                           "event": "workflow_dispatch"},
+                                          {"databaseId": 3, "createdAt": "2026-11-06T00:00:00Z",
+                                           "event": "workflow_dispatch"}],
+                    "push": [{"databaseId": 4, "createdAt": "2026-11-05T00:00:00Z", "event": "push"}]}
+            return rows.get(event, sum(rows.values(), []))
+        if args[:2] == ["run", "view"]:
+            return {"jobs": []}
+        raise AssertionError(f"unexpected gh call {args}")
+
+    report.gh_json = fake
+    try:
+        picked = report.fetch_runs("o/r", 9, 3, "pull_request", None)
+        expect([r.run_id for r in picked] == [2, 3, 1],
+               f"--event pull_request lists dispatched and historical runs newest first: {[r.run_id for r in picked]}")
+        capped = report.fetch_runs("o/r", 9, 2, "pull_request", None)
+        expect([r.run_id for r in capped] == [2, 3], "the limit applies to the merged selection")
+        expect([r.run_id for r in report.fetch_runs("o/r", 9, 3, "push", None)] == [4],
+               "--event push is unchanged")
+        expect(len(report.fetch_runs("o/r", 9, 5, None, None)) == 4, "no filter lists everything once")
+
+        def no_api(args: list[str]):
+            raise AssertionError("a dispatched run's pull request needs no lookup")
+        report.gh_json = no_api
+        expect(report.resolve_pull_request("o/r", run, {}) == 7,
+               "the pull request of a dispatched run comes from its title")
+        report.gh_json = lambda args: [{"number": 5, "head": history.branch}]
+        expect(report.resolve_pull_request("o/r", history, {}) == 5,
+               "a historical pull_request run is still resolved through its commit")
+        expect(report.resolve_pull_request("o/r", other_title, {}) is None,
+               "an unidentifiable dispatch resolves to nothing rather than a guess")
+    finally:
+        report.gh_json = saved
+
+
 def check_log_framing() -> None:
     """`gh`'s framing is undone exactly, and nothing else is."""
     text = (
@@ -817,6 +901,7 @@ CHECKS = (
     ("unavailable log", check_log_unavailable),
     ("estimator", check_estimator),
     ("aggregate categories", check_aggregate_categories),
+    ("dispatched pull-request runs", check_dispatched_pull_request_runs),
     ("log framing", check_log_framing),
     ("attempt identity round trip", check_identity_round_trip),
     ("headless test-options wiring", check_headless_options_wiring),

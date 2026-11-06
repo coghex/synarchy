@@ -66,6 +66,10 @@ EPOCH_RE = re.compile(
     r"CI_CACHE_EPOCH epoch=(\d+) relevant_count=(\d+) position=(\d+)/(\d+) "
     r"next_refresh_in=(\d+) anchor=(\w+) ref=(\w+) fallback=(\S+)")
 PR_REF_RE = re.compile(r"git checkout --progress --force refs/remotes/pull/(\d+)/merge")
+# Since #2927 pull-request CI is `workflow_dispatch(pr, sha)`: its job logs carry no synthetic
+# merge checkout, and its run-name is `CI PR <number> @ <head sha>`.
+DISPATCH_TITLE_RE = re.compile(r"CI PR (\d+) @ ([0-9a-f]{40})")
+PR_EVENTS = ("pull_request", "workflow_dispatch")
 MERGE_RE = re.compile(r"HEAD is now at (\w+) Merge (\w+) into (\w+)")
 REPORT_RE = re.compile(
     r"CI_CACHE_REPORT cache=(\S+) outcome=(\S+) primary_key=(\S+) matched_key=(\S*)")
@@ -165,10 +169,29 @@ def writer_evidence(job: dict, all_jobs: list[dict], writer_text: str = "") -> d
             "writer_completed_at": writer.get("completed_at")}
 
 
+def dispatched_facts(run: dict, facts: dict) -> dict:
+    """The pull request and tested merge of a dispatched run, which its log does not carry.
+
+    A dispatched run checks out the admitted head itself, and admission only runs on a head
+    that already contains the base, so the tree it tested is the head's. The base is the one the
+    cache epoch was computed from (the ``ref=`` of the CI_CACHE_EPOCH line, the admitted base SHA).
+    """
+    if run.get("event") != "workflow_dispatch":
+        return facts
+    out = dict(facts)
+    title = DISPATCH_TITLE_RE.fullmatch(str(run.get("displayTitle") or ""))
+    if title and out["pr_number"] is None:
+        out["pr_number"] = int(title.group(1))
+    epoch = out.get("epoch")
+    if out["merge"] is None and epoch and re.fullmatch(r"[0-9a-f]{40}", str(epoch.get("ref") or "")):
+        out["merge"] = {"merge_prefix": None, "head": run["headSha"], "base": epoch["ref"]}
+    return out
+
+
 def run_record(run: dict, job: dict, text: str, all_jobs: list[dict] | None = None,
                writer_text: str | None = None) -> dict:
     steps = {s["name"]: s for s in job["steps"]}
-    facts = parse_log(text)
+    facts = dispatched_facts(run, parse_log(text))
     return {
         "run_id": run["databaseId"],
         "attempt": run.get("attempt", 1),
@@ -205,10 +228,10 @@ def collect(repo: str, since: str, until: str, cache_dir: Path, jobs_only: bool 
     listing = subprocess.run(
         ["gh", "run", "list", "-R", repo, "--workflow", "ci.yml",
          "--created", f"{since}..{until}", "--limit", "1000",
-         "--json", "databaseId,event,conclusion,headBranch,headSha,createdAt,attempt,startedAt,updatedAt"],
+         "--json", "databaseId,event,conclusion,headBranch,headSha,createdAt,attempt,startedAt,updatedAt,displayTitle"],
         capture_output=True, text=True, check=True)
     runs = [r for r in json.loads(listing.stdout)
-            if r["conclusion"] == "success" and r["event"] in ("push", "pull_request")]
+            if r["conclusion"] == "success" and r["event"] in ("push", *PR_EVENTS)]
     records = []
     cache_dir.mkdir(parents=True, exist_ok=True)
     for run in sorted(runs, key=lambda r: r["createdAt"]):
@@ -938,7 +961,67 @@ def check_writer_evidence() -> None:
     assert [w["run_id"] for w in writers[published]] == [1]
 
 
+def check_dispatched_run() -> None:
+    """Since #2927 pull-request CI is a workflow_dispatch: its record keeps the PR and the merge."""
+    head, base = "5d7f4f576adfdff255e726ad8eb68271218132e7", "e7bed43d54882a3e299119cd211b43d7f6a15a80"
+    log = "\n".join(FIXTURE_LOG.splitlines()[2:]) + "\n"  # no synthetic merge checkout
+    assert parse_log(log)["merge"] is None and parse_log(log)["pr_number"] is None, "fixture still has a merge"
+    assert parse_log(log)["epoch"]["ref"] == base, parse_log(log)["epoch"]
+    run = {"databaseId": 8, "event": "workflow_dispatch", "headBranch": "b", "headSha": head, "attempt": 1,
+           "createdAt": "2026-11-06T12:00:00Z", "startedAt": "2026-11-06T12:00:00Z",
+           "updatedAt": "2026-11-06T12:30:00Z", "displayTitle": f"CI PR 2928 @ {head}"}
+    job = {"id": 1, "name": JOB_NAME, "steps": [], "started_at": "2026-11-06T12:01:00Z",
+           "completed_at": "2026-11-06T12:20:00Z", "conclusion": "success"}
+    record = run_record(run, job, log, [job])
+    assert record["pr_number"] == 2928, record
+    assert record["merge"] == {"merge_prefix": None, "head": head, "base": base}, record["merge"]
+    # a pull_request or push run's own facts are never overwritten, nor a title that is not ours
+    assert dispatched_facts({**run, "event": "push"}, parse_log(log))["merge"] is None
+    assert dispatched_facts({**run, "displayTitle": "x"}, parse_log(log))["pr_number"] is None
+    historic = run_record({**run, "event": "pull_request", "displayTitle": "x"}, job, FIXTURE_LOG, [job])
+    assert historic["merge"]["base"] == base and historic["pr_number"] == 2739, historic
+    assert "workflow_dispatch" in PR_EVENTS and "pull_request" in PR_EVENTS and "push" not in PR_EVENTS
+
+
+def check_collect_selection() -> None:
+    """collect() keeps successful master pushes and pull-request runs, dispatched ones included."""
+    import tempfile
+    listing = [{"databaseId": i, "event": event, "conclusion": conclusion, "headBranch": "b",
+                "headSha": "f" * 40, "createdAt": f"2026-11-0{i}T00:00:00Z", "attempt": 1,
+                "startedAt": f"2026-11-0{i}T00:00:00Z", "updatedAt": f"2026-11-0{i}T00:30:00Z",
+                "displayTitle": f"CI PR 9 @ {'f' * 40}"}
+               for i, (event, conclusion) in enumerate((
+                   ("push", "success"), ("pull_request", "success"), ("workflow_dispatch", "success"),
+                   ("workflow_dispatch", "failure"), ("schedule", "success")), start=1)]
+    job = {"id": 1, "name": JOB_NAME, "steps": [], "started_at": "2026-11-01T00:01:00Z",
+           "completed_at": "2026-11-01T00:20:00Z", "conclusion": "success"}
+    asked: list[list[str]] = []
+    real_run, real_api = subprocess.run, gh_api
+
+    class Done:
+        stdout = json.dumps(listing)
+
+    def fake_run(command, **_kwargs):
+        asked.append(list(command))
+        return Done()
+
+    bare = "\n".join(FIXTURE_LOG.splitlines()[2:]) + "\n"  # a dispatched run's log has no merge checkout
+    globals()["gh_api"] = lambda path, *extra: json.dumps({"jobs": [job]}) if path.endswith("/jobs") else bare
+    subprocess.run = fake_run
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            records = collect("o/r", "2026-11-01", "2026-11-09", Path(tmp))
+    finally:
+        subprocess.run, globals()["gh_api"] = real_run, real_api
+    assert [r["event"] for r in records] == ["push", "pull_request", "workflow_dispatch"], records
+    assert records[1]["merge"] is None, "only a dispatched run gets a derived merge"
+    assert "displayTitle" in asked[0][-1], "the listing must request the dispatch title"
+    assert records[2]["pr_number"] == 9 and records[2]["merge"]["head"] == "f" * 40, records[2]
+
+
 def self_test() -> int:
+    check_dispatched_run()
+    check_collect_selection()
     facts = parse_log(FIXTURE_LOG)
     assert facts["pr_number"] == 2739, facts
     assert facts["epoch"]["epoch"] == 52 and facts["epoch"]["position"] == 3, facts

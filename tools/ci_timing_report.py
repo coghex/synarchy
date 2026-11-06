@@ -191,13 +191,26 @@ def fetch_run(repo: str, run_id: int,
 
 def fetch_runs(repo: str, workflow_id: int, limit: int,
                event: str | None, branch: str | None) -> list[model.RunTiming]:
-    args = ["run", "list", "-R", repo, "--workflow", str(workflow_id),
-            "--limit", str(limit), "--json", RUN_FIELDS]
-    if event:
-        args += ["--event", event]
-    if branch:
-        args += ["--branch", branch]
-    listed = gh_json(args)
+    def listing(only: str | None) -> list:
+        args = ["run", "list", "-R", repo, "--workflow", str(workflow_id),
+                "--limit", str(limit), "--json", RUN_FIELDS]
+        if only:
+            args += ["--event", only]
+        if branch:
+            args += ["--branch", branch]
+        found = gh_json(args)
+        return found if isinstance(found, list) else []
+
+    # Pull-request CI is a dispatch since #2927, and `gh run list --event`
+    # matches the trigger event exactly: the pull-request category is both the
+    # historical `pull_request` runs and the dispatched ones, newest first.
+    if event == model.CATEGORY_PULL_REQUEST:
+        merged = listing(model.CATEGORY_PULL_REQUEST) + listing(model.EVENT_DISPATCH)
+        merged.sort(key=lambda entry: str(entry.get("createdAt") or "")
+                    if isinstance(entry, dict) else "", reverse=True)
+        listed = merged[:limit]
+    else:
+        listed = listing(event)
     runs: list[model.RunTiming] = []
     for entry in listed if isinstance(listed, list) else []:
         run_id = entry.get("databaseId") if isinstance(entry, dict) else None
@@ -249,6 +262,10 @@ def resolve_pull_request(repo: str, run: model.RunTiming,
     by design: a deleted branch, a fork, or a rate limit yields None and
     the run is identified by its branch instead.
     """
+    if run.dispatched_pull_request is not None:
+        # A dispatched run names its pull request in its title (ci.yml's
+        # run-name), so no lookup, and no ambiguity for a shared commit.
+        return run.dispatched_pull_request
     if run.event != model.CATEGORY_PULL_REQUEST or not run.head_sha:
         return None
     if run.head_sha in cache:
