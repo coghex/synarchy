@@ -31,7 +31,7 @@
       },
       "classification": "manual-only",
       "key": "blood_decal",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "blood_decal_probe.py"
     },
     {
@@ -231,7 +231,7 @@
       },
       "classification": "manual-only",
       "key": "bleeding_trail",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "bleeding_trail_probe.py"
     },
     {
@@ -458,7 +458,7 @@
       },
       "classification": "manual-only",
       "key": "circadian_species",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "circadian_species_probe.py"
     },
     {
@@ -475,7 +475,7 @@
       },
       "classification": "manual-only",
       "key": "collapse_crawl",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "collapse_crawl_probe.py"
     },
     {
@@ -640,7 +640,7 @@
       },
       "classification": "manual-only",
       "key": "config_migration",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "config_migration_probe.py"
     },
     {
@@ -657,7 +657,7 @@
       },
       "classification": "manual-only",
       "key": "config_state",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "config_state_probe.py"
     },
     {
@@ -793,7 +793,7 @@
       },
       "classification": "manual-only",
       "key": "crop",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "crop_probe.py"
     },
     {
@@ -1060,7 +1060,7 @@
       },
       "classification": "manual-only",
       "key": "injury_log",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "injury_log_probe.py"
     },
     {
@@ -1094,7 +1094,7 @@
       },
       "classification": "manual-only",
       "key": "item_temp",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "item_temp_probe.py"
     },
     {
@@ -1179,7 +1179,7 @@
       },
       "classification": "manual-only",
       "key": "lua_orphan_prune",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "lua_orphan_prune_probe.py"
     },
     {
@@ -1196,7 +1196,7 @@
       },
       "classification": "manual-only",
       "key": "machine_shop",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "machine_shop_probe.py"
     },
     {
@@ -1381,7 +1381,7 @@
       },
       "classification": "manual-only",
       "key": "mental_efficiency",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "mental_efficiency_probe.py"
     },
     {
@@ -1415,7 +1415,7 @@
       },
       "classification": "manual-only",
       "key": "movement",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "movement_probe.py"
     },
     {
@@ -1432,7 +1432,7 @@
       },
       "classification": "manual-only",
       "key": "multiworld_save",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "multiworld_save_probe.py"
     },
     {
@@ -1500,7 +1500,7 @@
       },
       "classification": "manual-only",
       "key": "persistence_integrity",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "persistence_integrity_probe.py"
     },
     {
@@ -1534,7 +1534,7 @@
       },
       "classification": "manual-only",
       "key": "plant",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "plant_probe.py"
     },
     {
@@ -1568,7 +1568,7 @@
       },
       "classification": "manual-only",
       "key": "portal_location",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "portal_location_probe.py"
     },
     {
@@ -1932,7 +1932,7 @@
       },
       "classification": "manual-only",
       "key": "resource_root",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "resource_root_probe.py"
     },
     {
@@ -1949,7 +1949,7 @@
       },
       "classification": "manual-only",
       "key": "river_naming",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "river_naming_probe.py"
     },
     {
@@ -2179,7 +2179,7 @@
       },
       "classification": "manual-only",
       "key": "save_pause",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "save_pause_probe.py"
     },
     {
@@ -2196,7 +2196,7 @@
       },
       "classification": "manual-only",
       "key": "save_barrier",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "save_barrier_probe.py"
     },
     {
@@ -2730,7 +2730,7 @@
       },
       "classification": "manual-only",
       "key": "thought",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "thought_probe.py"
     },
     {
@@ -2883,7 +2883,7 @@
       },
       "classification": "manual-only",
       "key": "wire",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "wire_probe.py"
     },
     {
@@ -3098,7 +3098,7 @@
       },
       "classification": "manual-only",
       "key": "retaliation_swap",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "retaliation_swap_probe.py"
     },
     {
@@ -3115,7 +3115,7 @@
       },
       "classification": "manual-only",
       "key": "pause_speed",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "pause_speed_probe.py"
     },
     {
@@ -3185,6 +3185,193 @@
       "key": "startup_asset_logging",
       "protocol": "legacy",
       "script": "startup_asset_logging_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "audio_manual",
+      "protocol": "legacy",
+      "script": "audio_manual_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "ci-eligible",
+      "key": "audio_null",
+      "protocol": "legacy",
+      "script": "audio_null_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "ci-eligible",
+      "key": "flora_condition",
+      "protocol": "legacy",
+      "script": "flora_condition_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "fluid_exact_restart",
+      "protocol": "legacy",
+      "script": "fluid_exact_restart_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "fluid_exact_restart_render",
+      "protocol": "legacy",
+      "script": "fluid_exact_restart_render_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "fluid_reaction",
+      "protocol": "legacy",
+      "script": "fluid_reaction_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "fluid_reaction_visual",
+      "protocol": "legacy",
+      "script": "fluid_reaction_visual_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "gameplay_tag_persistence",
+      "protocol": "legacy",
+      "script": "gameplay_tag_persistence_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "ci-eligible",
+      "key": "scenario_entrypoint",
+      "protocol": "legacy",
+      "script": "scenario_entrypoint_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "scene_primitives",
+      "protocol": "legacy",
+      "script": "scene_primitives_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "structure_construction",
+      "protocol": "legacy",
+      "script": "structure_construction_probe.py"
     }
   ],
   "schema": "probe-census/v5"

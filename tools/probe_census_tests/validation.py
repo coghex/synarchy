@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The declared schema and the cross-field invariants (#2129).
 
-Five groups, in the aggregate's order:
+Six groups, in the aggregate's order:
 
   `test_adversarial_malformed_input`  the fuzz sweep over both input
                                       surfaces -- every field retyped to
@@ -23,7 +23,14 @@ Five groups, in the aggregate's order:
   `test_malformed_schema_file`        a broken schema file refusing every
                                       operation cleanly;
   `test_missing_dependency`           an environment where `jsonschema`
-                                      is genuinely unimportable.
+                                      is genuinely unimportable;
+  `test_tracked_census_agrees_with_registry`
+                                      #2926's agreement gate: this
+                                      checkout's tracked
+                                      `docs/probe_census.json` against
+                                      its probe registries, so a probe
+                                      cannot be registered or migrated
+                                      without its census row.
 
 This is the slowest family by an order of magnitude -- the exhaustive
 schema surface dominates the aggregate's runtime -- which is most of why
@@ -44,7 +51,7 @@ from .support import (
     _alpha, census_contract, census_records, census_storage, cli, cli_repo,
     COMMIT_A, COMMIT_B, expect, expect_refusal, probe_census, registry,
     result_document, rich_census, scratch, seeded, stored_v3_document,
-    stored_v4_document, v1_document,
+    stored_v4_document, TOOLS_DIR, unchanged, v1_document,
 )
 
 import probe_flake  # type: ignore  # noqa: E402 -- `.support` installs tools/
@@ -1229,6 +1236,158 @@ def test_cross_field_invariants() -> None:
             "a promoted, reconciled census still satisfies every invariant")
 
 
+# ==========================================================================
+#: The tracked census, resolved from THIS checkout rather than from the
+#: default CLI path. `census_storage.manifest_path` finds the `docs-wip`
+#: worktree by branch, which a CI checkout does not have and a developer's
+#: other worktree may point somewhere else entirely (#2926).
+TRACKED_CENSUS = TOOLS_DIR.parent / "docs" / "probe_census.json"
+
+
+def tracked_census_problems(path) -> list[str]:
+    """Every way the census at `path` disagrees with the live registries.
+
+    A pure reader: it repairs nothing, writes nothing, and takes no lock.
+    A missing, unreadable or malformed file is a PROBLEM returned like
+    any other drift, never an exception and never a silent pass, so a
+    deleted or corrupted census cannot make the gate vacuous. The
+    comparison itself is `validate_manifest`'s, so the inventory rules
+    have one definition.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return [f"tracked census {path} is unreadable ({error})"]
+    try:
+        manifest = json.loads(text)
+    except ValueError as error:
+        return [f"tracked census {path} is not valid JSON: {error}"]
+    return census_records.validate_manifest(manifest)
+
+
+def test_tracked_census_agrees_with_registry() -> None:
+    """#2926: registering or migrating a probe cannot land without its row.
+
+    Drift went unnoticed for six weeks because nothing ran `--validate`
+    when a probe was registered or moved to the result protocol. This is
+    the check, placed in the aggregate CI already runs. It is a TEST and
+    blocks nothing at write time: census writes stay independent of a
+    complete probe inventory, which block (g) proves rather than assumes.
+    """
+    print("\n-- the tracked census agrees with the probe registries (#2926) --")
+
+    # (a) The real thing: this checkout's census against this checkout's
+    # registries. Runs OUTSIDE `registry()` on purpose.
+    problems = tracked_census_problems(TRACKED_CENSUS)
+    expect(problems == [],
+           "docs/probe_census.json agrees with probe_runner_registry.PROBES, "
+           "tools/ci_probes.py and probe_flake.PROTOCOL_PROBES"
+           + ("" if not problems else
+              f" -- {len(problems)} drift line(s): " + "; ".join(problems[:5])
+              + " -- reconcile the tracked copy through "
+                "census_storage.ensure_document (never by hand)"))
+
+    protocol = {"alpha": "probe-result/v1"}
+    with registry(ci_eligible={"gamma"}, protocol=protocol), scratch() as root:
+        matching = census_records.build_manifest()
+        target = root / "probe_census.json"
+
+        def write(document) -> bytes:
+            target.write_text(json.dumps(document, indent=2, sort_keys=True)
+                              + "\n", encoding="utf-8")
+            return target.read_bytes()
+
+        def copy_of(document) -> dict:
+            return json.loads(json.dumps(document))
+
+        # (b) A matching inventory is clean.
+        before = write(matching)
+        expect(tracked_census_problems(target) == [],
+               "a census matching the registries reports no drift")
+        unchanged(target, before, "...and the check left the file's bytes alone")
+
+        # (c) A probe registered without a census entry.
+        missing = copy_of(matching)
+        missing["probes"] = [r for r in missing["probes"] if r["key"] != "beta"]
+        before = write(missing)
+        found = tracked_census_problems(target)
+        expect(len(found) == 1
+               and "missing entry for registered probe 'beta'" in found[0],
+               f"a registered probe with no census row is named (got {found})")
+        unchanged(target, before, "...and the check repaired nothing")
+
+        # (d) A protocol-status mismatch, in both directions.
+        for label, key, stale in (
+                ("a migrated probe still recorded as legacy", "alpha", "legacy"),
+                ("a legacy probe recorded as migrated", "beta",
+                 "probe-result/v1")):
+            mismatched = copy_of(matching)
+            for row in mismatched["probes"]:
+                if row["key"] == key:
+                    row["protocol"] = stale
+            before = write(mismatched)
+            found = tracked_census_problems(target)
+            expect(len(found) == 1
+                   and f"probe {key!r}: manifest protocol status" in found[0],
+                   f"{label} is a protocol mismatch (got {found})")
+            unchanged(target, before, "...and the check repaired nothing")
+
+        # (e) The remaining inventory rules ride along, because the
+        # comparison is `validate_manifest`'s own.
+        extra = copy_of(matching)
+        extra["probes"].append(dict(extra["probes"][0], key="unregistered"))
+        write(extra)
+        expect(any("extra entry 'unregistered'" in line
+                   for line in tracked_census_problems(target)),
+               "an unregistered census row is reported")
+        flipped = copy_of(matching)
+        for row in flipped["probes"]:
+            if row["key"] == "gamma":
+                row["classification"] = "manual-only"
+        write(flipped)
+        expect(any("probe 'gamma': manifest classification" in line
+                   for line in tracked_census_problems(target)),
+               "a classification mismatch is reported")
+
+        # (f) Missing and malformed input fail loudly instead of passing.
+        gone = root / "absent.json"
+        expect(any("unreadable" in line for line in tracked_census_problems(gone))
+               and not gone.exists(),
+               "a missing census is a problem, and the check does not create it")
+        for label, content, fragment in (
+                ("an unparseable census", "{ not json", "not valid JSON"),
+                ("a census that is not an object", "[]", "must be a JSON object"),
+                ("a census whose `probes` is not a list",
+                 json.dumps({"schema": census_contract.CENSUS_SCHEMA,
+                             "probes": {}}), "`probes` must be a list")):
+            broken = root / "broken.json"
+            broken.write_text(content, encoding="utf-8")
+            expect(any(fragment in line
+                       for line in tracked_census_problems(broken)),
+                   f"{label} is a problem")
+
+        # (g) The gate is a test, not a write gate: a targeted write still
+        # succeeds against a census with UNRELATED drift, installs only
+        # that row's change, and leaves the drift for a person to see.
+        drifted = copy_of(matching)
+        drifted["probes"] = [r for r in drifted["probes"] if r["key"] != "beta"]
+        for row in drifted["probes"]:
+            if row["key"] == "alpha":
+                row["protocol"] = "legacy"
+        write(drifted)
+        census_storage.record_policy(target, "gamma", estimate=480)
+        after = json.loads(target.read_text(encoding="utf-8"))
+        rows = {r["key"]: r for r in after["probes"]}
+        expect(rows["gamma"]["census"]["estimated_worst_case_seconds"] == 480,
+               "a targeted policy write succeeds despite unrelated drift")
+        expect(sorted(rows) == ["alpha", "gamma"]
+               and rows["alpha"]["protocol"] == "legacy",
+               "...and does not repair the drift as a side effect")
+        expect(len(tracked_census_problems(target)) == 2,
+               "...so the agreement check still reports both drift lines")
+
+
 #: This family's complete ordered inventory, and the whole of its
 #: contribution to the aggregate: the two rule families run before the
 #: three schema-file ones, which is the order this gate has always had.
@@ -1238,4 +1397,5 @@ TESTS = (
     test_declared_schema,
     test_malformed_schema_file,
     test_missing_dependency,
+    test_tracked_census_agrees_with_registry,
 )

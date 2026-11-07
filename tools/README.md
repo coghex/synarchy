@@ -2259,7 +2259,13 @@ census and result against every declared definition, each nullable field
 deleted, non-object per-run `checks` including truthy values, unexpected
 properties in every representative nested object, invalid enum/range/length
 values, non-finite numbers, and an environment where `jsonschema` is genuinely
-unimportable — asserting for each refusal that nothing was written. Every
+unimportable — asserting for each refusal that nothing was written. It also
+holds the registry agreement gate (#2926): this checkout's tracked
+`docs/probe_census.json` must match this checkout's `PROBES`, `CI_ELIGIBLE` and
+`PROTOCOL_PROBES`, so a probe cannot be registered or migrated to the result
+protocol without its census row (reconcile through `census_storage.ensure_document`,
+never by hand). It is a test and a pure reader: census writes are not gated on it.
+Every
 cross-field rule gets three cases: a rejecting fixture that is still
 SCHEMA-valid, so only that rule can reject it, driven through `--record`, a
 policy update, `--seed` and `--validate`; the legitimate flows it must not

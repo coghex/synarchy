@@ -13,9 +13,10 @@ were left after #2034 took promotion out:
   `policy`      11  #1430's acceptable-failure policy and its CLI, the
                     generic refusal contract, malformed and duplicate
                     target rows, and the mutation CLI;
-  `validation`   5  #1492's declared JSON Schema, a malformed schema
+  `validation`   6  #1492's declared JSON Schema, a malformed schema
                     file, an absent `jsonschema`, the adversarial sweep,
-                    and #1493's cross-field invariants;
+                    #1493's cross-field invariants, and #2926's check
+                    that the tracked census agrees with the registries;
   `cohort`       9  #1429's cohort accumulation, append order, head
                     movement, staleness, the unmeasured and zero-rate
                     states, history-only statistics, the semantic
