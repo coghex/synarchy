@@ -16,9 +16,10 @@ and times exactly one path on it:
 
 * **path A** -- ``tools/cargo_capacity_probe.py`` ``bootstrap()``'s eight-family
   loop and nothing after it (family order, sorted flat globs, one console call
-  per file). The only difference is that the call returns the loader's count
-  instead of the constant ``'ok'``, so the count is captured WITHOUT adding a
-  round trip.
+  per file). The only difference is that the call opts in to the loader's
+  parse outcome (``verb(path, true)``, as ``startup_loader`` does) and returns
+  the count with it instead of the constant ``'ok'``, so a successful zero is
+  told from a rejected file WITHOUT adding a round trip.
 * **path B** -- ``require('scripts.startup_loader').build('arena')`` then
   ``runAll()`` as ONE console call that also answers the loader's own
   ``isDone()`` / ``isFailed()``, so a missing result cannot become a timeout
@@ -198,6 +199,30 @@ def parse_return_count(raw: str) -> int:
     if not math.isfinite(value) or value < 0 or value != math.floor(value):
         raise MeasurementError(f"loader reply is not a whole count: {raw!r}")
     return int(value)
+
+
+LOAD_REPLY_RE = re.compile(r"^n=([^;]*);parsed=(true|false|nil);refused=(.*)$")
+
+
+def parse_load_reply(raw: str) -> int:
+    """Path A's per-file reply: the loader's count, required to come with the
+    loader's own parse outcome (the second argument ``true`` opts a call in to
+    it, as ``startup_loader`` does). A zero count is a SUCCESS when the file
+    parsed and nothing refused it; a file the loader could not parse, or
+    refused after decoding, is a failure, and so is a reply that states no
+    outcome at all."""
+    m = LOAD_REPLY_RE.match(raw or "")
+    if not m:
+        raise MeasurementError(f"loader reply is malformed or missing: {raw!r}")
+    count = parse_return_count(m.group(1))
+    if m.group(2) != "true":
+        raise MeasurementError(
+            f"the loader did not parse the file (parsed={m.group(2)}, "
+            f"count {count}): {raw!r}")
+    if m.group(3):
+        raise MeasurementError(
+            f"the loader refused the file ({m.group(3)}): {raw!r}")
+    return count
 
 
 AGGREGATE_RE = re.compile(
@@ -580,9 +605,11 @@ def query_state(port: int) -> tuple[dict, dict]:
     return verbs, registry
 
 
-def run_path_a(port: int, root: Path) -> dict:
+def run_path_a(port: int, root: Path, send_fn=send) -> dict:
     """Time ``bootstrap()``'s eight-family loop. The globbing happens inside
-    the interval, as it does in the probe."""
+    the interval, as it does in the probe. Each call also returns the loader's
+    parse outcome (``verb(path, true)``) so a successful zero is told apart
+    from a rejected file without a second round trip."""
     from glob import glob
     trips = []
     t0 = time.monotonic()
@@ -590,21 +617,22 @@ def run_path_a(port: int, root: Path) -> dict:
         family = FAMILY_BY_DIR[pattern.split("/*")[0]]
         for path in sorted(glob(pattern, root_dir=root)):
             s = time.monotonic()
-            raw = send(port, f"local n = {verb}('{path}'); return n")
+            raw = send_fn(port, (
+                f"local n, parsed, refusal = {verb}('{path}', true); "
+                f"return string.format('n=%s;parsed=%s;refused=%s', "
+                f"tostring(n), tostring(parsed), tostring(refusal or ''))"))
             trips.append((family, path, time.monotonic() - s, raw))
     wall = time.monotonic() - t0
-    families: dict[str, dict[str, int]] = {}
-    for family, path, _, raw in trips:
-        count = parse_return_count(raw)
-        if count == 0:
-            raise MeasurementError(
-                f"{path}: the loader returned 0, which is how it reports a "
-                f"rejected file")
-        row = families.setdefault(family, {"files": 0, "returned_total": 0})
-        row["files"] += 1
-        row["returned_total"] += count
     if not trips:
         raise MeasurementError("path A found no YAML files to load")
+    families = {f: {"files": 0, "returned_total": 0} for f in PATH_A_FAMILIES}
+    for family, path, _, raw in trips:
+        try:
+            count = parse_load_reply(raw)
+        except MeasurementError as error:
+            raise MeasurementError(f"{path}: {error}") from None
+        families[family]["files"] += 1
+        families[family]["returned_total"] += count
     return {
         "load_wall_s": wall,
         "round_trips": len(trips),
@@ -614,10 +642,10 @@ def run_path_a(port: int, root: Path) -> dict:
     }
 
 
-def run_path_b(port: int, log_path: str) -> dict:
+def run_path_b(port: int, log_path: str, send_fn=send) -> dict:
     """Time ``build('arena')`` + ``runAll()`` as one console call."""
     t0 = time.monotonic()
-    raw = send(port, PATH_B_LUA, timeout=300.0)
+    raw = send_fn(port, PATH_B_LUA, timeout=300.0)
     wall = time.monotonic() - t0
     parse_status_b(raw)
     deadline = time.monotonic() + 10.0
@@ -634,12 +662,16 @@ def run_path_b(port: int, log_path: str) -> dict:
     }
 
 
-def require_registered(path_id: str, registry: dict) -> None:
-    families = PATH_A_FAMILIES if path_id == "A" else FAMILY_IDS
-    empty = [f for f in families if f in registry and registry[f] == 0]
+def require_registered(path_id: str, registry: dict, families: dict) -> None:
+    """A family that returned a positive total must show in its registry when
+    one can be queried. An empty registry beside a zero total is a legitimate
+    empty family, not a failure."""
+    empty = [f for f, row in families.items()
+             if f in registry and registry[f] == 0 and row["returned_total"] > 0]
     if empty:
         raise MeasurementError(
-            f"path {path_id} left the {empty} registries empty")
+            f"path {path_id} returned a positive total for {empty} but left "
+            f"their registries empty")
 
 
 def measure_one(path_id: str, index: int, exe: str, port: int,
@@ -663,7 +695,7 @@ def measure_one(path_id: str, index: int, exe: str, port: int,
         result = run_path_a(port, root) if path_id == "A" \
             else run_path_b(port, log_path)
         verbs_after, registry_after = query_state(port)
-        require_registered(path_id, registry_after)
+        require_registered(path_id, registry_after, result["families"])
     finally:
         quit_engine(port, proc)
     return {

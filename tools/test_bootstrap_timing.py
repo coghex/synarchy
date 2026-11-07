@@ -212,6 +212,97 @@ def test_engine_side_delta() -> None:
            "a call window that went backwards is refused")
 
 
+def load_reply(n="3", parsed="true", refused=""):
+    return f"n={n};parsed={parsed};refused={refused}"
+
+
+def test_load_replies_and_paths() -> None:
+    print("\n-- path A replies and the measurement paths")
+    expect(bt.parse_load_reply(load_reply("39.0")) == 39, "a counted file parses")
+    expect(bt.parse_load_reply(load_reply("0")) == 0,
+           "a successfully parsed file that registered nothing is a valid zero")
+    for raw, why in ((load_reply("0", "false"), "a file that failed to parse"),
+                     (load_reply("0", "nil"), "a reply with no parse outcome"),
+                     (load_reply("3", "true", "dup_name"), "a refused file"),
+                     (load_reply("ok"), "a non-numeric count"),
+                     (load_reply("-1"), "a negative count"),
+                     ("", "an empty reply"), ("ok", "a stray reply")):
+        expect(raises(bt.parse_load_reply, raw) is not None, f"{why} is refused")
+
+    # Drive the real path A against the real file lists with a fake console.
+    sent = []
+
+    def console(port, lua, **kw):
+        sent.append(lua)
+        return load_reply("2")
+
+    result = bt.run_path_a(9473, REPO, send_fn=console)
+    files = {fam: 0 for fam in bt.PATH_A_FAMILIES}
+    from glob import glob
+    for pattern, _ in bt.PATH_A_LOADERS:
+        fam = bt.FAMILY_BY_DIR[pattern.split("/*")[0]]
+        files[fam] += len(glob(pattern, root_dir=REPO))
+    expect(result["round_trips"] == len(sent) == sum(files.values()) > 0,
+           "path A makes exactly one console call per file")
+    expect(all(result["families"][f]["files"] == files[f] for f in files),
+           "per-family file counts follow the globs")
+    expect(all(result["families"][f]["returned_total"] == 2 * files[f]
+               for f in files), "returned totals are summed per family")
+    expect(sent[0].count("true") >= 1 and ", true)" in sent[0]
+           and "engine.loadSubstanceYaml" in sent[0],
+           "the first call is the first family's loader, opted in to the outcome")
+    first = [s for s in sent if "loadItemYaml" in s][0]
+    expect("data/items/" in first and first.count(";") >= 2,
+           "each call names one file")
+
+    zero = bt.run_path_a(9473, REPO, send_fn=lambda *a, **k: load_reply("0"))
+    expect(all(r["returned_total"] == 0 for r in zero["families"].values()),
+           "successful zero counts pass through path A as zero totals")
+
+    for bad, why in ((load_reply("0", "false"), "a parse failure"),
+                     (load_reply("5", "true", "dup"), "a refusal"),
+                     ("garbled", "a malformed reply")):
+        msg = raises(bt.run_path_a, 9473, REPO, lambda *a, **k: bad)
+        expect(msg is not None and "data/" in msg,
+               f"path A fails the run on {why}, naming the file")
+
+    # Path B against a temp log with the loader's real aggregate spelling.
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp) / "engine.log"
+        log.write_text(aggregate_log())
+        ok = bt.run_path_b(9473, str(log),
+                           send_fn=lambda *a, **k: "done=true;failed=false;msg=")
+        expect(ok["round_trips"] == 1 and ok["loader_status"]["failed"] is False
+               and list(ok["families"]) == bt.FAMILY_IDS,
+               "path B succeeds on a done, not-failed loader with all aggregates")
+        for reply in ("done=false;failed=true;msg=Startup failed: x",
+                      "done=true;failed=true;msg=x", "", None):
+            expect(raises(bt.run_path_b, 9473, str(log),
+                          lambda *a, _r=reply, **k: _r) is not None,
+                   f"path B fails the run on {reply!r}")
+        log.write_text(aggregate_log(skip=("unit",)))
+        t = time.monotonic()
+        short = raises(bt.run_path_b, 9473, str(log),
+                       lambda *a, **k: "done=true;failed=false;msg=")
+        expect(short is not None and "unit" in short and time.monotonic() - t < 30,
+               "path B fails the run when an aggregate is missing")
+
+    # Post-load registry validation.
+    fams = {"item": {"files": 1, "returned_total": 2},
+            "equipment": {"files": 1, "returned_total": 0}}
+    registry = {k: 0 for k in bt.REGISTRY_QUERIES}
+    registry["item"] = 2
+    expect(raises(bt.require_registered, "A", registry, fams) is None,
+           "an empty registry beside a zero total is a legitimate empty family")
+    registry["item"] = 0
+    msg = raises(bt.require_registered, "A", registry, fams)
+    expect(msg is not None and "item" in msg,
+           "a positive total with an empty registry is refused")
+    expect(raises(bt.require_registered, "B",
+                  registry, {"vegetation": {"files": 1, "returned_total": 5}})
+           is None, "a family with no list verb is not judged by a registry")
+
+
 # --------------------------------------------------------------------------
 def sample(path, index, wall, boot=3.0, trips=None, rt=0.31, families=None,
            side=1.9):
@@ -393,7 +484,7 @@ def test_source_guards() -> None:
     source = (TOOLS / "bootstrap_timing.py").read_text()
     tree = ast.parse(source)
     sends = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-             and getattr(n.func, "id", "") == "send"]
+             and getattr(n.func, "id", "") in ("send", "send_fn")]
     expect(len(sends) >= 4 and not any(k.arg == "idle" for n in sends
                                        for k in n.keywords),
            "send() is never given a custom idle")
@@ -409,7 +500,7 @@ def main() -> int:
     selftestlib.parse_verbose()
     for test in (test_median_and_stat_block, test_return_counts, test_aggregates,
                  test_path_b_status, test_registry_and_verbs, test_baseline,
-                 test_engine_side_delta, test_summary, test_report_and_table,
+                 test_engine_side_delta, test_load_replies_and_paths, test_summary, test_report_and_table,
                  test_ports_and_arguments, test_launch_and_ready,
                  test_source_guards):
         test()

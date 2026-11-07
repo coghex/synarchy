@@ -35,7 +35,8 @@ definition loading that about seventy probes repeat on every engine take
 compared with the startup loader's one-call `arena` profile? On a fresh
 `--headless --arena` engine, on an isolated resource root and a non-8008 port,
 it times path A, the eight-family loop of `cargo_capacity_probe.py`
-`bootstrap()` with one console round trip per YAML file, and path B,
+`bootstrap()` with one console round trip per YAML file (each call also returns the loader's
+count and parse outcome), and path B,
 `startup_loader.build('arena')` plus `runAll()` as a single console call that
 answers its own `isDone()`/`isFailed()`. Each path runs on three fresh engines
 (`--repeats`, at least three, interleaved A, B, A, B, ...). It reports engine
