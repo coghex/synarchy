@@ -26,7 +26,7 @@ concrete precondition
 
 ## Status
 
-- [ ] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe
+- [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
 - [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
 - [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
 - [ ] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
@@ -45,7 +45,7 @@ concrete precondition
 
 ## Long scenarios and nested probes
 
-### PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe
+### [#2934] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe
 
 `expedition_loop` plays the first expedition end to end across two engine boots and is the single largest line in the sweep: 1,119 s in run C (one probe is 7.6% of the sweep), 1,132 s in run B, and in run A it hit the then-default 900 s cap. It is manual-only and the quruntul lab offers every probe that is not deferred or opt-in, so each lab rotation spends about 19 minutes on it.
 
