@@ -27,7 +27,7 @@ concrete precondition
 ## Status
 
 - [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
-- [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
+- [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [deferred]: needs one completed sweep trial on a revision with #2919
 - [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
 - [ ] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
 - [ ] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
@@ -68,7 +68,9 @@ concrete precondition
 - **Scope and constraints:** The probe must stay runnable with `python3 tools/run_probes.py --only expedition_loop --exact`; `python3 .quruntul/checks.py` must stay green; docs that name it as the arc's final gate (its docstring cites `docs/expedition_gameplay_loop.md` step 9) need to say it is opt-in.
 - **Remaining uncertainty:** How often the lab actually selects it (selection is staleness-driven, not read here); which phase dominates the 1,119 s (the probe reports a total only); whether the Hspec groups `Unit.RuinOccupantSurvival` and `Location discovery` cover enough of the loop to make an opt-in acceptable to the owner.
 
-### PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
+### [deferred] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
+
+> **Deferred:** All three 900 s timeouts were spent waiting on the nested `save_compat_migration` probe (about an hour, retired by #2912/#2919) and, in runs A and B, on `transactional_load` (then 520-533 s, now 158 s); `COMPARE_MISMATCH` appears in run A only; and the nested set is requirement 14 of #767. The sweep has not completed on a revision without them, so the cap and the duplication cannot be judged — re-decide once one completed `persistence_contract_sweep` trial exists on a revision containing #2919 (its duration and whether `COMPARE_MISMATCH` recurs decide between no-issue, an issue for the lab double-run, or a bug issue). Owner decision 2026-11-07: defer until measured.
 
 The sweep is a meta-probe: besides its own four-boot structural comparison it fans out to ten other registered probes by default. Those probes are already registered, measured and runnable on their own. It reached the runner's 900 s cap in runs A, B and C, so it has never reported a complete pass, and its own comparison fails on `COMPARE_MISMATCH`.
 
