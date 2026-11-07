@@ -11,7 +11,7 @@ per run, every binary a probe execs — the engine, and since #2274 the
 compiled save codec.
 
 Dependencies (#2074 requirement 11): `probe_engine`,
-`probe_resource_lock` and — for the codec target and handoff NAMES it
+`probe_resource_lock`, `ci_probes` (only for which probes are `needs-gpu`) and — for the codec target and handoff NAMES it
 owns, nothing more — `save_compat_audit_codec`, plus the registry
 owner's declarations when a future resource rule needs them. Nothing
 here imports the lifecycle, the scheduler, or the runner command.
@@ -36,7 +36,9 @@ that repoints it repoints it for all of them at once.
 from __future__ import annotations
 import contextlib
 import os
+import stat
 
+import ci_probes
 import probe_engine
 import probe_resource_lock
 import save_compat_audit_codec
@@ -129,9 +131,31 @@ EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
 }
 
 
+#: The machine-wide desktop/GPU exclusion (#2932). Unlike every resource above
+#: it is not scoped to a checkout: `probe_resource_lock` keeps its lock file and
+#: holder notes in a fixed host namespace, so a probe in ANY worktree or clone
+#: conflicts with it. The set of probes that take it is not declared here; it is
+#: `ci_probes.gpu_probe_keys()`, the `needs-gpu` classification `--status`
+#: already prints.
+GPU_RESOURCE = probe_resource_lock.GPU_DESKTOP
+
+
+def gpu_keys() -> frozenset:
+    """Registered probes that hold `GPU_RESOURCE` exclusively, from the classification."""
+    return ci_probes.gpu_probe_keys()
+
+
 def exclusive_resources(key: str) -> set[str]:
-    """The resources probe ``key`` needs exclusively; empty when it declares none."""
-    return set(EXCLUSIVE_RESOURCES.get(key, ()))
+    """The resources probe ``key`` needs exclusively; empty when it declares none.
+
+    Includes `GPU_RESOURCE` for a `needs-gpu` probe, so the in-process ledger,
+    the parallel scheduler's dispatch attempt, the sequential runner's hold and
+    `/deflake` all see one set rather than each adding the exclusion itself.
+    """
+    held = set(EXCLUSIVE_RESOURCES.get(key, ()))
+    if key in gpu_keys():
+        held.add(GPU_RESOURCE)
+    return held
 
 
 def shared_resources(key: str) -> set[str]:
@@ -291,6 +315,17 @@ def resource_hold(key: str, namespace, *, announce=None):
 ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
 ENV_HELD_SHARED = "SYNARCHY_PROBE_HELD_SHARED"
 ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
+#: The host-wide resources an ancestor holds for us (#2932). Not paired with
+#: `ENV_HELD_NAMESPACE`: a host-wide resource has no repository to compare, so
+#: the name alone says what is held. A probe launched by a runner, `/deflake`
+#: or a quruntul trial finds `gpu-desktop` here and takes nothing, which is
+#: also what lets one probe boot several engines without meeting its own hold.
+ENV_HELD_HOST = "SYNARCHY_PROBE_HELD_HOST"
+#: The inherited lock descriptors behind `ENV_HELD_HOST` (#2932): comma-separated
+#: file descriptor numbers a launcher passed to this process with `pass_fds`. Every
+#: further launch (an engine, a nested runner) passes them on, so the host-wide
+#: exclusion lasts until the last process that carries it exits.
+ENV_HELD_HOST_FDS = "SYNARCHY_PROBE_HELD_HOST_FDS"
 
 #: Every variable THIS runner owns in a probe's environment, so
 #: `probe_runner_lifecycle.run_one` can strip the lot from what it
@@ -302,7 +337,9 @@ RUNNER_ENV_VARS: tuple[str, ...] = (probe_engine.ENV_ENGINE_EXE,
                                     save_compat_audit_codec.ENV_CODEC_EXE,
                                     ENV_HELD_EXCLUSIVE,
                                     ENV_HELD_SHARED,
-                                    ENV_HELD_NAMESPACE)
+                                    ENV_HELD_NAMESPACE,
+                                    ENV_HELD_HOST,
+                                    ENV_HELD_HOST_FDS)
 
 
 def descendant_hold_env(key: str, namespace: str | None) -> dict[str, str]:
@@ -314,16 +351,90 @@ def descendant_hold_env(key: str, namespace: str | None) -> dict[str, str]:
     """
     if namespace is None:
         return {}
-    exclusive = exclusive_resources(key) | inherited_exclusive_resources(namespace)
+    declared = exclusive_resources(key)
+    host = ((declared & probe_resource_lock.HOST_SCOPED_RESOURCES)
+            | inherited_host_resources(environ=None))
+    exclusive = ((declared - probe_resource_lock.HOST_SCOPED_RESOURCES)
+                 | inherited_exclusive_resources(namespace))
     shared = (shared_resources(key) | inherited_shared_resources(namespace)) - exclusive
-    if not exclusive and not shared:
-        return {}
-    env = {ENV_HELD_NAMESPACE: namespace}
+    env = {}
+    if host:
+        env[ENV_HELD_HOST] = ",".join(sorted(host))
+    if exclusive or shared:
+        env[ENV_HELD_NAMESPACE] = namespace
     if exclusive:
         env[ENV_HELD_EXCLUSIVE] = ",".join(sorted(exclusive))
     if shared:
         env[ENV_HELD_SHARED] = ",".join(sorted(shared))
     return env
+
+
+def inherited_host_resources(environ=None) -> set[str]:
+    """Host-wide resources an ancestor process already holds for us (#2932)."""
+    env = os.environ if environ is None else environ
+    raw = env.get(ENV_HELD_HOST) or ""
+    return {name.strip() for name in raw.split(",")
+            if name.strip() in probe_resource_lock.HOST_SCOPED_RESOURCES}
+
+
+def inherited_host_fds(environ=None) -> list:
+    """Open lock descriptors an ancestor passed for the host-wide hold, else none.
+
+    Only believed while `ENV_HELD_HOST` says the hold is inherited, and each number
+    must be an open regular file in this process: a stale export names nothing.
+    """
+    env = os.environ if environ is None else environ
+    if not inherited_host_resources(env):
+        return []
+    found = []
+    for token in (env.get(ENV_HELD_HOST_FDS) or "").split(","):
+        token = token.strip()
+        if not token.isdigit():
+            continue
+        try:
+            if stat.S_ISREG(os.fstat(int(token)).st_mode):
+                found.append(int(token))
+        except OSError:
+            continue
+    return sorted(set(found))
+
+
+def host_hold_env(key: str, environ=None) -> dict[str, str]:
+    """`ENV_HELD_HOST` for a child of a process that holds `key`'s host-wide interests.
+
+    For the layers that hold no repository interests of their own
+    (`probe_flake.measure`, the direct launch guard) and so have no namespace to
+    build `descendant_hold_env` from: they hold `GPU_RESOURCE` themselves or
+    inherit it, and either way the probe they launch must not take it again.
+    """
+    held = ((exclusive_resources(key) & probe_resource_lock.HOST_SCOPED_RESOURCES)
+            | inherited_host_resources(environ))
+    return {ENV_HELD_HOST: ",".join(sorted(held))} if held else {}
+
+
+@contextlib.contextmanager
+def exported_host_hold(held, environ=None):
+    """Mark `held` (a `ResourceHold`) in this process's environment for its children.
+
+    A process that took the host-wide interests itself (`/deflake`, a quruntul
+    trial) is the ANCESTOR of the probe it runs; the environment is how that
+    probe, and `probe_flake.measure` between them, learn not to take the same
+    interest again. Restored on exit, so nothing outlives the hold it describes.
+    """
+    env = os.environ if environ is None else environ
+    names = sorted(set(getattr(held, "exclusive", ()))
+                   & probe_resource_lock.HOST_SCOPED_RESOURCES)
+    before = env.get(ENV_HELD_HOST)
+    if names:
+        env[ENV_HELD_HOST] = ",".join(sorted(inherited_host_resources(env)
+                                              | set(names)))
+    try:
+        yield
+    finally:
+        if before is None:
+            env.pop(ENV_HELD_HOST, None)
+        else:
+            env[ENV_HELD_HOST] = before
 
 
 def inherited_exclusive_resources(namespace: str | None,
@@ -356,7 +467,8 @@ def cross_process_interests(key: str, namespace: str | None,
     """
     inherited_exclusive = inherited_exclusive_resources(namespace, environ)
     inherited_shared = inherited_shared_resources(namespace, environ)
-    return (exclusive_resources(key) - inherited_exclusive,
+    return (exclusive_resources(key) - inherited_exclusive
+            - inherited_host_resources(environ),
             shared_resources(key) - inherited_exclusive - inherited_shared)
 
 

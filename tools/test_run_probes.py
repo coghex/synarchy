@@ -18,7 +18,7 @@ under test does:
                      exclusive-resource declarations, the longest-first
                      dispatch order (#2275), exact and substring
                      selection, and reserved port spans;
-  `resources`    23  the one-time engine and save-codec preflights,
+  `resources`    26  the one-time engine and save-codec preflights,
                      resolved-executable propagation, inherited and
                      foreign holds, and the
                      reader/writer resource ledger;
@@ -114,7 +114,7 @@ FAMILIES = {
 #: would still pass after a registry entry was deleted.
 NON_OWNER_MODULES = {"__init__", "support"}
 
-#: The group count each family carries: 2 + 16 + 23 + 14 + 20 + 16 = 91.
+#: The group count each family carries: 2 + 16 + 26 + 14 + 20 + 16 = 94.
 #: The issue pinned 1 + 13 + 20 + 14 + 14 + 11 = 73 at 837792c; #2035
 #: landed `test_a_failing_readme_audit_fails_this_gate` beside the audit
 #: it extracted, which is why `readme` is 2; #2275 added two
@@ -129,7 +129,7 @@ NON_OWNER_MODULES = {"__init__", "support"}
 MINIMUM_GROUPS = {
     "readme": 2,
     "registry": 16,
-    "resources": 23,
+    "resources": 26,
     "lifecycle": 14,
     "scheduler": 20,
     "diagnostics": 16,

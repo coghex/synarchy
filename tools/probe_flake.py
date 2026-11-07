@@ -65,6 +65,7 @@ import ci_probes  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_engine  # noqa: E402
 import probe_evidence  # noqa: E402
+import probe_gpu_hold  # noqa: E402
 import probe_runner_lifecycle  # noqa: E402
 import probe_runner_registry  # noqa: E402
 
@@ -1005,31 +1006,40 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
             # than an absent one.
             events_path.touch()
 
-            # The probe's WHOLE declared span, not just one port (#1571):
-            # `debug_console_boot` and `offscreen` derive a second live
-            # listener from the base they are handed, and leasing one port
-            # would leave that second engine on a port another harness is
-            # free to take. `probe_runner_registry.port_span` is the single
-            # declaration; nothing here knows any probe by name.
-            leases, cursor = acquire_span(cursor, probe_runner_registry.port_span(probe))
-            base_port = leases[0].port
-            try:
-                if announce:
-                    announce(index, runs, base_port)
-                ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(
-                    script, base_port, timeout, None,
-                    event_path=str(events_path),
-                    artifact_dir=str(run_dir),
-                    engine_log_dir=str(engine_dir),
-                    rts_caps=rts_caps,
-                    evidence_dir=str(run_dir))
-            finally:
-                # Held until run_one has returned, which is after it has
-                # reaped the probe's whole process group — so every engine
-                # the probe booted has really let its port go before
-                # anyone else can lease it.
-                for lease in leases:
-                    lease.release()
+            # The machine-wide desktop/GPU exclusion (#2932), for a `needs-gpu`
+            # probe: waited for HERE, before the port leases (a lease held through
+            # a long wait would starve other harnesses of ports) and before
+            # `run_one`'s clock, so contention is never part of a run's elapsed
+            # time or timeout. Held until the run's process group is reaped. An
+            # ancestor that already holds it (`/deflake`, a quruntul trial) is
+            # inherited, and any other probe takes nothing.
+            with probe_gpu_hold.hold_for_probe(probe) as host_env:
+                # The probe's WHOLE declared span, not just one port (#1571):
+                # `debug_console_boot` and `offscreen` derive a second live
+                # listener from the base they are handed, and leasing one port
+                # would leave that second engine on a port another harness is
+                # free to take. `probe_runner_registry.port_span` is the single
+                # declaration; nothing here knows any probe by name.
+                leases, cursor = acquire_span(cursor, probe_runner_registry.port_span(probe))
+                base_port = leases[0].port
+                try:
+                    if announce:
+                        announce(index, runs, base_port)
+                    ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(
+                        script, base_port, timeout, None,
+                        event_path=str(events_path),
+                        artifact_dir=str(run_dir),
+                        engine_log_dir=str(engine_dir),
+                        rts_caps=rts_caps,
+                        evidence_dir=str(run_dir),
+                        hold_env=host_env)
+                finally:
+                    # Held until run_one has returned, which is after it has
+                    # reaped the probe's whole process group — so every engine
+                    # the probe booted has really let its port go before
+                    # anyone else can lease it.
+                    for lease in leases:
+                        lease.release()
 
             stdout_path.write_text(out or "", encoding="utf-8")
 

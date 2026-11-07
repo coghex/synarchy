@@ -79,6 +79,7 @@ from pathlib import Path
 
 import probe_evidence
 import probe_engine
+import probe_gpu_hold
 from probelib import GUI_PORT, lua_string, quit_engine, send, send_json
 
 REPO = Path(__file__).resolve().parent.parent
@@ -215,10 +216,16 @@ class Engine:
         self.label, self.port, self.root, self.launch = label, port, root, launch
         self.log = os.path.join(logdir, f"{label}.log")
         cmd = [engine_exe(logdir), mode, "--port", str(port), "--resource-root", root, *args]
+        # `--offscreen` (the manual half of this probe) opens a Vulkan device
+        # although the probe is CI-eligible by default, so it takes the
+        # host-wide hold from its effective launch arguments (#2932). The
+        # default `--headless` boots return without touching a lock.
+        probe_gpu_hold.ensure_for_launch(cmd[1:], label)
         self.logf = open(self.log, "w")
         probe_evidence.record_engine_log(self.log)  # not via probelib.boot (#2931)
         self.proc = subprocess.Popen(cmd, cwd=launch, stdout=self.logf,
-                                     stderr=subprocess.STDOUT)
+                                     stderr=subprocess.STDOUT,
+                                     pass_fds=probe_gpu_hold.child_fds())
 
     def text(self) -> str:
         try:

@@ -133,7 +133,7 @@ MINIMUM_GROUPS = {
     "harness:artifacts": 2,
     "harness:results": 3,
     "harness:census": 2,
-    "harness:runner": 1,
+    "harness:runner": 3,
     "harness:composition": 3,
     "migration:circadian_species": 2,
 }

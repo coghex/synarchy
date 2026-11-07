@@ -265,8 +265,11 @@ def main() -> int:
         return 2
 
     def waiting(busy) -> None:
+        # `describe()` names the holder (who, doing what, since when), which is
+        # the only answer to "what am I waiting for?" once the resource is the
+        # machine-wide `gpu-desktop` another checkout's probe holds (#2932).
         print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
-              f"outside this runner ... ", end="", flush=True)
+              f"outside this runner: {busy.describe()} ... ", end="", flush=True)
 
     # The whole Cabal contact this run makes (#1570, #2274): one
     # freshness build plus one `cabal list-bin` per target, HERE — after

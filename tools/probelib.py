@@ -38,6 +38,7 @@ from collections.abc import Callable
 
 import probe_engine
 import probe_evidence
+import probe_gpu_hold
 
 # The user's graphical instance lives on 8008; probes must never touch it.
 GUI_PORT = 8008
@@ -222,6 +223,11 @@ def load_fixture_yaml(port: int, loader: str, path: str,
 # --------------------------------------------------------------------------
 # Engine boot / teardown
 # --------------------------------------------------------------------------
+#: The engine executable `boot` last prepared in this process (#2932): reused by
+#: later boots while the process holds `gpu-desktop`, never re-prepared under it.
+_PREPARED_ENGINE: list[str] = []
+
+
 def _log_path(port: int, log: str | None) -> str:
     return log if log else f"/tmp/synarchy_probe_{port}.log"
 
@@ -305,15 +311,32 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     # log is not even opened until it has succeeded, so an empty one
     # can no longer be the only artifact of a build that overran.
     try:
-        cmd = probe_engine.prepare_command(
-            [*mode, "--port", str(port), *(args or [])],
-            log_path=f"{logpath}.prepare", timeout=prepare_timeout,
-            announce=lambda note: print(f"[{label}] {note}",
-                                        file=sys.stderr, flush=True))
+        if probe_gpu_hold.holds_own() and _PREPARED_ENGINE:
+            # This probe already holds the machine-wide `gpu-desktop` (#2932).
+            # Preparing again would wait for `cabal-build` EXCLUSIVELY while
+            # holding it, and a runner queued for the GPU plus a shared
+            # `cabal-build` would then block that preparation behind itself: a
+            # cycle neither side can leave. The binary was prepared before the
+            # hold was taken, so reuse it.
+            cmd = [_PREPARED_ENGINE[0], *mode, "--port", str(port), *(args or [])]
+        else:
+            cmd = probe_engine.prepare_command(
+                [*mode, "--port", str(port), *(args or [])],
+                log_path=f"{logpath}.prepare", timeout=prepare_timeout,
+                announce=lambda note: print(f"[{label}] {note}",
+                                            file=sys.stderr, flush=True))
+            _PREPARED_ENGINE[:] = [cmd[0]]
     except probe_engine.EngineExecutableError as error:
         # The error already names preparation; the label says which
         # engine's preparation it was.
         sys.exit(f"{label}: {error}")
+    # A window or a Vulkan device belongs to the whole machine (#2932): wait
+    # for `gpu-desktop` before launching, AFTER the preparation above so no
+    # repository resource is ever waited for while it is held. The hold lasts
+    # until this process exits, which covers a probe's later engines and its
+    # teardown. Headless and `--dump` boots, and a boot a runner already
+    # covers, return without touching a lock.
+    probe_gpu_hold.ensure_for_launch(cmd[1:], label)
     logf = open(logpath, "w")
     # Under a runner (#2931), list this log so a FAILING run keeps a copy
     # of it whatever fixed path the probe chose and whatever it later does
@@ -321,7 +344,8 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     probe_evidence.record_engine_log(logpath)
     proc = None
     try:
-        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                                pass_fds=probe_gpu_hold.child_fds())
         if on_launch is not None:
             on_launch(proc)
     except BaseException:

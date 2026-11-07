@@ -1660,6 +1660,7 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
         "tools/probe_select.py",
         "tools/probe_engine.py",
         "tools/probe_evidence.py",
+        "tools/probe_gpu_hold.py",
         "tools/probelib.py",
         "tools/run_probes.py",
         "tools/probe_runner_registry.py",

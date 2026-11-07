@@ -40,6 +40,10 @@ HSPEC_SLICE = 400
 LOCK_WAIT_SECONDS = 1800  # AGENTS.md: wait for cabal-build for up to 30 minutes
 BUILD_SECONDS = 5400  # a cold engine and codec build, in prepare's own budget
 TRIAL_MARGIN_SECONDS = 300  # process start-up and teardown around a probe
+# Waiting for the machine-wide `gpu-desktop` hold (#2932) while another checkout's
+# GPU probe runs. A `needs-gpu` trial's limit is extended by this much so the wait is
+# never charged to the probe; keep it equal to `probe_trial.GPU_WAIT_SECONDS`.
+GPU_WAIT_SECONDS = 4 * 3600
 # Probes run_probes.py cannot launch unattended: they need a mode flag on a
 # direct invocation (tools/ci_probes.py MANUAL_ONLY_REASONS says so).
 DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which run_probes.py cannot pass"}
@@ -148,24 +152,34 @@ class Synarchy:
         ]
         registry, eligible = tools["probe_runner_registry"], tools["ci_probes"].CI_ELIGIBLE
         protocol = tools["probe_flake"].PROTOCOL_PROBES
+        gpu_keys = tools["ci_probes"].gpu_probe_keys()
         ports = _port_bases(registry, [key for key, _, _ in registry.PROBES])
         for key, script, description in registry.PROBES:
             entry = census.get(key) or {}
             if (entry.get("census") or {}).get("deferred") or key in DIRECT_ONLY or key in OPT_IN_ONLY:
                 continue  # the census's deferral stays authoritative while the census exists
             ci = key in eligible
-            framework = "command" if key in protocol and not ci else "exit"
-            checks = self._describe(checkout, tools, key, script) + [RUN_CHECK] if framework == "command" else []
+            # A needs-gpu probe off the protocol is a `command` suite with the single check `run`, run
+            # through probe_trial.py --run-probes (#2932): the lab maps an `exit` suite's status
+            # straight to a pass or fail, so only a command suite can record "the GPU wait ran out"
+            # as a blocked trial (no result document) instead of a failed probe.
+            gpu_run = key in gpu_keys and key not in protocol and not ci
+            framework = "command" if (key in protocol and not ci) or gpu_run else "exit"
+            checks = ([RUN_CHECK] if gpu_run else
+                      self._describe(checkout, tools, key, script) + [RUN_CHECK] if framework == "command" else [])
             timeout = float(registry.effective_timeout(key))
             # prepare builds; a trial only waits for the probe's resources and runs it.
             trial = int(timeout + LOCK_WAIT_SECONDS + TRIAL_MARGIN_SECONDS)
+            if key in gpu_keys:
+                trial += GPU_WAIT_SECONDS
             suites.append(ctx.Suite(
                 id=_suite_id(key), kind="ci" if ci else "probe", framework=framework,
                 description=description, area=key.split("_")[0],
                 desktop=key == "preview",  # Hidden GLFW windows still need the desktop claim.
                 identity=ctx.digest(dict(base, key=key)),
                 checks=checks, trial_seconds=trial, batch_seconds=86400,
-                data=dict(key=key, script=script, port=ports[key], span=int(registry.port_span(key)))))
+                data=dict(key=key, script=script, port=ports[key], span=int(registry.port_span(key)),
+                          run_probes=gpu_run)))
         return suites
 
     @staticmethod
@@ -196,7 +210,10 @@ class Synarchy:
                                 provenance=dict(target=target, executable=executable))
         key = suite.data["key"]
         environment = self._preflight(ctx)
-        if suite.framework == "command":
+        if suite.data.get("run_probes"):
+            argv = [sys.executable, str(checkout / ".quruntul" / "probe_trial.py"), key,
+                    "--run-probes", str(suite.data["port"])]
+        elif suite.framework == "command":
             argv = [sys.executable, str(checkout / ".quruntul" / "probe_trial.py"), key]
         else:
             argv = [sys.executable, "tools/run_probes.py", "--only", key, "--exact", "--jobs", "1",
@@ -219,6 +236,13 @@ class Synarchy:
 
     def outcomes(self, ctx, suite, trial):
         """A protocol probe's checks from its probe-flake-result/v1 document."""
+        if suite.data.get("run_probes"):
+            # No document means the trial never ran the probe (it gave up waiting for the GPU): the lab
+            # records a blocked trial, not a failed run.
+            done = Path(trial["prefix"] + ".run-probes.json")
+            if not done.is_file():
+                return None
+            return {RUN_CHECK: "passed" if json.loads(done.read_text()).get("returncode") == 0 else "failed"}
         path = Path(trial["prefix"] + ".probe-flake.json")
         if not path.is_file():
             return None

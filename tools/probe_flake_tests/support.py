@@ -156,6 +156,25 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
     if marker:
         open(marker, "a").write("ran\\n")
 
+    # What the probe was told about the machine-wide GPU hold (#2932), and
+    # whether that hold is real: a fresh acquirer in another repository's
+    # namespace must be refused while this process runs.
+    dump = os.environ.get("SYNTHETIC_ENV_DUMP")
+    if dump:
+        from pathlib import Path
+        import probe_resource_lock
+        refused = False
+        try:
+            probe_resource_lock.acquire(
+                exclusive={{probe_resource_lock.GPU_DESKTOP}},
+                namespace="synthetic" + str(os.getpid()),
+                root=Path(os.environ["SYNTHETIC_LOCK_ROOT"])).release()
+        except probe_resource_lock.ResourceBusy:
+            refused = True
+        open(dump, "w").write(json.dumps({{
+            "held_host": os.environ.get("SYNARCHY_PROBE_HELD_HOST"),
+            "gpu_refused": refused}}))
+
     mode = os.environ.get("SYNTHETIC_MODE", "pass")
     rep = probe_protocol.reporter_from_env(DESCRIPTOR)
     caps = os.environ.get(probe_protocol.ENV_RTS_CAPS)
