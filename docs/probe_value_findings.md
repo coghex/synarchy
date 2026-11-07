@@ -31,7 +31,7 @@ concrete precondition
 - [x] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [#2937] [#2938]
 - [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
 - [x] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time — [#2939] [#2940]
-- [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+- [x] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades — [#2941]
 - [ ] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
 - [ ] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x
 - [ ] PRB-9. Three pairs of companion probes pay two boots for one fixture
@@ -181,7 +181,9 @@ Two AI-job probes where the cost or the instability does not match what only the
 - **Scope and constraints:** `repair` and `repair_item` (CI) stay; `tools/ci_probes.py`, `tools/README.md` and the census follow a retirement.
 - **Remaining uncertainty:** Whether Hspec's stub-VM groups cover phases 1 and 3 (own-inventory and mule spare gear) was not checked; the `construction` phase times are unrecorded; `craft_bill` is flaky on CI per `tools/ci_probes.py:201` and failed in run B, with no phase breakdown.
 
-### PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+### [#2941] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: retire the whole probe (it never failed; Hspec grades the arithmetic), moving the clock-source and clot-progression checks into Hspec where they can be stated deterministically and accepting the loss of live-unit-tick wiring coverage. Corrections to the finding: the realistic saving is under about 100 s of dwell, and the four `nominal_*` checks (#2837) account for the growth from 289 s to 379 s.
 
 The blood family is covered in-process by six Hspec files; the real-engine probes add the unit-thread wiring. `bleeding_trail` is by far the heaviest and grew from 288 s to 379 s.
 
