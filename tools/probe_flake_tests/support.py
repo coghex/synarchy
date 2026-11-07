@@ -230,7 +230,7 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         time.sleep(600)
         raise SystemExit(0)
 
-    if mode in ("scratch_fail", "scratch_pass"):
+    if mode in ("scratch_fail", "scratch_pass", "scratch_strict"):
         # A probe that owns a scratch tree and an engine log at a FIXED
         # path, then does what a real probe's `finally` does: discard the
         # tree. Under the harness that must leave it for the harness (#2931).
@@ -239,11 +239,14 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         fixed_log = os.environ["SYNTHETIC_FIXED_LOG"]
         open(fixed_log, "w").write("engine output\\n")
         probe_evidence.record_engine_log(fixed_log)
-        passed = mode == "scratch_pass"
+        passed = mode != "scratch_fail"
         rep.check("alpha", True, "the first check")
         rep.check("beta", passed, "the second check")
         rep.check("gamma", True, "the third check")
-        probe_evidence.discard_scratch(scratch)
+        # "scratch_strict": a probe whose cleanup is a contract (`retire`
+        # raises on failure, like the flora/farm/location removers).
+        (probe_evidence.retire if mode == "scratch_strict"
+         else probe_evidence.discard_scratch)(scratch)
         raise SystemExit(0 if passed else 1)
 
     if mode == "bad_describe_key":

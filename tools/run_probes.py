@@ -241,6 +241,9 @@ def main() -> int:
     # of them needs a usable root.
     try:
         retention = probe_evidence.Retention.from_environment()
+        # Each selected probe's own directory too: `<root>/<probe>` may be a
+        # symlink, and following it must not put evidence in a worktree.
+        retention.check_probes(key for key, _script, _purpose in chosen)
     except probe_evidence.RootRejected as error:
         print(f"cannot keep failing probes' evidence: {error}; set "
               f"{probe_evidence.ENV_ROOT} to a directory outside every "

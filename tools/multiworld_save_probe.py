@@ -97,6 +97,7 @@ Exit 0 = every saved entity survived on its correct page.
 """
 from __future__ import annotations
 
+import probe_evidence
 import probe_protocol
 import argparse
 import glob
@@ -1014,7 +1015,7 @@ def _run(args, rep):
             quit_engine(args.port, procB)
         # Scoped cleanup: only ever remove a dir this probe created.
         if os.path.basename(save_dir).startswith(SAVE_PREFIX) and os.path.isdir(save_dir):
-            shutil.rmtree(save_dir, ignore_errors=True)
+            probe_evidence.retire_saves(save_dir)
 
 
 if __name__ == "__main__":

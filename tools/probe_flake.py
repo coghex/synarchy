@@ -733,9 +733,16 @@ def new_invocation_dir(root: Path, probe: str) -> Path:
         return candidate
 
 
-def _remove_tree(path: Path) -> None:
-    with contextlib.suppress(OSError):
+def _remove_tree(path: Path) -> str | None:
+    """Delete a passing run's directory; the failure, if any, as text."""
+    try:
         shutil.rmtree(path)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        return (f"could not remove the passing run's directory {path}: "
+                f"{error}")
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -1050,11 +1057,24 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
                 return stop_with_harness_error(str(error))
 
             keep = outcome in (RUN_FAIL, RUN_TIMEOUT)
+            if not keep:
+                # Read BEFORE the delete: a removal that fails part-way has
+                # already taken files, this one among them.
+                strict = (run_dir / probe_evidence.STRICT_MARK).exists()
+                removal = _remove_tree(run_dir)
+                if removal and strict:
+                    # A probe whose cleanup is a contract retired its tree
+                    # and the harness could not delete it: the run is not a
+                    # pass. Its checks stay as scored; only the run's outcome
+                    # changes, and the directory is kept with the reason.
+                    outcome, keep = RUN_FAIL, True
+                    print(f"run {index}: {removal}", file=sys.stderr)
+                    with contextlib.suppress(OSError):
+                        with open(stdout_path, "a", encoding="utf-8") as fh:
+                            fh.write(f"\n[FAIL] {removal}\n")
             if keep:
                 for problem in probe_evidence.archive_engine_logs(run_dir):
                     print(problem, file=sys.stderr)
-            else:
-                _remove_tree(run_dir)
             measurement.runs.append(RunRecord(
                 index, base_port, outcome, elapsed, outcomes,
                 run_dir if keep else None))

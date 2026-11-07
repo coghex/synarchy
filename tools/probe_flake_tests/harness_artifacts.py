@@ -286,6 +286,50 @@ def test_failure_evidence_pruning_counts_failed_runs() -> None:
                "an invocation whose last run is pruned goes with it")
 
 
+def test_a_failed_removal_after_strict_cleanup_fails_the_run() -> None:
+    print("\n-- a strict cleanup the harness cannot finish is not a pass (#2931)")
+    import io
+    import contextlib
+    import shutil
+    with SyntheticTree() as tree, _failure_root_env(tree):
+        fixed = tree.root / "fixed-engine.log"
+        os.environ["SYNTHETIC_FIXED_LOG"] = str(fixed)
+        real = shutil.rmtree
+
+        def refuse(path, *args, **kwargs):
+            if "run-" in str(path):
+                raise OSError("synthetic: directory busy")
+            return real(path, *args, **kwargs)
+
+        try:
+            for mode, strict in (("scratch_strict", True),
+                                 ("scratch_pass", False)):
+                seen = io.StringIO()
+                shutil.rmtree = refuse
+                try:
+                    with contextlib.redirect_stderr(seen):
+                        m = run_synthetic(tree, mode, runs=1,
+                                          artifact_root=None)
+                finally:
+                    shutil.rmtree = real
+                outcome = m.runs[0].outcome
+                if strict:
+                    expect(outcome == probe_flake.RUN_FAIL
+                           and m.runs[0].artifact_dir is not None
+                           and "busy" in seen.getvalue()
+                           and "[FAIL]" in (m.runs[0].artifact_dir
+                                            / "stdout.txt").read_text(),
+                           f"retire() then an undeletable directory fails "
+                           f"the run, keeps it and says why ({outcome})")
+                else:
+                    expect(outcome == probe_flake.RUN_PASS,
+                           "a lenient discard_scratch keeps its old meaning: "
+                           "a leftover is not a failure")
+        finally:
+            os.environ.pop("SYNTHETIC_FIXED_LOG", None)
+            shutil.rmtree = real
+
+
 def test_probe_owned_scratch_is_kept_for_the_harness() -> None:
     print("\n-- probe-owned cleanup defers to the harness (#2931) --")
     with SyntheticTree() as tree, _failure_root_env(tree) as durable:
@@ -322,5 +366,6 @@ TESTS = (
     test_failure_evidence_pruning,
     test_failure_evidence_pruning_counts_failed_runs,
     test_a_harness_error_reports_an_archive_failure,
+    test_a_failed_removal_after_strict_cleanup_fails_the_run,
     test_probe_owned_scratch_is_kept_for_the_harness,
 )

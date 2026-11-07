@@ -95,6 +95,7 @@ import sys
 import tempfile
 import time
 
+import probe_evidence
 from probelib import (boot, capture_request_id, poll_until, quit_engine,
                       send, send_json, wait_load_published,
                       wait_save_complete)
@@ -137,7 +138,7 @@ def remove_probe_slot() -> None:
             and os.path.dirname(target) == saves
             and os.path.isdir(target)
             and not os.path.islink(target)):
-        shutil.rmtree(target)
+        probe_evidence.retire_saves(target, strict=True)
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:

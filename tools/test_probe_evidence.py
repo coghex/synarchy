@@ -70,6 +70,9 @@ SCRATCH_PROBE = textwrap.dedent('''\
     print('FAIL: a check failed' if code != '0' else 'all good')
     if code == 'hang':
         time.sleep(600)
+    if code == 'strict':
+        probe_evidence.retire(scratch)      # a cleanup contract
+        sys.exit(0)
     probe_evidence.discard_scratch(scratch)
     sys.exit(0 if code == '0' else 1)
 ''')
@@ -265,6 +268,132 @@ def test_a_root_inside_a_worktree_is_refused() -> None:
         shutil.rmtree(inside, ignore_errors=True)
 
 
+def test_a_failed_removal_after_strict_cleanup_fails_the_run() -> None:
+    print("\n-- strict cleanup the runner cannot finish fails a passing run")
+    tree = Tree()
+    real = shutil.rmtree
+    try:
+        add_scratch_probe(tree, "strict", "strict")
+        add_scratch_probe(tree, "lenient", "0")
+
+        def refuse(path, *args, **kwargs):
+            if "failure-evidence" in str(path) and "20" in Path(path).name:
+                raise OSError("synthetic: directory busy")
+            return real(path, *args, **kwargs)
+
+        shutil.rmtree = refuse
+        try:
+            rc_strict, out_strict = main_with(
+                tree, ["--only", "strict", "--exact"])
+            rc_lenient, out_lenient = main_with(
+                tree, ["--only", "lenient", "--exact"])
+        finally:
+            shutil.rmtree = real
+        expect(rc_strict == 1 and "retired scratch could not be removed"
+               in out_strict and "busy" in out_strict,
+               f"retire() followed by an undeletable attempt fails the run "
+               f"({rc_strict})")
+        expect(len(attempts(tree, "strict")) == 1
+               and str(attempts(tree, "strict")[0].resolve()) in out_strict,
+               "and the leftover is kept and named")
+        expect(rc_lenient == 0,
+               "a lenient discard_scratch leftover does not fail a pass, as "
+               "before")
+    finally:
+        shutil.rmtree = real
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_saves_outside_the_attempt_are_copied_before_removal() -> None:
+    print("\n-- repo-relative saves are kept as evidence, then removed")
+    import tutorial_probe  # noqa: E402
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    saved_root = tutorial_probe.REPO_ROOT
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-saves-") as temp:
+            temp = Path(temp).resolve()
+            attempt = temp / "attempt"
+            attempt.mkdir()
+            fake_repo = temp / "repo"
+            slot = fake_repo / "saves" / tutorial_probe.SLOT
+            slot.mkdir(parents=True)
+            (slot / "world.synworld").write_text("the save")
+            tutorial_probe.REPO_ROOT = str(fake_repo)
+
+            tutorial_probe.remove_probe_slot()
+            expect(not slot.exists(),
+                   "run directly, the slot is simply removed")
+
+            slot.mkdir(parents=True)
+            (slot / "world.synworld").write_text("the save")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+            tutorial_probe.remove_probe_slot()
+            kept = sorted((attempt / probe_evidence.RETIRED_DIR).glob(
+                f"{tutorial_probe.SLOT}-*/world.synworld"))
+            expect(not slot.exists() and len(kept) == 1
+                   and kept[0].read_text() == "the save",
+                   "under a runner the probe's real cleanup path leaves the "
+                   "slot gone from saves/ but copies it into the attempt")
+
+            other = fake_repo / "saves" / "other"
+            other.mkdir()
+            (other / "f").write_text("x")
+            probe_evidence.retire_saves(other)
+            expect(not other.exists() and len(list(
+                (attempt / probe_evidence.RETIRED_DIR).glob("other-*"))) == 1,
+                "and so do the lenient removers (save_pause, multiworld_save, "
+                "lua_orphan_prune, pause_speed)")
+    finally:
+        tutorial_probe.REPO_ROOT = saved_root
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_a_symlinked_probe_directory_cannot_reach_a_worktree() -> None:
+    print("\n-- <root>/<probe> may not be a way into a checkout")
+    target = REPO / "probe-evidence-link-target"
+    with tempfile.TemporaryDirectory(prefix="evidence-link-") as temp:
+        root = Path(temp).resolve() / "root"
+        retention = probe_evidence.Retention.from_environment(
+            {probe_evidence.ENV_ROOT: str(root)})
+        target.mkdir(exist_ok=True)
+        try:
+            (root / "crop").symlink_to(target)
+            (root / "wander").symlink_to(Path(temp).resolve())
+            for probe, why in (("crop", "inside the working tree"),
+                               ("wander", "outside the root")):
+                try:
+                    retention.check_probes([probe])
+                    expect(False, f"{probe} should be refused")
+                except probe_evidence.RootRejected as error:
+                    expect(why in str(error), f"{probe}: {error}")
+                try:
+                    retention.begin(probe)
+                    expect(False, f"{probe} must not allocate")
+                except probe_evidence.RootRejected:
+                    pass
+            expect(list(target.iterdir()) == [],
+                   "nothing was created inside the checkout")
+
+            tree = Tree()
+            try:
+                add_scratch_probe(tree, "crop", "1")
+                with patched(tree):
+                    os.environ[probe_evidence.ENV_ROOT] = str(root)
+                    rc, out = main_with_open(
+                        tree, ["--only", "crop", "--exact"])
+                expect(rc == 2 and "inside the working tree" in out
+                       and not (tree.root / "crop.counter").exists(),
+                       f"run_probes refuses before any probe starts ({rc})")
+            finally:
+                tree.cleanup()
+                shutil.rmtree(tree.root, ignore_errors=True)
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+
 def test_a_bad_keep_count_is_refused_not_defaulted() -> None:
     print("\n-- SYNARCHY_PROBE_FAILURE_KEEP is validated")
     for raw in ("0", "-2", "many"):
@@ -386,7 +515,9 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                 "till", "transactional_load", "transfer_order",
                 "unified_transfer", "fluid_exact_restart",
                 "fluid_exact_restart_render", "fluid_reaction",
-                "fluid_reaction_visual", "debug_console_boot", "audio_null")
+                "fluid_reaction_visual", "debug_console_boot", "audio_null",
+                "save_pause", "multiworld_save", "lua_orphan_prune",
+                "pause_speed", "tutorial", "tutorial_hud")
     call = re.compile(r"^[^#\n]*\bshutil\.rmtree\(", re.M)
     for name in migrated:
         text = (Path(__file__).parent / f"{name}_probe.py").read_text()
@@ -634,6 +765,9 @@ TESTS = (
     test_the_path_is_printed_whatever_tail_says,
     test_parallel_attempts_never_collide,
     test_a_root_inside_a_worktree_is_refused,
+    test_a_failed_removal_after_strict_cleanup_fails_the_run,
+    test_saves_outside_the_attempt_are_copied_before_removal,
+    test_a_symlinked_probe_directory_cannot_reach_a_worktree,
     test_a_bad_keep_count_is_refused_not_defaulted,
     test_pruning_keeps_the_newest_n_and_only_what_it_owns,
     test_pruning_counts_failed_runs_inside_an_invocation,

@@ -26,6 +26,7 @@ import os
 import sys
 import time
 
+import probe_evidence
 import probe_resource_lock
 import probe_runner_diagnostics as diagnostics
 import probe_runner_lifecycle as lifecycle
@@ -55,7 +56,7 @@ def run_attempt(script, port, timeout, groups, *, key=None, hold_env=None,
         name = key or os.path.splitext(os.path.basename(script))[0]
         try:
             attempt = retention.begin(name)
-        except OSError as error:
+        except (OSError, probe_evidence.RootRejected) as error:
             print(f"warning: could not create a failure-evidence directory "
                   f"for {name} under {retention.root} ({error}); this "
                   f"attempt keeps no evidence", file=sys.stderr)
@@ -74,6 +75,13 @@ def run_attempt(script, port, timeout, groups, *, key=None, hold_env=None,
     if attempt is not None:
         outcome = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
         where = attempt.finish(outcome, capture=out)
+        if attempt.removal_error:
+            # The probe's strict cleanup only retired its tree; the removal
+            # that makes it "gone" happens here, and it failed. A green
+            # result beside leftover artifacts is exactly what those probes'
+            # cleanup contracts forbid, so the run fails.
+            ok = False
+            out = (out or "") + f"\n  [FAIL] {attempt.removal_error}\n"
         if where is not None and kept is not None:
             kept.append(str(where))
     return ok, timed_out, elapsed, out

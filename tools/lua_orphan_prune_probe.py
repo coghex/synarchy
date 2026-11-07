@@ -71,6 +71,7 @@ import subprocess
 import sys
 import time
 import uuid
+import probe_evidence
 import probe_protocol
 from probelib import quit_engine, boot, send, send_json, wait_load_published
 
@@ -493,7 +494,7 @@ def _run(args, rep: probe_protocol.Reporter) -> int:
         # Clean up the throwaway save. Safe: the name is unique to this run
         # and main() refused to start if the dir already existed.
         if os.path.isdir(save_dir):
-            shutil.rmtree(save_dir, ignore_errors=True)
+            probe_evidence.retire_saves(save_dir)
 
     return 0 if ok else 1
 

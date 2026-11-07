@@ -350,6 +350,9 @@ class Attempt:
         self.probe = probe
         self.path = path
         self.finished = False
+        # Set when a PASS could not delete its directory AND the probe's
+        # own cleanup was strict (`retire`): the run must then fail.
+        self.removal_error: str | None = None
 
     @property
     def tmp(self) -> Path:
@@ -371,6 +374,7 @@ class Attempt:
             return self.path if self.path.exists() else None
         self.finished = True
         if outcome == PASS:
+            strict = (self.path / STRICT_MARK).exists()  # before the delete
             try:
                 shutil.rmtree(self.path)
             except FileNotFoundError:
@@ -378,6 +382,10 @@ class Attempt:
             except OSError as error:
                 say(f"could not remove the passing run's scratch directory "
                     f"{self.path}: {error}")
+                if strict:
+                    self.removal_error = (
+                        f"the probe's retired scratch could not be removed "
+                        f"({self.path}): {error}")
                 return self.path
             return None
         if capture is not None:
@@ -403,9 +411,12 @@ class Attempt:
 class Retention:
     """The resolved policy: where evidence goes and how much is kept."""
 
-    def __init__(self, root: Path, keep: int):
+    def __init__(self, root: Path, keep: int, trees=None):
         self.root = root
         self.keep = keep
+        # The worktrees the root and every per-probe directory must stay
+        # out of; resolved once, with the root.
+        self.trees = list(trees) if trees is not None else None
 
     @classmethod
     def from_environment(cls, environ=None, trees=None) -> "Retention":
@@ -413,15 +424,50 @@ class Retention:
         runs, so a misconfiguration is a refusal and never a lost failure."""
         environ = os.environ if environ is None else environ
         keep = keep_count(environ)
-        return cls(check_root(configured_root(environ), trees), keep)
+        trees = worktree_paths() if trees is None else trees
+        return cls(check_root(configured_root(environ), trees), keep, trees)
 
     def probe_dir(self, probe: str) -> Path:
         return self.root / probe
 
+    def check_probe_dir(self, probe: str) -> Path:
+        """The per-probe directory, resolved and re-checked.
+
+        `<root>/<probe>` may be a symlink an operator (or anyone) left
+        there; following it must not carry evidence into a worktree or out
+        of the root.
+        """
+        parent = self.probe_dir(probe)
+        try:
+            resolved = parent.resolve()
+        except OSError as error:
+            raise RootRejected(
+                f"failure-evidence directory {parent} cannot be resolved "
+                f"({error})") from None
+        if self.trees is None:
+            self.trees = worktree_paths()
+        for tree in self.trees:
+            if resolved == tree or tree in resolved.parents:
+                raise RootRejected(
+                    f"failure-evidence directory {parent} resolves to "
+                    f"{resolved}, inside the working tree {tree}; raw probe "
+                    f"artifacts must never be written into a repository "
+                    f"worktree")
+        if self.root != resolved and self.root not in resolved.parents:
+            raise RootRejected(
+                f"failure-evidence directory {parent} resolves to {resolved}, "
+                f"outside the root {self.root}")
+        return resolved
+
+    def check_probes(self, probes) -> None:
+        """Refuse BEFORE any probe runs if one's directory is unusable."""
+        for probe in probes:
+            self.check_probe_dir(probe)
+
     def begin(self, probe: str) -> Attempt:
         """A fresh, collision-free attempt directory for one execution:
         `<root>/<probe>/<UTC timestamp>-<short sha>-<nonce>`."""
-        parent = self.probe_dir(probe)
+        parent = self.check_probe_dir(probe)
         stamp = _now().strftime("%Y%m%dT%H%M%SZ")
         sha = _short_sha()
         while True:
@@ -496,6 +542,28 @@ def is_runner_owned(path, environ=None) -> bool:
 RETIRED_DIR = "retired"
 
 
+STRICT_MARK = ".strict-cleanup"
+
+
+def _retire(path, *, strict: bool) -> None:
+    if not is_runner_owned(path):
+        shutil.rmtree(path)
+        return
+    held = os.path.realpath(evidence_dir())
+    if os.path.realpath(str(path)) == held:
+        raise OSError(f"refusing to retire the evidence directory {path} itself")
+    retired = os.path.join(held, RETIRED_DIR)
+    os.makedirs(retired, exist_ok=True)
+    name = f"{os.path.basename(str(path).rstrip(os.sep)) or 'tree'}-{uuid.uuid4().hex[:6]}"
+    os.rename(path, os.path.join(retired, name))
+    if strict:
+        # This probe's cleanup is a contract: a tree it could not remove is
+        # a failed run. The removal now happens in the runner, so say so
+        # there (`Attempt.finish`).
+        with contextlib.suppress(OSError):
+            Path(held, STRICT_MARK).touch()
+
+
 def retire(path) -> None:
     """Take a probe-owned tree out of the way; raises `OSError` on failure.
 
@@ -507,27 +575,54 @@ def retire(path) -> None:
     which deletes the whole attempt on PASS and keeps it on any other
     outcome. A probe cannot know its own outcome at cleanup time, which is
     why the decision is not made here.
+
+    This is the STRICT form, for cleanup whose failure the probe reports:
+    the attempt is marked so that, if the runner's own deletion of the
+    retired tree later fails, a passing run is turned into a failure
+    rather than leaving a green result beside leftover artifacts.
+    `discard_scratch` is the lenient form.
     """
-    if not is_runner_owned(path):
-        shutil.rmtree(path)
-        return
-    held = os.path.realpath(evidence_dir())
-    if os.path.realpath(str(path)) == held:
-        raise OSError(f"refusing to retire the evidence directory {path} itself")
-    retired = os.path.join(held, RETIRED_DIR)
-    os.makedirs(retired, exist_ok=True)
-    name = f"{os.path.basename(str(path).rstrip(os.sep)) or 'tree'}-{uuid.uuid4().hex[:6]}"
-    os.rename(path, os.path.join(retired, name))
+    _retire(path, strict=True)
 
 
 def discard_scratch(path) -> None:
     """A probe's `finally`-time removal of its own scratch tree, errors
     ignored: `shutil.rmtree(path, ignore_errors=True)` when run directly,
-    `retire` under a runner."""
+    a lenient `_retire` under a runner."""
     try:
-        retire(path)
+        _retire(path, strict=False)
     except OSError:
         pass
+
+
+def retire_saves(path, *, strict: bool = False) -> None:
+    """Remove a probe-owned save slot that lives OUTSIDE the attempt.
+
+    Probes that write the checkout's own `saves/` cannot have it redirected
+    by `TMPDIR`. Run directly this removes the slot as the probe always
+    did. Under a runner the slot is first copied into the attempt's
+    `retired/` directory, then removed, so a failing run keeps the save it
+    needs for diagnosis while the shared `saves/` still ends up clean. A
+    copy that fails is reported and the removal still happens: a leftover
+    slot in the shared directory would be the worse outcome. `strict`
+    mirrors `shutil.rmtree(path)` (errors raise) instead of
+    `ignore_errors=True`.
+    """
+    held = evidence_dir()
+    if held and os.path.isdir(path) and not is_runner_owned(path):
+        destination = os.path.join(
+            held, RETIRED_DIR,
+            f"{os.path.basename(str(path).rstrip(os.sep))}-{uuid.uuid4().hex[:6]}")
+        try:
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copytree(path, destination, symlinks=True)
+        except OSError as error:
+            print(f"could not keep a copy of {path} as failure evidence: "
+                  f"{error}", file=sys.stderr)
+    if strict:
+        shutil.rmtree(path)
+    else:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @contextlib.contextmanager
