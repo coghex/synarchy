@@ -2,8 +2,8 @@
 """The broader manual persistence-contract sweep (issue #767, save-
 overhaul D1, requirement 15's "broader manual persistence sweep").
 
-Where ``tools/persistence_contract_probe.py`` is a compact, CI-eligible
-smoke test (a tiny worldSize-8 page, one building, one unit), this sweep
+Where ``tools/persistence_contract_probe.py`` is the CI-eligible core (a tiny
+worldSize-8 page, one building, one unit, plus the mind-episode engines), this sweep
 exercises a REAL generated world at a representative size and populates
 every category ``docs/persistence_state_inventory.md``'s SS12 coverage
 map names in ONE session: a meaningful world-generation seed + player-
@@ -12,7 +12,7 @@ designation, a non-default camera position and map mode -- then runs the
 SAME real fresh-process save -> load -> save cycle (three times,
 requirement 9) and the SAME
 ``tools/persistence_snapshot.compare_session_files`` structural
-comparison (requirement 1/2/5) the compact probe uses, just against a
+comparison (requirement 1/2/5) the core probe uses, just against a
 richer scenario and a real (not tiny) world size. Since #2274 that
 comparison execs the compiled ``exe:synarchy-save-codec`` rather than a
 ``cabal repl`` of the headless test suite.
@@ -46,8 +46,8 @@ guard:
 
 This is genuinely slow (each cross-referenced probe pays its own real
 engine-boot/worldgen cost on top of this sweep's own scenario) -- that
-is the whole point of the compact/broad two-tier split (requirement 15):
-the compact probe stays CI-eligible, this sweep does not.
+is the whole point of the core/broad two-tier split (requirement 15):
+the core probe stays CI-eligible, this sweep does not.
 ``--cross-probe-keys`` (comma-separated, ``--exact`` semantics) can
 narrow the set for local iteration on this script's OWN scenario;
 ``--skip-cross-probes`` skips them entirely (loudly reported as reduced

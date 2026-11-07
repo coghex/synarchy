@@ -32,7 +32,7 @@
 --   The FRESH-PROCESS half (an actual @quit@ + a genuinely new headless
 --   process, requirement 5's own literal ask) cannot run inside hspec at
 --   all — it needs real process boundaries. That lives in
---   @tools/persistence_contract_probe.py@ (compact, CI-eligible smoke)
+--   @tools/persistence_contract_probe.py@ (the CI-eligible core)
 --   and @tools/persistence_contract_sweep.py@ (the broader manual
 --   sweep), both built on 'tools/persistence_snapshot.py''s
 --   @compare_session_files@ — which reuses the EXACT SAME
