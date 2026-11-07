@@ -46,7 +46,12 @@ def test_artifacts() -> None:
             m = run_synthetic(tree, "raw", runs=1)
         finally:
             os.environ.pop("SYNTHETIC_RAW_PATH", None)
-        kept = list(m.invocation_dir.iterdir())
+        # The invocation directory also holds the finalized-evidence marker
+        # (#2931), and a directory listing's order is the filesystem's, not
+        # sorted: on Linux the marker can come first. Look at the RUN
+        # directories, which are what the assertion is about.
+        kept = sorted(p for p in m.invocation_dir.iterdir()
+                      if p.name.startswith("run-"))
         expect(kept and (kept[0] / "events.jsonl").exists(),
                "a harness-error run's artifacts are retained for inspection")
 
