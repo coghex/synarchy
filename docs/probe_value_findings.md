@@ -30,7 +30,7 @@ concrete precondition
 - [x] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [#2936]
 - [x] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [#2937] [#2938]
 - [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
-- [x] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time — [#2939]
+- [x] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time — [#2939] [#2940]
 - [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
 - [ ] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
 - [ ] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x
@@ -154,7 +154,7 @@ The transfer arc (#1013) has a focused gate per slice. `unified_transfer` is the
 
 ### [#2939] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
 
-> **Note:** Re-verified 2026-11-07 and split by owner decision into two issues. Part 1, "replace like PRB-4": `repair_ai` is replaced by focused coverage (2939); "shadowed by an Hspec group" holds for its phase 10 only, so its other phases move into Hspec first. Part 2, "small fix issue": `construction` did not regress (its "4 phases" record predates #799's phases 6-9); the fix reports its phase times, corrects that record and gives the sweep a timeout budget, which resolves the PRB-2 cap overrun. The second issue follows the first.
+> **Note:** Re-verified 2026-11-07 and split by owner decision into two issues. Part 1, "replace like PRB-4": `repair_ai` is replaced by focused coverage (#2939); "shadowed by an Hspec group" holds for its phase 10 only, so its other phases move into Hspec first. Part 2, "small fix issue": `construction` did not regress (its "4 phases" record predates #799's phases 6-9); the fix reports its phase times, corrects that record and gives the sweep a timeout budget, which resolves the PRB-2 cap overrun. The second issue is #2940.
 
 Two AI-job probes where the cost or the instability does not match what only they guard.
 
