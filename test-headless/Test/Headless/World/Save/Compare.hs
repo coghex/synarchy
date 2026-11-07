@@ -17,7 +17,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import Test.Headless.World.Save.Components.Fixture (page1, richSnapshot)
 import Unit.Types (UnitId(..))
-import World.Save.Compare (divergentGenerations, withoutOverrideDrivenPlayback)
+import World.Save.Compare (divergentGenerations, withLoadedPlayback)
 import World.Save.Physiology (withoutRebuiltCaches)
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..))
@@ -52,10 +52,19 @@ spec = describe "save generation comparison (#2936)" $ do
         withoutRebuiltCaches live `shouldNotBe` withoutRebuiltCaches gen2
         divergentGenerations [live, gen2, gen3, gen4] `shouldBe` []
 
-    it "excuses only the two override-driven playback fields" $ do
-        withoutOverrideDrivenPlayback live `shouldBe` withoutOverrideDrivenPlayback gen2
-        withoutOverrideDrivenPlayback (withUnit (\u → (liveStance u) { uisGridY = 9 }) base)
-            `shouldNotBe` withoutOverrideDrivenPlayback live
+    it "reconciles only the playback of a unit whose animation name changed" $ do
+        withLoadedPlayback gen2 live `shouldBe` gen2
+        -- another field riding along with the name is NOT reconciled
+        let alsoMoved = withUnit (\u → (liveStance u) { uisGridY = 9 }) base
+        withLoadedPlayback gen2 alsoMoved `shouldNotBe` gen2
+
+    it "rejects a timestamp-only change: the same animation name restarted at a \
+       \different time is a lost playback position, not an override reset" $ do
+        let liveIdle = withUnit (\u → u { uisCurrentAnim = "idle", uisAnimStart = 47.16 }) base
+            restarted = withUnit (\u → u { uisCurrentAnim = "idle", uisAnimStart = 47.5 }) base
+        withLoadedPlayback restarted liveIdle `shouldBe` liveIdle
+        divergentGenerations [liveIdle, restarted, restarted, restarted] `shouldBe` [1, 2, 3]
+        divergentGenerations [liveIdle, liveIdle, liveIdle] `shouldBe` []
 
     it "still rejects a durable difference between the live capture and a re-save" $ do
         let moved  = withUnit (\u → (loaded u) { uisGridX = 3 }) base

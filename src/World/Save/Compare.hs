@@ -19,10 +19,11 @@
 --     animation fields below compared EXACTLY.
 --
 --   * __Does the load keep the durable state of the live session?__ The
---     first re-save must equal the live capture, apart from the
---     override-driven playback fields ('withoutOverrideDrivenPlayback').
+--     first re-save must equal the live capture, apart from the playback of
+--     a unit whose animation name the load re-resolved
+--     ('withLoadedPlayback').
 module World.Save.Compare
-    ( withoutOverrideDrivenPlayback
+    ( withLoadedPlayback
     , divergentGenerations
     ) where
 
@@ -32,8 +33,10 @@ import World.Save.Physiology (withoutRebuiltCaches)
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..))
 
--- | A session snapshot without the playback fields the engine derives from
---   the runtime-only animation override: @uisCurrentAnim@ and @uisAnimStart@.
+-- | The live capture with the playback of every unit whose animation the load
+--   RESOLVED differently taken from the re-save: where a unit's
+--   @uisCurrentAnim@ in the live capture differs from the re-save's, both
+--   @uisCurrentAnim@ and @uisAnimStart@ are replaced by the re-save's.
 --
 --   @uiAnimOverride@ is "Runtime-only … always cleared post-load"
 --   (@World.Save.Types.fromUnitInstanceSnapshot@; the inventory's
@@ -43,32 +46,42 @@ import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..))
 --   name changes. So a unit that the Lua combat AI had in an override
 --   stance (@combat_idle_RH_dagger@, an @attack_*@ swing) when the live
 --   session was saved resolves to its state animation (@idle@) on the first
---   tick after the load, and the AI re-sets the override only once it runs
---   again. The name, and the start that follows it, are therefore not
---   something a load can or should restore.
+--   tick after the load, restarted at the loaded game time, and the AI
+--   re-sets the override only once it runs again. That name, and the start
+--   that follows it, are not something a load can or should restore.
 --
---   Everything else the animation block carries is kept: facing, the sim
---   mirrors @uisActivity@ / @uisPose@ / @uisAnimStride@ / @uisAnimReverse@
---   (the sim state is persisted by @unit-sim@) and all of a unit's durable
---   state.
-withoutOverrideDrivenPlayback ∷ SessionSnapshot → SessionSnapshot
-withoutOverrideDrivenPlayback snap = snap { snapPages = HM.map onPage (snapPages snap) }
+--   The exception is per unit and conditional on the name changing. A unit
+--   whose animation name is unchanged keeps its @uisAnimStart@ compared
+--   exactly: the load restores it verbatim and @publishToRender@ retains it
+--   while the playback is the same, so a timestamp-only difference is a lost
+--   playback position, not an override reset. The rest of the animation block
+--   (facing, the sim mirrors @uisActivity@ \/ @uisPose@ \/ @uisAnimStride@ \/
+--   @uisAnimReverse@, which @unit-sim@ persists) and all durable state stay
+--   compared.
+withLoadedPlayback ∷ SessionSnapshot → SessionSnapshot → SessionSnapshot
+withLoadedPlayback loadedSnap live = live { snapPages = HM.mapWithKey onPage (snapPages live) }
   where
-    onPage pg = pg { pgsUnits = onUnits (pgsUnits pg) }
-    onUnits us = us { usnInstances = HM.map onUnit (usnInstances us) }
-    onUnit u = u { uisCurrentAnim = "", uisAnimStart = 0 }
+    onPage pid pg = case HM.lookup pid (snapPages loadedSnap) of
+        Nothing → pg
+        Just lp → pg { pgsUnits = onUnits (pgsUnits lp) (pgsUnits pg) }
+    onUnits lu us = us { usnInstances = HM.mapWithKey (onUnit (usnInstances lu)) (usnInstances us) }
+    onUnit lus uid u = case HM.lookup uid lus of
+        Just l | uisCurrentAnim l ≢ uisCurrentAnim u →
+            u { uisCurrentAnim = uisCurrentAnim l, uisAnimStart = uisAnimStart l }
+        _ → u
 
 -- | The positions (0-based, never 0) of the saves in a chain that diverge,
 --   in order. Position @i ≥ 1@ diverges when it differs from the LIVE
---   capture in anything but the override-driven playback fields, or — for
+--   capture in anything but the playback 'withLoadedPlayback' reconciles, or — for
 --   @i ≥ 2@ — from the first re-save in anything but the rebuilt physiology
 --   caches (so the playback fields stay exact between loaded generations).
 --   An empty answer means the chain is a fixed point.
 divergentGenerations ∷ [SessionSnapshot] → [Int]
 divergentGenerations (live : first : rest) =
     [ i | (i, s) ← zip [1 ..] (first : rest)
-        , durable s ≢ durable live
-          ∨ (i ≥ 2 ∧ withoutRebuiltCaches s ≢ withoutRebuiltCaches first) ]
+        , withLoadedPlayback s liveDurable ≢ durable s
+          ∨ (i ≥ 2 ∧ durable s ≢ durable first) ]
   where
-    durable = withoutOverrideDrivenPlayback ∘ withoutRebuiltCaches
+    durable     = withoutRebuiltCaches
+    liveDurable = durable live
 divergentGenerations _ = []

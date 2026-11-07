@@ -29,8 +29,8 @@ and asserts they agree on both halves. The first file is the LIVE capture
 and the rest are re-saves taken across loads, so the codec compares them
 on two footings (`World.Save.Compare`, #2936): every re-save against the
 first re-save exactly (bar the rebuilt physiology caches), and the first
-re-save against the live capture bar the override-driven animation playback
-a load deliberately resets. This needs no engine, no GPU, and no window.
+re-save against the live capture bar the animation name (and the playback
+start that follows it) of a unit whose override a load deliberately cleared. This needs no engine, no GPU, and no window.
 
 Issue #2274: the last GHCi consumer in this family
 --------------------------------------------------
