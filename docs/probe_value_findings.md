@@ -28,7 +28,7 @@ concrete precondition
 
 - [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
 - [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [deferred]: needs one completed sweep trial on a revision with #2919
-- [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
+- [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [deferred]: needs one farm_ai run with per-phase elapsed times
 - [ ] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
 - [ ] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
 - [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
@@ -92,7 +92,9 @@ The sweep is a meta-probe: besides its own four-boot structural comparison it fa
 - **Scope and constraints:** `python3 tools/test_persistence_contract_sweep.py` guards the selectable list; `CLAUDE.md` names it as the self-test for changes to `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS`; `tools/README.md` rows for the sweep must follow.
 - **Remaining uncertainty:** The sweep's own phase on a passing run is unmeasured (it has never passed); whether the mismatch is nondeterminism or an artefact of the probe's comparison is undiagnosed.
 
-### PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
+### [deferred] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
+
+> **Deferred:** The scan is not shown to be the cost: the "O(n^2) scan, ~11 min" note dates from the #721 registration and no phase was ever timed; `till_probe` uses the same scan at 74 s in total; and `farm_ai` carries real-time AI waits (90, 120, 60, 30 and 90 s deadlines, a time-scale dwell, a save/reload). `farm_ai_probe.py` prints no per-phase times today, so the measuring run needs them added — re-decide after one `farm_ai` run with per-phase elapsed times (the six `find_tillable` scans versus each AI wait), scheduled by the manager after the PRB-2 measurement. Owner decision 2026-11-07: defer and measure.
 
 `farm_ai` is the slowest probe that is not a multi-boot scenario, and the registry itself attributes the time to a tile scan.
 
