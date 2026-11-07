@@ -117,6 +117,13 @@ another owner's processes. User cancellation still ends the wait immediately.
   Probe eligibility and path selection live in `tools/ci_probes.py`
   (`--status`; run `--self-test` when changing it). Tool documentation:
   [tools/README.md](tools/README.md).
+- **A failing probe keeps its evidence.** `run_probes.py` and `probe_flake.py`
+  keep a failed, errored or timed-out attempt's directory (scratch trees, save
+  slots, engine logs) under `~/.local/state/synarchy/probe-failures/<probe>/`
+  (`SYNARCHY_PROBE_FAILURE_ROOT` overrides; the newest 5 per probe stay) and
+  print its path; a passing run leaves nothing. Read it before repeating a run,
+  and copy anything you report under `~/.local/state` first. See
+  [tools/README.md](tools/README.md) §Failing-probe evidence.
 - **Local lab.** Coordinated local testing (`$flake`, `$deflake`, `$test`,
   `$assess-tests`) runs through the external
   [quruntul](https://github.com/coghex/quruntul) lab, which reads
