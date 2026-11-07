@@ -35,11 +35,12 @@ concrete precondition
 - [x] PRB-7. `tutorial_hud` failed three runs of three with no retained reason — [#2942]
 - [x] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x — [#2943]
 - [x] PRB-9. Three pairs of companion probes pay two boots for one fixture — [no-issue]
-- [ ] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain
+- [x] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain — [no-issue]
 - [ ] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run
 - [ ] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
 - [ ] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
 - [ ] PRB-14. The cost and value data needed to rank probes is not tracked
+- [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
 
 ---
 
@@ -302,7 +303,9 @@ Three pairs share a fixture family, an issue, or a stated dependency, and each c
 
 ## Keep as is
 
-### PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain
+### [no-issue] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification: keep all eight probes as they are. All eight passed in every run they were measured in (run C total 1,097 s). The cost to explain is explained: `gameplay_tag_persistence` runs about 11 fresh-process engines (A to G for the generated and arena legs, P1 to P4 for the place leg), so its 395 s is about 34 s per engine, the same per-engine figure as the grown `persistence_contract` (PRB-8); it is the probe's structure, not a defect. `autosave`'s 212-216 s is the validated 1-minute minimum interval. The per-engine cost itself is filed as PRB-15.
 
 These probes prove state across a process boundary, which Hspec structurally cannot.
 
@@ -459,3 +462,24 @@ Ranking probes by what they cost and what they catch needed three sources that a
 - **Expected direction:** Record per-probe wall time from a recent run in a tracked place (the census is the natural owner), emit per-phase times in `probe-result/v1` so cost drivers are visible, and give "found a defect" a convention (for example a line in the fixing PR body or issue naming the probe) so the next review of this kind has a value column. Without the third, every future audit reaches the same "no evidence either way".
 - **Scope and constraints:** `docs/probe_census.json` is PR-only (listed in `~/.config/docs-push.json`); `tools/test_probe_census.py` and `python3 .quruntul/checks.py` apply. Not a duplicate of #2931 (failure evidence) or #2932 (GPU lock).
 - **Remaining uncertainty:** The issue-title sample is a GitHub relevance-ranked search limited to 150, so it understates catches filed under other titles.
+
+### PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+
+Added 2026-11-07 while processing PRB-10 (owner decision: append as a new unprocessed finding, with a timing measurement as its first step). Seventy-one files under `tools/` load the game definitions into each engine they boot by sending one debug-console command per YAML file (`engine.loadItemYaml(path)`, `engine.loadUnitYaml(path)`, and the other loaders), 75 files for the usual set: 4 substances, 39 items, 1 equipment, 13 materials, 1 faction, 1 physiology, 8 units, 8 buildings. The same bootstrap repeats on every fresh-process engine of the multi-engine probes, so its cost may be a large share of the roughly 34 s per engine seen in `persistence_contract` (PRB-8) and `gameplay_tag_persistence` (PRB-10). It is unmeasured, and no row of the report covers it.
+
+| Probe | Gate | Run C (s) | Runs A / B (s) | Proposal |
+|---|---|---|---|---|
+| (cross-cutting, about 71 probe files) | n/a | n/m | n/m | measure first |
+
+**Evidence:**
+
+- `tools/cargo_capacity_probe.py:30-47` — `bootstrap()` loops over eight `data/<family>/*.yaml` globs and calls `send(PORT, f"{fn}('{path}'); return 'ok'")` once per file; the probe then makes about 180 more round trips in its overfill loop and takes 85-86 s in all three shakedown runs, which puts a console round trip at roughly 0.2-0.3 s and the 75-file bootstrap at roughly 15-25 s. This is an inference from one probe's total, not a measurement.
+- `tools/persistence_contract_probe.py:230-243` and `tools/gameplay_tag_persistence_probe.py:143` define the same `bootstrap_defs`; the former boots about 20 fresh engines and the latter about 11, each calling it (`persistence_contract` 686 s in run C, `gameplay_tag_persistence` 395 s, both about 34 s per engine).
+- `git grep -l "engine.loadItemYaml" -- tools` returns 71 files, many with a private copy of the loop (`bootstrap_defs` in `bleeding_trail`, `blood_impact`, `circadian`, `combat_anim`, `item_instance`, `lua_orphan_prune` and others, `load_defs` in `location_content` and `location_stamp_idempotent`). I found no bulk loader verb in `src/Engine/Scripting` or `tools/probelib.py`.
+
+**Handoff context:**
+
+- **Current behavior:** Each engine boot pays about 75 serial console round trips of definition loading before its scenario starts, and 71 files carry their own copy of the loop.
+- **Expected direction:** First step, a measurement and nothing else: time `bootstrap_defs` (wall seconds around the loop) in one probe, for example `cargo_capacity` and one engine of `persistence_contract`, and compare with that probe's total. Only if it is a large share, consider one engine-side or `probelib` bulk loader (a single console call that loads every family) used by the probes; that is a separate decision with its own issue. No saving is estimated here.
+- **Scope and constraints:** A bulk path must load exactly the same definitions in the same order as the per-file loop, because several probes depend on load order and on a clean per-run registry; `tools/probelib.py` is shared by every probe, so a change there needs the probe tool self-tests (`python3 tools/test_probelib.py`).
+- **Remaining uncertainty:** The per-round-trip latency and the bootstrap's share of any probe are inferred, not measured; whether the console round trip or the engine-side parse dominates is unknown.
