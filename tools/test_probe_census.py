@@ -27,8 +27,9 @@ its own ordered inventory:
   `probe_census_tests.policy`      11  #1430's acceptable-failure
                                        policy, the refusal contract, and
                                        the mutation CLI;
-  `probe_census_tests.validation`   5  #1492's declared schema and
-                                       #1493's cross-field invariants;
+  `probe_census_tests.validation`   6  #1492's declared schema,
+                                       #1493's cross-field invariants and
+                                       #2926's registry agreement gate;
   `probe_census_tests.cohort`       9  #1429's cohorts, staleness and
                                        the summary reader;
   `probe_census_tests.outcomes`     2  #1439's outcome log and the
@@ -175,13 +176,14 @@ BLOCK_RUNNERS = {"promotion": promotion.run_cases}
 NON_OWNER_MODULES = {"__init__", "support"}
 
 #: The group count each family carried at the split (#2129): 12 + 11 + 5
-#: + 9 + 2 + 5 = 44, the aggregate's count at this PR's base. A FLOOR,
+#: + 9 + 2 + 5 = 44, the aggregate's count at that PR's base, and 45 once
+#: #2926 added the registry agreement gate to validation. A FLOOR,
 #: not an exact count, so a legitimately added group joins without an
 #: edit here; a family declaring FEWER is a truncation and is refused.
 MINIMUM_GROUPS = {
     "storage": 12,
     "policy": 11,
-    "validation": 5,
+    "validation": 6,
     "cohort": 9,
     "outcomes": 2,
     "promotion": 5,
@@ -205,8 +207,8 @@ SEQUENCE_FRAGMENTS = (
 
 #: The aggregate's group count at the split (#2129), and a FLOOR rather
 #: than an exact count so a legitimately added group joins without an
-#: edit here. Stated independently of `MINIMUM_GROUPS` above, which sums
-#: to the same 44: lowering one family's floor to make room for a
+#: edit here. Stated independently of `MINIMUM_GROUPS` above, which summed
+#: to the same 44 at the split: lowering one family's floor to make room for a
 #: truncation still has to get past this one.
 AGGREGATE_GROUPS_AT_THE_SPLIT = 44
 
