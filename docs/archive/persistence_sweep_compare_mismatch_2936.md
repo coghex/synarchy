@@ -75,10 +75,15 @@ questions:
   physiology caches `withoutRebuiltCaches` already excuses. This is the
   fixed-point property a persistence defect breaks, and it covers the two
   playback fields.
-- the first re-save against the live capture: the same, plus
-  `uisCurrentAnim` and `uisAnimStart` excused. Facing, position, the sim
-  mirrors (`uisActivity`, `uisPose`, `uisAnimStride`, `uisAnimReverse`) and all
-  durable state stay compared.
+- the first re-save against the live capture: the same, except that for a
+  unit whose `uisCurrentAnim` differs between the two, the live capture's
+  `uisCurrentAnim` and `uisAnimStart` are replaced by the re-save's (the load
+  re-resolved that unit's animation and restarted playback). A unit whose name
+  is unchanged keeps `uisAnimStart` compared exactly: the load restores it
+  verbatim and `publishToRender` retains it while the playback is the same, so
+  a timestamp-only change would be a lost playback position (review round 1).
+  Facing, position, the sim mirrors (`uisActivity`, `uisPose`, `uisAnimStride`,
+  `uisAnimReverse`) and all durable state stay compared.
 
 The Hspec group `save generation comparison` pins the incident, the excused
 fields, rejection of a durable difference against the live capture, exactness

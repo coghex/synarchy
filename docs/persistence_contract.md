@@ -207,10 +207,13 @@ runtime-only `uiAnimOverride`, and `publishToRender` resolves
 `uiCurrentAnim` from `chooseAnim pose override stateAnim` every tick,
 restarting `uiAnimStart` when the name changes, so a live session saved while
 the Lua combat AI held a unit in a stance (`combat_idle_*`, an `attack_*`
-swing) re-saves as the state animation. That pair of fields is therefore not
-compared between the live capture and the first re-save, but it IS compared
-exactly between loaded generations, and every other field of the live capture
-is compared against the first re-save as before. The comparison is
+swing) re-saves as the state animation. For a unit whose name differs between the
+live capture and the first re-save, that pair of fields is therefore taken
+from the re-save; a unit whose name is unchanged keeps `uiAnimStart` compared
+exactly (the load restores it verbatim, so a timestamp-only change is a lost
+playback position). Both fields are compared exactly between loaded
+generations, and every other field of the live capture is compared against the
+first re-save as before. The comparison is
 registry-free, so it sees a pin and nothing else; the Persistence spec
 guards that no shipped definition defaults blood to Nominal. Everything else in the physiology stat set is
 durable and compared exactly: a Simulated system's pools and meters, the
