@@ -195,7 +195,7 @@ def run(port: int, rep: probe_protocol.Reporter) -> int:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait(timeout=5)
-        probe_evidence.retire(temporary)  # raises, like TemporaryDirectory.cleanup
+        probe_evidence.retire(temporary, reset_permissions=True)  # raises, like TemporaryDirectory.cleanup
 
 
 def main() -> int:

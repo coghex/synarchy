@@ -838,7 +838,7 @@ def test_scratch_cleanup_failures_still_propagate() -> None:
         with probe_evidence.temporary_directory(prefix="gone_") as made:
             real(made)
         expect(True, "a tree that already vanished is not an error")
-        expect("probe_evidence.retire(temporary)" in
+        expect("probe_evidence.retire(temporary, reset_permissions=True)" in
                (Path(__file__).parent / "audio_null_probe.py").read_text(),
                "audio_null's strict cleanup still raises")
     finally:
@@ -1023,6 +1023,67 @@ def test_probe_side_helpers_defer_to_a_runner() -> None:
                 os.environ[name] = value
 
 
+def test_read_only_copies_are_removed_like_temporarydirectory_does() -> None:
+    print("\n-- trees copied from a read-only source still clean up")
+    if os.getuid() == 0:
+        expect(True, "(running as root: no mode defeats rmtree)")
+        return
+
+    def read_only_tree(base: Path) -> Path:
+        tree = base / "work"
+        (tree / "config" / "sub").mkdir(parents=True)
+        (tree / "config" / "sub" / "f.yaml").write_text("x")
+        (tree / "config" / "sub").chmod(0o555)
+        (tree / "config").chmod(0o555)
+        return tree
+
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    try:
+        # run directly: temporary_directory and the strict retire
+        with tempfile.TemporaryDirectory(prefix="evidence-ro-") as temp:
+            temp = Path(temp).resolve()
+            with probe_evidence.temporary_directory(prefix="ro_") as made:
+                inner = read_only_tree(Path(made))
+            expect(not os.path.exists(made),
+                   "temporary_directory resets permissions and retries, as "
+                   "TemporaryDirectory did")
+            tree = read_only_tree(temp)
+            probe_evidence.retire(tree, reset_permissions=True)
+            expect(not tree.exists(), "and so does retire(reset_permissions) "
+                   "(audio_null's former temporary.cleanup())")
+            tree = read_only_tree(temp)
+            try:
+                probe_evidence.retire(tree)
+                plain = "removed"
+            except PermissionError:
+                plain = "refused"
+            expect(plain == "refused",
+                   "while a plain retire() still reports the genuine failure")
+            probe_evidence.remove_tree(tree)
+
+        # under a runner: the retired tree is deleted by the runner, which
+        # must manage the same thing
+        with tempfile.TemporaryDirectory(prefix="evidence-ro-run-") as temp:
+            retention = probe_evidence.Retention(
+                Path(temp).resolve() / "root", 5, trees=[])
+            retention.root.mkdir()
+            attempt = retention.begin("p")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt.path)
+            with probe_evidence.temporary_directory(prefix="ro_") as made:
+                read_only_tree(Path(made))
+            os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR)
+            expect(attempt.finish("PASS") is None
+                   and not attempt.path.exists(),
+                   "a passing attempt holding a read-only copy is deleted")
+    finally:
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+    expect("retire(temporary, reset_permissions=True)" in
+           (Path(__file__).parent / "audio_null_probe.py").read_text(),
+           "audio_null keeps its permission-resetting cleanup")
+
+
 def test_the_child_environment_is_the_runners_alone() -> None:
     print("\n-- run_one hands the evidence directory over, and only then")
     tree = Tree()
@@ -1130,6 +1191,7 @@ TESTS = (
     test_invocation_owned_trees_are_never_deleted_directly,
     test_archival_and_removal_failures_are_reported_not_swallowed,
     test_probe_side_helpers_defer_to_a_runner,
+    test_read_only_copies_are_removed_like_temporarydirectory_does,
     test_the_child_environment_is_the_runners_alone,
     test_record_engine_log_only_acts_under_a_runner,
     test_the_four_keep_artifacts_probes_share_one_rule,

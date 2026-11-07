@@ -263,7 +263,7 @@ def _failed_units(probe_dir: Path) -> list[tuple[str, str, str, Path, Path | Non
         if not runs:
             # Finalized and holding nothing: not evidence, only clutter.
             with contextlib.suppress(OSError):
-                shutil.rmtree(path)
+                remove_tree(path)
     return sorted(units, key=lambda unit: unit[:3])
 
 
@@ -278,7 +278,7 @@ def prune(probe_dir: Path, keep: int) -> list[str]:
     problems = []
     for _stamp, _name, _run, path, owner in units[:max(0, len(units) - keep)]:
         try:
-            shutil.rmtree(path)
+            remove_tree(path)
         except FileNotFoundError:
             pass  # a concurrent pruner got there first
         except OSError as error:
@@ -293,7 +293,7 @@ def prune(probe_dir: Path, keep: int) -> list[str]:
                 continue
             if not left:
                 with contextlib.suppress(OSError):
-                    shutil.rmtree(owner)
+                    remove_tree(owner)
     return problems
 
 
@@ -463,7 +463,7 @@ class Attempt:
                     manifest = (self.path / ENGINE_LOG_MANIFEST).read_text(
                         encoding="utf-8")
             try:
-                shutil.rmtree(self.path)
+                remove_tree(self.path)
             except FileNotFoundError:
                 return None
             except OSError as error:
@@ -658,12 +658,43 @@ def is_runner_owned(path, environ=None) -> bool:
 RETIRED_DIR = "retired"
 
 
+def _make_writable(path) -> None:
+    """Give the owner rwx on every real directory (and rw on files) in a tree.
+
+    `shutil.copytree` preserves modes, so a tree copied from a read-only
+    checkout holds directories `rmtree` cannot empty. Symlinks are never
+    followed or changed.
+    """
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            entry = os.path.join(root, name)
+            with contextlib.suppress(OSError):
+                if not os.path.islink(entry):
+                    os.chmod(entry, os.stat(entry).st_mode | 0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(path, os.stat(path).st_mode | 0o700)
+
+
+def remove_tree(path) -> None:
+    """`shutil.rmtree`, with `tempfile.TemporaryDirectory`'s permission retry.
+
+    A permission failure resets the owner bits and tries ONCE more; any
+    other failure, and a second one, raises -- a genuine cleanup failure
+    still propagates.
+    """
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        _make_writable(path)
+        shutil.rmtree(path)
+
+
 STRICT_MARK = ".strict-cleanup"
 
 
-def _retire(path, *, strict: bool) -> None:
+def _retire(path, *, strict: bool, reset_permissions: bool = False) -> None:
     if not is_runner_owned(path):
-        shutil.rmtree(path)
+        (remove_tree if reset_permissions else shutil.rmtree)(path)
         return
     held = os.path.realpath(evidence_dir())
     if os.path.realpath(str(path)) == held:
@@ -680,7 +711,7 @@ def _retire(path, *, strict: bool) -> None:
             Path(held, STRICT_MARK).touch()
 
 
-def retire(path) -> None:
+def retire(path, *, reset_permissions: bool = False) -> None:
     """Take a probe-owned tree out of the way; raises `OSError` on failure.
 
     Run directly this is `shutil.rmtree(path)`. Under a runner, a tree
@@ -696,9 +727,11 @@ def retire(path) -> None:
     the attempt is marked so that, if the runner's own deletion of the
     retired tree later fails, a passing run is turned into a failure
     rather than leaving a green result beside leftover artifacts.
-    `discard_scratch` is the lenient form.
+    `discard_scratch` is the lenient form. `reset_permissions` keeps
+    `TemporaryDirectory`'s behaviour for trees copied from a read-only
+    source: the owner bits are reset and the removal tried once more.
     """
-    _retire(path, strict=True)
+    _retire(path, strict=True, reset_permissions=reset_permissions)
 
 
 def discard_scratch(path) -> None:
@@ -765,7 +798,7 @@ def temporary_directory(prefix: str = "tmp"):
         yield path
     finally:
         try:
-            retire(path)
+            retire(path, reset_permissions=True)
         except FileNotFoundError:
             pass
 

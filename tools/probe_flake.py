@@ -736,7 +736,7 @@ def new_invocation_dir(root: Path, probe: str) -> Path:
 def _remove_tree(path: Path) -> str | None:
     """Delete a passing run's directory; the failure, if any, as text."""
     try:
-        shutil.rmtree(path)
+        probe_evidence.remove_tree(path)
     except FileNotFoundError:
         return None
     except OSError as error:
