@@ -131,8 +131,9 @@ is guaranteed to be in flight), overwrite intent, ordinary-save restoration
 without the source file, and a fresh-process load and recapture whose documents
 are byte-identical. `--retain` copies the documents and the comparison out. It is
 a manual evidence script, not a registered CI probe; the GPU-free hspec group
-`Scenario.Capture` is the gate. Boot it only after the project's probe-slot
-grant, and stop engines by PID. The contract is in
+`Scenario.Capture` is the gate. Stop engines by PID; a graphical boot takes the
+machine-wide `gpu-desktop` hold itself, so no manual grant is needed (see
+[the `gpu-desktop` hold](#the-gpu-desktop-hold-one-graphical-probe-at-a-time-2932)). The contract is in
 [engine_contracts.md](../docs/engine_contracts.md#scenario-capture-the-coherent-snapshot-and-the-safe-file-write-2714);
 the retained run is [the evidence](../docs/pr-proofs/issue-2714-scenario-capture-evidence.md).
 
@@ -173,7 +174,9 @@ probe owns what a process boundary adds:
 
 `--offscreen` runs the boot, partial-content and fatal checks against
 `--offscreen` instead; it needs a GPU, so it is manual and not part of the
-registered (CI) run. Boot it only after the project's probe-slot grant. Logs are
+registered (CI) run. It takes the machine-wide `gpu-desktop` hold itself (see
+[the `gpu-desktop` hold](#the-gpu-desktop-hold-one-graphical-probe-at-a-time-2932)),
+so no manual grant is needed. Logs are
 kept when a check fails; `--retain DIR` copies them out. The contract is in
 [engine_contracts.md](../docs/engine_contracts.md#scenario-entry-points-lua-the-console-and-direct-cli-boot-2715).
 
@@ -2831,6 +2834,52 @@ Holder notes are DIAGNOSTICS ONLY: mutual exclusion is the flock, and a
 refused acquirer reads the notes so it can say who is in the way. A note is
 live while its own flock is held, never by the pid it records.
 
+#### The `gpu-desktop` hold: one graphical probe at a time (#2932)
+
+The owner's rule is one probe at a time for anything that drives the desktop or
+the GPU. The tooling enforces it; **no manual probe-slot grant is needed**. The
+lock is the host-wide resource `gpu-desktop`, held EXCLUSIVELY:
+
+* **What takes it.** Which registered probes take it is not a list kept here: it
+  is `ci_probes.gpu_probe_keys()`, the probes classified `needs-gpu` (the
+  `[needs-gpu]` rows of `python3 tools/ci_probes.py --status`).
+  `probe_runner_resources.exclusive_resources(key)` includes it for those keys, so
+  `run_probes.py` (sequential and `--jobs`), `probe_flake.py` / `/deflake` and the
+  quruntul trial all see one set. Headless and `--dump` probes never take it.
+* **Direct runs.** A probe launched by hand takes the same hold, from the engine
+  arguments it is about to exec rather than from its name:
+  `probelib.boot` and `scenario_entrypoint_probe.py`'s launcher call
+  `probe_gpu_hold.ensure_for_launch`, which applies the engine's own boot-profile
+  precedence (`--language-report` > `--dump` > `--preview` > `--offscreen` >
+  `--headless` > graphical). So `wire_lighting_probe.py` (unregistered),
+  `scenario_entrypoint_probe.py --offscreen` (CI-eligible by default) and
+  `audio_manual_probe.py --interactive` are covered without being listed. The hold
+  is one per process, kept to its exit, so a probe that boots several engines
+  (`offscreen_probe.py` runs two at once) never queues behind itself. A runner,
+  `/deflake` or trial that already holds it passes it down in
+  `SYNARCHY_PROBE_HELD_HOST`, and the probe takes nothing.
+* **Host-wide.** Unlike `repo-config` and `cabal-build`, which stay scoped to one
+  repository, its lock file and holder notes live in a fixed `host` namespace, so a
+  probe in ANY worktree or independent clone conflicts with it. Waiters in one
+  repository (all its worktrees) queue in arrival order; waiters from independent
+  clones are arbitrated by the lock alone.
+* **Waiting, not failing.** A probe that needs it waits, prints who holds it (user,
+  pid, what it is doing, since when) and runs when the holder exits. The wait is
+  before the probe starts, so it is never part of a probe's elapsed time or timeout
+  and is never a FAIL or TIMEOUT. A dead holder is detected by the lock itself
+  (the `flock` dies with the process). The exceptions are the callers that cannot
+  wait: `/deflake` reports `resource-busy` as for any other resource, and the
+  quruntul trial gives up after `GPU_WAIT_SECONDS` as blocked (exit 3, no probe
+  result), with the same allowance added to its trial limit.
+* **Lock order.** `gpu-desktop` is taken before any repository resource and is
+  never waited for while one is held (a runner takes its whole set in one
+  all-or-nothing attempt; the direct guard runs after the engine is prepared), so
+  the two scopes cannot form a deadlock cycle.
+
+`python3 tools/test_probe_resource_lock.py`, the `resources` family of
+`tools/test_run_probes.py`, `tools/test_probe_flake.py` and
+`python3 .quruntul/checks.py` cover it without an engine.
+
 ### `deflake.py` — one bounded census measurement, end to end (#1436)
 
 The orchestration that puts the five components in order: `probe_select`
@@ -3092,7 +3141,7 @@ exactly by the self-test rather than spot-checked, and stated there rather
 than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
 `probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
-`probe_select`, `probe_engine`, `probe_evidence`,
+`probe_select`, `probe_engine`, `probe_evidence`, `probe_gpu_hold`,
 `probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`,
 and `deflake_diagnosis` with the `deflake_contract` document rules it was
 split from, each of which owns probe selection, launch, port

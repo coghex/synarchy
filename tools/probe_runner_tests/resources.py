@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The executable preflights and the cross-process resource model (#2130).
 
-Twenty-three groups over `probe_runner_resources`:
+Twenty-six groups over `probe_runner_resources`:
 
   the binaries a probe execs are resolved ONCE, before any probe (#1570,
   #2274) --
@@ -29,6 +29,7 @@ the source scan behind the Cabal-launch audit.
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import shutil
 import subprocess
@@ -53,6 +54,7 @@ from .support import (
     wait_file,
 )
 
+import ci_probes  # noqa: E402
 import probe_engine  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_runner_registry  # noqa: E402
@@ -1036,12 +1038,155 @@ TESTS_PROPAGATION_AND_HOLDS = (
     test_resource_ledger_is_a_reader_writer_lock,
 )
 
+# --------------------------------------------------------------------------
+# The machine-wide `gpu-desktop` exclusion, at the runner (#2932)
+#
+# The host-wide lock file lives in `probe_resource_lock.LOCK_ROOT`, so unlike
+# the per-case namespaces above these cases redirect the ROOT as well: a
+# synthetic GPU probe must never take the real machine's `gpu-desktop`, nor
+# be held back by a genuine probe a worker has running beside this suite.
+# --------------------------------------------------------------------------
+@contextlib.contextmanager
+def gpu_world(*gpu_keys: str):
+    """A private lock root, and these synthetic keys classified `needs-gpu`."""
+    root = Path(tempfile.mkdtemp(prefix="test_run_probes_gpu_"))
+    os.chmod(root, probe_resource_lock.SHARED_DIR_MODE)
+    saved = (probe_resource_lock.LOCK_ROOT, ci_probes.MANUAL_ONLY_REASONS)
+    probe_resource_lock.LOCK_ROOT = root
+    ci_probes.MANUAL_ONLY_REASONS = dict(
+        saved[1], **{key: (ci_probes.Reason(ci_probes.NEEDS_GPU, "synthetic"),)
+                     for key in gpu_keys})
+    try:
+        yield root
+    finally:
+        probe_resource_lock.LOCK_ROOT, ci_probes.MANUAL_ONLY_REASONS = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_gpu_probes_in_one_sweep_never_overlap_but_headless_ones_do() -> None:
+    print("\n-- two needs-gpu probes of one sweep serialize; a headless probe "
+          "runs beside them")
+    with gpu_world("gpu_a", "gpu_b"):
+        tree = Tree()
+        try:
+            tree.add("gpu_a", dwell=1.0, descendant=False)
+            tree.add("gpu_b", dwell=1.0, descendant=False)
+            tree.add("head_a", dwell=1.0, descendant=False)
+            with patched(tree):
+                rc, out = main_with_open(tree, ["--jobs", "3"])
+            first, second, headless = (tree.window(n)
+                                       for n in ("gpu_a", "gpu_b", "head_a"))
+            expect(rc == 0, f"all three pass (exit {rc})")
+            expect(not overlaps(first, second),
+                   f"the GPU probes never run at once (gpu_a {first}, gpu_b {second})")
+            expect(overlaps(headless, first) or overlaps(headless, second),
+                   f"but the headless probe overlaps a GPU probe "
+                   f"(head_a {headless}, gpu_a {first}, gpu_b {second})")
+        finally:
+            tree.cleanup()
+
+
+def test_a_gpu_probe_waits_for_another_checkouts_hold_while_headless_probes_run() -> None:
+    print("\n-- another checkout's gpu-desktop hold stalls only the GPU probe, "
+          "and the runner says who holds it")
+    with gpu_world("gpu_a"):
+        tree = Tree()
+        namespace = f"selftest{uuid.uuid4().hex[:12]}"
+        foreign = probe_resource_lock.acquire(
+            exclusive={probe_resource_lock.GPU_DESKTOP},
+            namespace=f"clone{uuid.uuid4().hex[:12]}",
+            purpose="another checkout's offscreen probe")
+        seen: dict = {}
+        saved_poll = probe_runner_resources.RESOURCE_WAIT_POLL
+        try:
+            tree.add("gpu_a", dwell=0.2, descendant=False)
+            tree.add("head_a", dwell=0.2, descendant=False)
+            probe_runner_resources.RESOURCE_WAIT_POLL = 0.2
+            result: dict = {}
+
+            def sweep() -> None:
+                with patched(tree, namespace=namespace):
+                    result["rc"], result["out"] = main_with_open(
+                        tree, ["--jobs", "2"])
+
+            thread = threading.Thread(target=sweep, daemon=True)
+            thread.start()
+            time.sleep(2.5)
+            seen["still_waiting"] = thread.is_alive()
+            seen["gpu_started"] = tree.started("gpu_a")
+            seen["headless_done"] = tree.window("head_a")[1] is not None
+            foreign.release()
+            thread.join(timeout=90)
+            out = result.get("out") or ""
+            expect(seen["still_waiting"], "the sweep waits for the GPU rather than failing")
+            expect(not seen["gpu_started"], "the GPU probe does not start beside the foreign hold")
+            expect(seen["headless_done"],
+                   "while the headless probe ran and finished meanwhile")
+            expect(not thread.is_alive() and result.get("rc") == 0,
+                   f"released, the GPU probe runs and the sweep passes (exit {result.get('rc')})")
+            expect("waiting for 'gpu-desktop'" in out,
+                   "the runner names the resource it is waiting for")
+            expect(f"pid {os.getpid()}" in out
+                   and "another checkout's offscreen probe" in out and "since " in out,
+                   "and who holds it, doing what, since when")
+            got = tree.intervals("gpu_a")
+            expect(len(got) == 1 and got[0][1] is not None,
+                   f"gpu_a ran exactly once, after the wait ({got})")
+        finally:
+            probe_runner_resources.RESOURCE_WAIT_POLL = saved_poll
+            foreign.release()
+            tree.cleanup()
+
+
+def test_waiting_for_gpu_desktop_is_not_charged_to_the_probe() -> None:
+    print("\n-- the GPU wait is never part of a probe's elapsed time or timeout")
+    with gpu_world("gpu_a"):
+        tree = Tree()
+        namespace = f"selftest{uuid.uuid4().hex[:12]}"
+        foreign = probe_resource_lock.acquire(
+            exclusive={probe_resource_lock.GPU_DESKTOP},
+            namespace=f"clone{uuid.uuid4().hex[:12]}", purpose="a long GPU probe")
+        saved_poll = probe_runner_resources.RESOURCE_WAIT_POLL
+        try:
+            tree.add("gpu_a", dwell=0.2, descendant=False)
+            probe_runner_resources.RESOURCE_WAIT_POLL = 0.2
+            result: dict = {}
+
+            def sweep() -> None:
+                with patched(tree, namespace=namespace):
+                    # Sequential, with a timeout far shorter than the wait.
+                    result["rc"], result["out"] = main_with_open(
+                        tree, ["--jobs", "1", "--timeout", "3"])
+
+            thread = threading.Thread(target=sweep, daemon=True)
+            thread.start()
+            time.sleep(6.0)
+            still_waiting = thread.is_alive()
+            foreign.release()
+            thread.join(timeout=90)
+            out = result.get("out") or ""
+            expect(still_waiting, "the sweep waited rather than running or failing")
+            expect(result.get("rc") == 0 and "TIMEOUT" not in out,
+                   f"a 6 s wait against a 3 s timeout is a PASS, not a TIMEOUT "
+                   f"(exit {result.get('rc')})")
+            window = tree.window("gpu_a")
+            expect(window[1] is not None and (window[1] - window[0]) < 3.0,
+                   f"the probe's own window is its execution alone ({window})")
+        finally:
+            probe_runner_resources.RESOURCE_WAIT_POLL = saved_poll
+            foreign.release()
+            tree.cleanup()
+
+
 #: The cross-process half: a holder this runner did not start.
 TESTS_FOREIGN_HOLDERS = (
     test_a_foreign_exclusive_holder_makes_the_sweep_wait,
     test_waiting_for_a_foreign_holder_is_not_charged_to_the_probe,
     test_a_foreign_shared_holder_never_blocks_a_shared_probe,
     test_a_run_probes_exclusive_probe_blocks_a_foreign_shared_acquirer,
+    test_gpu_probes_in_one_sweep_never_overlap_but_headless_ones_do,
+    test_a_gpu_probe_waits_for_another_checkouts_hold_while_headless_probes_run,
+    test_waiting_for_gpu_desktop_is_not_charged_to_the_probe,
 )
 
 #: This family's complete ordered inventory: its fragments, in the order

@@ -10,6 +10,7 @@ never boot anything.
 from __future__ import annotations
 
 import ast
+import contextlib
 from dataclasses import dataclass, field
 import hashlib
 import importlib.util
@@ -285,13 +286,32 @@ class AdapterChecks(unittest.TestCase):
         resources.codec_preflight = lambda namespace, environ=None, announce=None: calls.append(("codec",)) or os.environ["SYNARCHY_SAVE_CODEC_EXE"]
         resources.exclusive_resources = lambda key: set()
         resources.shared_resources = lambda key: {"cabal-build"}
+        resources.cross_process_interests = lambda key, namespace: (set(), {"cabal-build"})
+        gpu_hold = types.ModuleType("probe_gpu_hold")
+
+        @contextlib.contextmanager
+        def hold_for_probe(key, **kwargs):
+            calls.append(("gpu", key, kwargs))
+            if gpu_busy:
+                raise lock.ResourceBusy()
+            yield {}
+
+        gpu_hold.hold_for_probe = hold_for_probe
+        gpu_busy = []
+
+        class Busy(Exception):
+            def describe(self):
+                return "gpu-desktop busy"
+
+        lock.ResourceBusy = Busy
         flake = types.ModuleType("probe_flake")
         measured = []
         flake.main = lambda argv: calls.append(("measure",)) or measured.append(list(argv)) or 0
-        names = ("probe_flake", "probe_resource_lock", "probe_runner_resources", "probe_engine", "save_compat_audit_codec")
+        names = ("probe_flake", "probe_resource_lock", "probe_runner_resources", "probe_engine",
+                 "save_compat_audit_codec", "probe_gpu_hold")
         saved = {name: sys.modules.get(name) for name in names}
         sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources,
-                           probe_engine=engine, save_compat_audit_codec=codec)
+                           probe_engine=engine, save_compat_audit_codec=codec, probe_gpu_hold=gpu_hold)
         argv, cwd, environ = sys.argv, os.getcwd(), dict(os.environ)
         try:
             with tempfile.TemporaryDirectory() as temp:
@@ -303,6 +323,20 @@ class AdapterChecks(unittest.TestCase):
                     runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
                 self.assertEqual(refused.exception.code, 3)
                 self.assertEqual(calls, [])
+                os.environ.update(SYNARCHY_PROBE_ENGINE_EXE="/bin/engine", SYNARCHY_SAVE_CODEC_EXE="/bin/codec")
+                with self.assertRaises(SystemExit):
+                    runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+                # #2932: running out of the GPU wait allowance is contention, not a
+                # probe result. The trial ends blocked (3) before taking any repository
+                # interest or measuring anything.
+                del calls[:]
+                gpu_busy.append(True)
+                with self.assertRaises(SystemExit) as blocked:
+                    runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+                self.assertEqual(blocked.exception.code, 3)
+                self.assertEqual([c[0] for c in calls if c[0] in ("wait", "measure")], [])
+                gpu_busy.clear()
+                del calls[:], measured[:]
                 os.environ.update(SYNARCHY_PROBE_ENGINE_EXE="/bin/engine", SYNARCHY_SAVE_CODEC_EXE="/bin/codec")
                 with self.assertRaises(SystemExit):
                     runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
@@ -320,7 +354,12 @@ class AdapterChecks(unittest.TestCase):
         self.assertEqual(len(waits), 1, "a trial waits only for the probe's own resources")
         self.assertIsNotNone(waits[0].get("deadline"))
         self.assertNotIn(("cabal-build",), [w.get("exclusive") for w in waits])
-        self.assertEqual([c[0] for c in calls], ["engine", "codec", "wait", "measure", "release"])
+        # The host-wide GPU wait comes first, bounded, and BEFORE the repository
+        # interests, so a trial never queues for the GPU while holding the build state.
+        self.assertEqual([c[0] for c in calls], ["engine", "codec", "gpu", "wait", "measure", "release"])
+        gpu_call = next(c for c in calls if c[0] == "gpu")
+        self.assertEqual(gpu_call[1], "blood_impact")
+        self.assertIsNotNone(gpu_call[2].get("deadline"))
         # #2931: a lab trial takes the durable failure-evidence policy, so it
         # must not supply a temporary artifact root of its own.
         self.assertEqual(len(measured), 1)
@@ -369,6 +408,22 @@ class AdapterChecks(unittest.TestCase):
             # A late resource release still leaves the probe its whole timeout.
             self.assertGreaterEqual(suite.trial_seconds, probe_runner_registry.effective_timeout(key)
                                     + self.module.LOCK_WAIT_SECONDS, key)
+
+    def test_a_gpu_probes_trial_limit_covers_waiting_for_the_machine_wide_hold(self):
+        # #2932: waiting for another checkout's GPU probe is never charged to the probe.
+        gpu = ci_probes.gpu_probe_keys()
+        probes = self.probes()
+        for key, suite in probes.items():
+            base = (probe_runner_registry.effective_timeout(key) + self.module.LOCK_WAIT_SECONDS
+                    + self.module.TRIAL_MARGIN_SECONDS)
+            if key in gpu:
+                self.assertGreaterEqual(suite.trial_seconds, base + self.module.GPU_WAIT_SECONDS, key)
+            else:
+                self.assertLess(suite.trial_seconds, base + 1, key)
+        self.assertTrue(gpu & probes.keys(), "no registered GPU probe is offered to the lab")
+        # The adapter and the trial runner must agree on the allowance they split.
+        trial = (ROOT / ".quruntul" / "probe_trial.py").read_text()
+        self.assertIn(f"GPU_WAIT_SECONDS = {self.module.GPU_WAIT_SECONDS // 3600} * 3600", trial)
 
     def test_the_adapter_imports_nothing_from_quruntul(self):
         tree = ast.parse((ROOT / ".quruntul" / "adapter.py").read_text())

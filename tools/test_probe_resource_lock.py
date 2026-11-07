@@ -144,15 +144,17 @@ class Scratch:
         self.waiter_script.write_text(WAITER_SRC)
         self._holders: list[Holder | Waiter] = []
 
-    def holder(self, *, exclusive=(), shared=(), purpose="holder") -> "Holder":
+    def holder(self, *, exclusive=(), shared=(), purpose="holder",
+               namespace=None) -> "Holder":
         holder = Holder(self, exclusive=exclusive, shared=shared,
-                        purpose=purpose)
+                        purpose=purpose, namespace=namespace)
         self._holders.append(holder)
         return holder
 
-    def waiter(self, *, exclusive=(), shared=(), purpose="waiter") -> "Waiter":
+    def waiter(self, *, exclusive=(), shared=(), purpose="waiter",
+               namespace=None) -> "Waiter":
         waiter = Waiter(self, exclusive=exclusive, shared=shared,
-                        purpose=purpose)
+                        purpose=purpose, namespace=namespace)
         self._holders.append(waiter)
         return waiter
 
@@ -164,14 +166,14 @@ class Scratch:
 
 class Holder:
     def __init__(self, scratch: Scratch, *, exclusive=(), shared=(),
-                 purpose="holder") -> None:
+                 purpose="holder", namespace=None) -> None:
         self.scratch = scratch
         token = uuid.uuid4().hex[:8]
         self.ready = scratch.root / f"ready-{token}"
         self.release_flag = scratch.root / f"release-{token}"
         self.proc = subprocess.Popen(
             [sys.executable, str(scratch.script), TOOLS_DIR,
-             str(scratch.root), scratch.namespace, str(self.ready),
+             str(scratch.root), namespace or scratch.namespace, str(self.ready),
              str(self.release_flag),
              json.dumps({"exclusive": sorted(exclusive),
                          "shared": sorted(shared), "purpose": purpose})])
@@ -208,14 +210,14 @@ class Holder:
 
 class Waiter:
     def __init__(self, scratch: Scratch, *, exclusive=(), shared=(),
-                 purpose="waiter") -> None:
+                 purpose="waiter", namespace=None) -> None:
         self.scratch = scratch
         token = uuid.uuid4().hex[:8]
         self.ready = scratch.root / f"waiter-ready-{token}"
         self.release_flag = scratch.root / f"waiter-release-{token}"
         self.proc = subprocess.Popen(
             [sys.executable, str(scratch.waiter_script), TOOLS_DIR,
-             str(scratch.root), scratch.namespace, str(self.ready),
+             str(scratch.root), namespace or scratch.namespace, str(self.ready),
              str(self.release_flag),
              json.dumps({"exclusive": sorted(exclusive),
                          "shared": sorted(shared), "purpose": purpose})])
@@ -258,11 +260,12 @@ class Waiter:
             self.kill()
 
 
-def taking(scratch: Scratch, *, exclusive=(), shared=()):
+def taking(scratch: Scratch, *, exclusive=(), shared=(), namespace=None):
     """Try one acquisition IN THIS PROCESS; return (hold, busy, error)."""
     try:
         return (lock.acquire(exclusive=exclusive, shared=shared,
-                             namespace=scratch.namespace, root=scratch.root),
+                             namespace=namespace or scratch.namespace,
+                             root=scratch.root),
                 None, None)
     except lock.ResourceBusy as busy:
         return None, busy, None
@@ -961,6 +964,519 @@ def test_holders_is_best_effort_and_says_so() -> None:
         scratch.cleanup()
 
 
+# --------------------------------------------------------------------------
+# The host-wide `gpu-desktop` resource (#2932)
+# --------------------------------------------------------------------------
+GPU = lock.GPU_DESKTOP
+HEADLESS_SHARED = {"repo-config", "cabal-build"}
+
+
+def _other_checkout(scratch: Scratch) -> str:
+    """A namespace no worktree of `scratch`'s repository shares: an independent clone."""
+    return f"clone{uuid.uuid4().hex[:12]}"
+
+
+def test_two_gpu_probes_from_different_checkouts_serialize() -> None:
+    print("\n-- gpu-desktop is HOST-wide: GPU probes in independent clones serialize")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        first = scratch.holder(exclusive={GPU}, shared=HEADLESS_SHARED,
+                               purpose="run_probes offscreen")
+        expect(first.took_it(), "the first checkout's GPU probe took gpu-desktop")
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None and error is None,
+               f"a second, independent checkout is refused (busy={busy}, error={error})")
+        if busy is not None:
+            expect(busy.resource == GPU and busy.interest == lock.EXCLUSIVE,
+                   f"naming the resource and the refused interest ({busy.resource})")
+            expect(busy.namespace == lock.HOST_NAMESPACE,
+                   f"in the host namespace, not either repository's ({busy.namespace})")
+        # The same repository's other worktrees share the namespace, and are refused too.
+        hold, busy, _error = taking(scratch, exclusive={GPU})
+        expect(hold is None and busy is not None,
+               "and so is another worktree of the first checkout's repository")
+        first.stop()
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None,
+               f"released, the other checkout gets it (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_headless_probe_runs_beside_a_gpu_probe() -> None:
+    print("\n-- a headless probe takes no gpu-desktop and runs beside a GPU probe")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        gpu_probe = scratch.holder(exclusive={GPU}, shared=HEADLESS_SHARED,
+                                   purpose="a GPU probe")
+        expect(gpu_probe.took_it(), "the GPU probe holds gpu-desktop")
+        for label, namespace in (("same repository", None),
+                                 ("independent clone", clone)):
+            hold, busy, error = taking(scratch, shared=HEADLESS_SHARED,
+                                       namespace=namespace)
+            expect(hold is not None and busy is None and error is None,
+                   f"a headless probe ({label}) is not delayed "
+                   f"(busy={busy}, error={error})")
+            if hold is not None:
+                hold.release()
+        # A waiting GPU probe in the queue does not hold headless work back either.
+        waiter = scratch.waiter(exclusive={GPU}, shared=HEADLESS_SHARED,
+                                purpose="a second GPU probe", namespace=clone)
+        expect(waiter.queued(), "a second GPU probe queues")
+        for namespace in (None, clone):
+            hold, busy, error = taking(scratch, shared=HEADLESS_SHARED,
+                                       namespace=namespace)
+            expect(hold is not None,
+                   f"headless work still starts while a GPU probe waits "
+                   f"(busy={busy}, error={error})")
+            if hold is not None:
+                hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_gpu_waiter_waits_names_the_holder_and_then_runs() -> None:
+    print("\n-- a GPU waiter waits (never fails), says who holds it and since when")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        holder = scratch.holder(exclusive={GPU}, purpose="run_probes offscreen")
+        expect(holder.took_it(), "the GPU probe holds gpu-desktop")
+        waiter = scratch.waiter(exclusive={GPU}, purpose="a waiting probe",
+                                namespace=clone)
+        expect(waiter.queued(), "the second checkout's probe waits instead of failing")
+        outcome = waiter.outcome()
+        named = (outcome.get("busy") or {}).get("holders") or []
+        expect(len(named) == 1 and named[0].get("pid") == holder.proc.pid
+               and named[0].get("purpose") == "run_probes offscreen"
+               and isinstance(named[0].get("acquired"), float),
+               f"its announcement carries the holder's pid, purpose and acquisition time ({named})")
+        text = lock.ResourceBusy(GPU, lock.EXCLUSIVE, namespace=lock.HOST_NAMESPACE,
+                                 holders=named).describe()
+        expect(f"pid {holder.proc.pid}" in text and "run_probes offscreen" in text
+               and "since " in text and " ago)" in text,
+               f"and the printed diagnostic says who, doing what, since when ({text})")
+        expect(not waiter.took_it(0.3), "it does not run while the holder lives")
+        holder.stop()
+        expect(waiter.took_it(), "it runs once the holder is gone")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_dead_gpu_holder_is_reclaimed() -> None:
+    print("\n-- a SIGKILLed GPU holder owns nothing, host-wide")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        holder = scratch.holder(exclusive={GPU}, purpose="a doomed probe")
+        expect(holder.took_it(), "the holder took gpu-desktop")
+        hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None, "it is held before the kill")
+        holder.kill()
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"reclaimed at once (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+        # Its note is dead weight, not a holder: no live holder is reported.
+        expect(lock.holders(GPU, namespace=clone, root=scratch.root) == [],
+               "and the dead process's note names no live holder")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_host_wide_holder_is_found_from_any_namespace() -> None:
+    print("\n-- a host-wide holder is identified from every repository; others are not")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        holder = scratch.holder(exclusive={GPU}, shared={"repo-config"},
+                                purpose="a GPU probe")
+        expect(holder.took_it(), "the holder took its set")
+        for namespace in (scratch.namespace, clone):
+            found = lock.holders(GPU, namespace=namespace, root=scratch.root)
+            expect(len(found) == 1 and found[0]["pid"] == holder.proc.pid,
+                   f"gpu-desktop's holder is visible from {namespace} ({found})")
+        expect(lock.holders("repo-config", namespace=clone, root=scratch.root) == [],
+               "a repository-scoped resource is NOT visible from another repository")
+        hold, busy, error = taking(scratch, exclusive={"repo-config"}, namespace=clone)
+        expect(hold is not None, f"and does not conflict across repositories "
+               f"(busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_gpu_hold_is_released_after_failure_and_interruption() -> None:
+    print("\n-- gpu-desktop is released after an exception and after a context exit")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        try:
+            with lock.acquire(exclusive={GPU}, namespace=scratch.namespace,
+                              root=scratch.root):
+                raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            pass
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"free after an interrupted probe (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+        # A refused compound set takes nothing, host-wide or not.
+        other = scratch.holder(shared={"cabal-build"})
+        expect(other.took_it(), "a shared build-state holder")
+        hold, busy, _error = taking(scratch, exclusive={GPU, "cabal-build"})
+        expect(hold is None and busy is not None, "a set with one conflict is refused whole")
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"and gpu-desktop was not left held by the refusal "
+               f"(busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+    finally:
+        scratch.cleanup()
+
+
+# --------------------------------------------------------------------------
+# What takes gpu-desktop: derived from the classification, never listed here
+# --------------------------------------------------------------------------
+def test_the_gpu_probe_set_is_derived_from_the_registry_classification() -> None:
+    print("\n-- the gpu-desktop set is ci_probes' needs-gpu classification, not a second list")
+    import ci_probes  # type: ignore
+    derived = ci_probes.gpu_probe_keys()
+    expect(derived and derived <= ci_probes.ALL_KEYS,
+           "the classification names registered probes")
+    for key in sorted(ci_probes.ALL_KEYS):
+        takes = resources.GPU_RESOURCE in resources.exclusive_resources(key)
+        wants = any(r.category == ci_probes.NEEDS_GPU
+                    for r in ci_probes.MANUAL_ONLY_REASONS.get(key, ()))
+        expect(takes == wants,
+               f"{key}: takes gpu-desktop exactly when it is classified needs-gpu "
+               f"(takes={takes}, classified={wants})")
+        expect(resources.GPU_RESOURCE not in resources.shared_resources(key),
+               f"{key}: never holds it shared")
+    synthetic = {"made_up": (ci_probes.Reason(ci_probes.NEEDS_GPU, "x"),
+                              ci_probes.Reason(ci_probes.FLAKY, "y")),
+                 "other": (ci_probes.Reason(ci_probes.SLOW_WORLDGEN, "z"),)}
+    expect(ci_probes.gpu_probe_keys(synthetic) == frozenset({"made_up"}),
+           "a probe excluded on several grounds is found by the needs-gpu one")
+    expect(resources.GPU_RESOURCE in lock.HOST_SCOPED_RESOURCES,
+           "and the resource really is host-scoped")
+
+
+def test_a_runner_exports_the_host_hold_so_a_child_does_not_retake_it() -> None:
+    print("\n-- the host-wide hold rides to a probe's children through the environment")
+    import ci_probes  # type: ignore
+    gpu_key = sorted(ci_probes.gpu_probe_keys())[0]
+    plain = next(k for k in sorted(ci_probes.ALL_KEYS)
+                 if k not in ci_probes.gpu_probe_keys()
+                 and not resources.exclusive_resources(k))
+    saved = {name: os.environ.pop(name, None) for name in resources.RUNNER_ENV_VARS}
+    try:
+        env = resources.descendant_hold_env(gpu_key, "ns")
+        expect(env.get(resources.ENV_HELD_HOST) == GPU,
+               f"a needs-gpu probe's child is told gpu-desktop is held ({env})")
+        expect(GPU not in env.get(resources.ENV_HELD_EXCLUSIVE, ""),
+               "and it is not smuggled into the namespace-scoped variable")
+        expect(resources.ENV_HELD_HOST not in resources.descendant_hold_env(plain, "ns"),
+               "a headless probe's child is told nothing about it")
+        expect(resources.ENV_HELD_HOST in resources.RUNNER_ENV_VARS,
+               "run_one strips a stale export before supplying its own")
+        # An ancestor's host hold survives a nested runner and drops the request.
+        probe_env = {resources.ENV_HELD_HOST: GPU}
+        exclusive, _shared = resources.cross_process_interests(gpu_key, "ns", probe_env)
+        expect(GPU not in exclusive, "an inherited hold removes gpu-desktop from the request")
+        exclusive, _shared = resources.cross_process_interests(gpu_key, "ns", {})
+        expect(GPU in exclusive, "and without one it is requested")
+        # It is matched by name, not namespace: any repository's ancestor covers it.
+        expect(resources.inherited_host_resources({resources.ENV_HELD_HOST: f"{GPU},bogus"})
+               == {GPU}, "only host-scoped names are honoured from the environment")
+    finally:
+        for name, value in saved.items():
+            if value is not None:
+                os.environ[name] = value
+
+
+# --------------------------------------------------------------------------
+# The direct-launch guard: a probe run by hand takes the same hold (#2932)
+# --------------------------------------------------------------------------
+GUARD_SRC = textwrap.dedent("""\
+    import json, os, sys, time
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    root, namespace, ready, release = sys.argv[2:6]
+    plan = json.loads(sys.argv[6])
+    import probe_resource_lock as lock
+    lock.LOCK_ROOT = Path(root)            # never the real /tmp locks
+    import probe_runner_resources as resources
+    resources.RESOURCE_NAMESPACE = namespace
+    for name in resources.RUNNER_ENV_VARS:
+        os.environ.pop(name, None)
+    os.environ.update(plan.get("env", {}))
+    import probe_gpu_hold
+    report = {"calls": []}
+    if plan.get("boot") is not None:
+        import probelib, probe_engine
+        # The real engine is never built or run: a stand-in that prints READY.
+        probe_engine.prepare_command = lambda args, **kw: [
+            sys.executable, "-c",
+            "import time; print('READY', flush=True); time.sleep(60)", *args]
+        procs = []
+        for mode in plan["boot"]:
+            procs.append(probelib.boot(9999, log=str(Path(root) / "engine.log"),
+                                       mode=tuple(mode)))
+            report["calls"].append(probe_gpu_hold.holding())
+        for proc in procs:
+            proc.kill()
+    for argv in plan.get("launch", []):
+        hold = probe_gpu_hold.ensure_for_launch(argv)
+        report["calls"].append(hold is not None)
+    report["holding"] = probe_gpu_hold.holding()
+    Path(ready).write_text(json.dumps(report))
+    deadline = time.time() + 120
+    while not Path(release).exists() and time.time() < deadline:
+        time.sleep(0.02)
+""")
+
+
+class Guard:
+    """A direct probe invocation: its own interpreter, the launch guard in play."""
+
+    def __init__(self, scratch: Scratch, plan: dict, namespace=None) -> None:
+        self.scratch = scratch
+        token = uuid.uuid4().hex[:8]
+        self.ready = scratch.root / f"guard-ready-{token}"
+        self.release_flag = scratch.root / f"guard-release-{token}"
+        script = scratch.root / f"guard-{token}.py"
+        script.write_text(GUARD_SRC)
+        self.proc = subprocess.Popen(
+            [sys.executable, str(script), TOOLS_DIR, str(scratch.root),
+             namespace or scratch.namespace, str(self.ready),
+             str(self.release_flag), json.dumps(plan)])
+
+    def report(self, seconds: float = 30.0) -> dict:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                return json.loads(self.ready.read_text())
+            except (OSError, ValueError):
+                time.sleep(0.02)
+        return {}
+
+    def stop(self) -> None:
+        try:
+            self.release_flag.write_text("go")
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=30)
+
+
+def test_which_engine_launches_use_the_gpu() -> None:
+    print("\n-- the guard reads the EFFECTIVE launch arguments, in the engine's precedence")
+    import probe_gpu_hold  # type: ignore
+    cases = [
+        (["--headless", "--port", "9"], False, "headless"),
+        (["--dump=terrain", "--seed", "1"], False, "a --dump run"),
+        (["--dump", "--offscreen"], False, "--dump beats --offscreen"),
+        (["--language-report", "--preview", "x"], False, "--language-report beats --preview"),
+        (["--offscreen", "--size", "320x240"], True, "--offscreen"),
+        (["--offscreen", "--headless"], True, "--offscreen beats --headless"),
+        (["--preview", "units/acolyte"], True, "--preview"),
+        (["--port", "9"], True, "no selector is the graphical default"),
+        ([], True, "the empty argument list is graphical"),
+        (["--port", "--offscreen-check"], True, "only exact flags select a profile; no selector => graphical"),
+        (["--headless", "--scenario", "--offscreenx"], False, "a lookalike flag is not --offscreen"),
+    ]
+    for argv, want, why in cases:
+        expect(probe_gpu_hold.engine_uses_gpu(argv) is want, f"{why}: {argv} -> {want}")
+    # Headless and dump launches never touch a lock at all.
+    expect(probe_gpu_hold.ensure_for_launch(["--headless"]) is None
+           and probe_gpu_hold.ensure_for_launch(["--dump=terrain"]) is None,
+           "headless and --dump launches return without taking a hold")
+
+
+def test_a_direct_probe_invocation_takes_the_hold() -> None:
+    print("\n-- a probe run by hand takes gpu-desktop for its whole process, across engines")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        guard = Guard(scratch, {"launch": [["--offscreen"], ["--offscreen"], ["--preview", "x"]]})
+        report = guard.report()
+        expect(report.get("calls") == [True, False, False] and report.get("holding"),
+               f"the first graphical launch takes it; later engines of the same probe reuse it "
+               f"without queueing behind themselves ({report})")
+        hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None,
+               "while it runs, another checkout's GPU probe is refused")
+        if busy is not None:
+            expect(busy.holders and busy.holders[0].get("pid") == guard.proc.pid,
+                   f"and told who holds it ({busy.holders})")
+        guard.stop()
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None,
+               f"the process's exit gives it back (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+        # A killed probe gives it back too.
+        doomed = Guard(scratch, {"launch": [["--offscreen"]]})
+        expect(doomed.report().get("calls") == [True], "a second probe takes it")
+        doomed.proc.kill()
+        doomed.proc.wait(timeout=30)
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"a killed probe's hold is gone (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_the_guard_serializes_direct_probes_and_leaves_headless_ones_alone() -> None:
+    print("\n-- two direct GPU probes serialize; a direct headless one runs beside them")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        first = Guard(scratch, {"launch": [["--offscreen"]]})
+        expect(first.report().get("calls") == [True], "the first direct probe holds it")
+        headless = Guard(scratch, {"launch": [["--headless"], ["--dump=terrain"]]},
+                         namespace=clone)
+        report = headless.report(10.0)
+        expect(report.get("calls") == [False, False] and not report.get("holding"),
+               f"a direct headless/--dump probe is not delayed ({report})")
+        second = Guard(scratch, {"launch": [["--offscreen"]]}, namespace=clone)
+        expect(second.report(1.0) == {},
+               "a second direct GPU probe from another checkout WAITS, not fails")
+        expect(second.proc.poll() is None, "and is still waiting, alive")
+        first.stop()
+        expect(second.report().get("calls") == [True],
+               "and runs as soon as the first probe exits")
+        second.stop()
+        headless.stop()
+    finally:
+        scratch.cleanup()
+
+
+def test_boot_takes_the_hold_from_the_effective_mode_not_the_probe_name() -> None:
+    print("\n-- probelib.boot guards an offscreen boot of ANY probe, registered or not")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        headless = Guard(scratch, {"boot": [["--headless"]]})
+        report = headless.report()
+        expect(report.get("calls") == [False],
+               f"a --headless boot takes nothing ({report})")
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"and leaves gpu-desktop free (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+        headless.stop()
+        # Two engines in one probe (the offscreen probe boots two at once), then a third:
+        # the probe never queues behind its own hold.
+        graphical = Guard(scratch, {"boot": [["--offscreen"], ["--offscreen"], ["--preview", "x"]]})
+        report = graphical.report()
+        expect(report.get("calls") == [True, True, True],
+               f"every graphical boot of one probe proceeds under one hold ({report})")
+        hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None, "and the hold is real while it runs")
+        graphical.stop()
+        # An interactive window (no profile flag at all) is graphical too.
+        interactive = Guard(scratch, {"boot": [[]]})
+        expect(interactive.report().get("calls") == [True],
+               "a boot with no profile selector (audio_manual --interactive) takes it")
+        interactive.stop()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_runner_launched_probe_inherits_the_hold_instead_of_retaking_it() -> None:
+    print("\n-- a probe launched under a holder takes nothing and cannot deadlock on it")
+    scratch = Scratch()
+    try:
+        runner = scratch.holder(exclusive={GPU}, purpose="run_probes offscreen")
+        expect(runner.took_it(), "the runner holds gpu-desktop for the probe")
+        child = Guard(scratch, {"env": {resources.ENV_HELD_HOST: GPU},
+                                "launch": [["--offscreen"], ["--offscreen"]]})
+        report = child.report(10.0)
+        expect(report.get("calls") == [False, False] and report.get("holding"),
+               f"the child sees it as held and never queues behind its own runner ({report})")
+        # Without the marker the same child waits on the runner, as any other probe would.
+        stranger = Guard(scratch, {"launch": [["--offscreen"]]})
+        expect(stranger.report(1.0) == {}, "an unrelated probe waits for the runner's hold")
+        runner.stop()
+        expect(stranger.report().get("calls") == [True], "and runs once it is released")
+        stranger.stop()
+        child.stop()
+    finally:
+        scratch.cleanup()
+
+
+def test_every_graphical_launch_site_is_guarded() -> None:
+    print("\n-- the launch sites that open a window or GPU device all go through the guard")
+    tools = Path(TOOLS_DIR)
+    boot_src = (tools / "probelib.py").read_text()
+    expect(boot_src.index("probe_gpu_hold.ensure_for_launch(")
+           > boot_src.index("probe_engine.prepare_command(")
+           and boot_src.index("probe_gpu_hold.ensure_for_launch(")
+           < boot_src.index("subprocess.Popen(cmd, stdout=logf"),
+           "probelib.boot guards after preparing the engine and before launching it")
+    entry = (tools / "scenario_entrypoint_probe.py").read_text()
+    expect(entry.index("probe_gpu_hold.ensure_for_launch(")
+           < entry.index("subprocess.Popen(cmd, cwd=launch"),
+           "scenario_entrypoint_probe guards its own launcher (its --offscreen half)")
+    # Any other tool that spawns an engine itself with a graphical profile must too.
+    for path in sorted(tools.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        text = path.read_text()
+        if "subprocess.Popen" not in text or "engine_command" not in text:
+            continue
+        # These boot an engine through `engine_command` only on paths that fail
+        # before a window or device exists (argument validation, an occupied
+        # port): they deliberately take no hold.
+        expect(path.name in {"probe_engine.py", "debug_console_boot_probe.py",
+                             "preview_cli_probe.py", "thermo_altitude_probe.py"}
+               or "probe_gpu_hold" in text,
+               f"{path.name} launches an engine through engine_command without the GPU guard")
+
+
+def test_an_exported_host_hold_marks_the_environment_only_while_it_lasts() -> None:
+    print("\n-- a holder that exports its host-wide hold restores the environment")
+    scratch = Scratch()
+    try:
+        env: dict = {}
+        hold = lock.acquire(exclusive={GPU}, shared={"repo-config"},
+                            namespace=scratch.namespace, root=scratch.root)
+        with resources.exported_host_hold(hold, env):
+            expect(env.get(resources.ENV_HELD_HOST) == GPU,
+                   f"the host-wide interest is exported ({env})")
+            expect(resources.inherited_host_resources(env) == {GPU},
+                   "and read back as inherited by a child")
+        expect(resources.ENV_HELD_HOST not in env, "and removed once the block ends")
+        hold.release()
+        repo_only = lock.acquire(shared={"repo-config"}, namespace=scratch.namespace,
+                                 root=scratch.root)
+        with resources.exported_host_hold(repo_only, env):
+            expect(resources.ENV_HELD_HOST not in env,
+                   "a hold with no host-wide interest exports nothing")
+        repo_only.release()
+        env[resources.ENV_HELD_HOST] = GPU
+        other = lock.acquire(shared={"repo-config"}, namespace=scratch.namespace,
+                             root=scratch.root)
+        with resources.exported_host_hold(other, env):
+            pass
+        expect(env.get(resources.ENV_HELD_HOST) == GPU,
+               "an ancestor's own export is restored, not erased")
+        other.release()
+    finally:
+        scratch.cleanup()
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_two_shared_holders_coexist()
@@ -989,6 +1505,21 @@ def main() -> int:
     test_names_are_validated_before_they_become_paths()
     test_an_exclusive_declaration_wins_over_a_shared_one()
     test_holders_is_best_effort_and_says_so()
+    test_two_gpu_probes_from_different_checkouts_serialize()
+    test_a_headless_probe_runs_beside_a_gpu_probe()
+    test_a_gpu_waiter_waits_names_the_holder_and_then_runs()
+    test_a_dead_gpu_holder_is_reclaimed()
+    test_the_host_wide_holder_is_found_from_any_namespace()
+    test_a_gpu_hold_is_released_after_failure_and_interruption()
+    test_the_gpu_probe_set_is_derived_from_the_registry_classification()
+    test_a_runner_exports_the_host_hold_so_a_child_does_not_retake_it()
+    test_which_engine_launches_use_the_gpu()
+    test_a_direct_probe_invocation_takes_the_hold()
+    test_the_guard_serializes_direct_probes_and_leaves_headless_ones_alone()
+    test_boot_takes_the_hold_from_the_effective_mode_not_the_probe_name()
+    test_a_runner_launched_probe_inherits_the_hold_instead_of_retaking_it()
+    test_every_graphical_launch_site_is_guarded()
+    test_an_exported_host_hold_marks_the_environment_only_while_it_lasts()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

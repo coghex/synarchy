@@ -88,6 +88,19 @@ helper without a cycle.
 The path is hashed rather than embedded, so a lock file name is a fixed
 length whatever the checkout is called and holds no path separators.
 
+One resource is HOST-wide (#2932)
+---------------------------------
+Everything above is scoped to a repository: two independent clones never see
+each other's holds. The desktop and GPU belong to the machine, so
+`GPU_DESKTOP` (`gpu-desktop`, in `HOST_SCOPED_RESOURCES`) keeps its lock file
+and its holder notes in the fixed `HOST_NAMESPACE` instead. A caller still
+passes its own repository namespace and takes the whole set in one call;
+`resource_namespace_for` applies the scope per name. The set stays
+all-or-nothing and non-blocking per attempt, so mixing the two scopes adds no
+wait-while-holding and no deadlock. The admission queue is still per
+repository: waiters from one repository's worktrees are admitted in arrival
+order, waiters from independent clones are arbitrated by the flock alone.
+
 Acquisition is ALL-OR-NOTHING; waiters use a conflict-aware queue
 ----------------------------------------------------------------
 `acquire` takes the whole interest set or none of it. The set is taken
@@ -175,6 +188,18 @@ SHARED_FILE_MODE = 0o666
 SHARED = "shared"
 EXCLUSIVE = "exclusive"
 
+# The one HOST-WIDE resource name, and the namespace its lock file and holder
+# notes live in. Every other resource is scoped to a repository's namespace
+# (below), so two independent clones never see each other's holds. The desktop
+# and the GPU belong to the MACHINE, not to a repository: a probe that boots
+# a window or a Vulkan device conflicts with every other one that does, whichever
+# checkout started it. `lock_path` still takes a namespace like any resource;
+# `resource_namespace_for` is where the host scope is applied, so a caller keeps
+# naming its own repository and never has to know which resources are host-wide.
+GPU_DESKTOP = "gpu-desktop"
+HOST_SCOPED_RESOURCES = frozenset({GPU_DESKTOP})
+HOST_NAMESPACE = "host"
+
 # How long a holder note may be unlocked before a scanner reaps it. The
 # note is locked before it is named and published atomically, so an
 # unlocked note is an abandoned one; the grace covers only the case
@@ -203,6 +228,36 @@ class ResourceLockError(Exception):
     """A controlled refusal: nothing was acquired, nothing was created."""
 
 
+def _describe_holder(holder: dict, now: float | None = None) -> str:
+    """One holder as a refused acquirer prints it: who, doing what, since when.
+
+    The identity (owner, pid), the purpose and the acquisition time are all in
+    the diagnostic note already; leaving them out made a wait on a host-wide
+    resource unanswerable ("held by whom, for how long?"). Every field is
+    optional because a note is best effort.
+    """
+    owner = holder.get("owner") or "an unidentified process"
+    pid = holder.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        owner = f"{owner} pid {pid}"
+    purpose = holder.get("purpose")
+    if purpose:
+        owner = f"{owner} [{purpose}]"
+    queued = holder.get("state") == "queued"
+    since = holder.get("acquired")
+    when = ""
+    if isinstance(since, (int, float)) and not isinstance(since, bool):
+        age = max(0.0, (time.time() if now is None else now) - since)
+        stamp = time.strftime("%H:%M:%S", time.localtime(since))
+        minutes, seconds = divmod(int(age), 60)
+        hours, minutes = divmod(minutes, 60)
+        elapsed = (f"{hours}h{minutes:02d}m" if hours
+                   else f"{minutes}m{seconds:02d}s")
+        when = f" {'queued' if queued else 'since'} {stamp} ({elapsed} ago)"
+    return (f"{owner} ({holder.get('interest', '?')}"
+            f"{', queued' if queued else ''}){when}")
+
+
 class ResourceBusy(Exception):
     """The interest set could not be granted; everything taken was released.
 
@@ -223,11 +278,7 @@ class ResourceBusy(Exception):
         super().__init__(self.describe())
 
     def describe(self) -> str:
-        who = ", ".join(
-            f"{holder.get('owner') or 'an unidentified process'}"
-            f" ({holder.get('interest', '?')}"
-            f"{', queued' if holder.get('state') == 'queued' else ''})"
-            for holder in self.holders)
+        who = ", ".join(_describe_holder(holder) for holder in self.holders)
         detail = f"; held by {who}" if who else ""
         return (f"the {self.interest} interest in resource "
                 f"{self.resource!r} is not available{detail}")
@@ -405,6 +456,19 @@ def lock_path(resource: str, *, namespace: str, root: Path | None = None) -> Pat
                    f"-res-{require_name(resource, 'a resource name')}")
 
 
+def resource_namespace_for(resource: str, namespace: str) -> str:
+    """The namespace `resource`'s lock file and holder notes actually live in.
+
+    A host-wide resource ignores the repository the caller is in and uses
+    `HOST_NAMESPACE`; everything else stays in the caller's namespace. The
+    admission QUEUE is deliberately not affected: a request is queued once, in
+    its caller's repository namespace, so every worktree of a repository still
+    queues its host-wide waiters in arrival order, while waiters from
+    independent clones are arbitrated by the flock alone.
+    """
+    return HOST_NAMESPACE if resource in HOST_SCOPED_RESOURCES else namespace
+
+
 def queue_mutex_path(*, namespace: str, root: Path | None = None) -> Path:
     """The admission mutex shared by every resource in `namespace`."""
     base = Path(root) if root is not None else LOCK_ROOT
@@ -480,6 +544,7 @@ def holders(resource: str, *, namespace: str, root: Path | None = None) -> list:
     """
     require_name(resource, "a resource name")
     require_name(namespace, "a namespace")
+    namespace = resource_namespace_for(resource, namespace)
     base = Path(root) if root is not None else LOCK_ROOT
     found = []
     try:
@@ -820,12 +885,15 @@ class ResourceHold:
     """Held cross-process interests. Releasing drops OUR descriptors only."""
 
     def __init__(self, namespace: str, exclusive: frozenset,
-                 shared: frozenset, fds: dict, note: "_Note | None"):
+                 shared: frozenset, fds: dict, note: "_Note | list | None"):
         self.namespace = namespace
         self.exclusive = exclusive
         self.shared = shared
         self._fds = fds
-        self._note = note
+        # One note per namespace the hold spans: the repository's, and the
+        # host's when it includes a host-wide resource.
+        self._notes = (list(note) if isinstance(note, (list, tuple))
+                       else ([note] if note is not None else []))
         self.released = False
 
     def __enter__(self) -> "ResourceHold":
@@ -855,9 +923,9 @@ class ResourceHold:
         if self.released:
             return
         self.released = True
-        if self._note is not None:
-            self._note.withdraw()
-            self._note = None
+        for note in self._notes:
+            note.withdraw()
+        self._notes = []
         for fd in self._fds.values():
             with contextlib.suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
@@ -909,7 +977,8 @@ def _acquire_resources(*, want_exclusive: frozenset,
         fds.clear()
 
     for name, interest in plan:
-        path = lock_path(name, namespace=namespace, root=base)
+        path = lock_path(name, namespace=resource_namespace_for(name, namespace),
+                         root=base)
         fd = _open_shared_lock_file(path, os.O_CREAT | os.O_RDWR)
         if fd is None:
             # Unopenable, a symlink, a hard link, or not a regular file
@@ -939,7 +1008,9 @@ def _acquire_resources(*, want_exclusive: frozenset,
                 raise ResourceLockError(
                     f"could not lock {path} for a {interest} interest in "
                     f"{name!r} ({error})") from None
-            raise ResourceBusy(name, interest, namespace=namespace,
+            raise ResourceBusy(name, interest,
+                               namespace=resource_namespace_for(name,
+                                                                namespace),
                                holders=holders(name, namespace=namespace,
                                                root=base)) from None
         except BaseException:
@@ -949,18 +1020,28 @@ def _acquire_resources(*, want_exclusive: frozenset,
             raise
         fds[name] = fd
 
-    note = None
-    if plan:
-        note = _Note(namespace, base)
+    # One diagnostic note per namespace the hold spans, each naming only the
+    # resources that live there, so `holders` finds a host-wide holder from any
+    # repository and a repository's notes never mention another's.
+    notes = []
+    acquired_at = time.time()
+    for scope in dict.fromkeys(resource_namespace_for(name, namespace)
+                               for name, _ in plan):
+        note = _Note(scope, base)
         note.publish({
             "owner": _owner_description(),
             "pid": os.getpid(),
             "purpose": purpose or "",
-            "exclusive": sorted(want_exclusive),
-            "shared": sorted(want_shared),
-            "acquired": time.time(),
+            "exclusive": sorted(
+                name for name in want_exclusive
+                if resource_namespace_for(name, namespace) == scope),
+            "shared": sorted(
+                name for name in want_shared
+                if resource_namespace_for(name, namespace) == scope),
+            "acquired": acquired_at,
         })
-    return ResourceHold(namespace, want_exclusive, want_shared, fds, note)
+        notes.append(note)
+    return ResourceHold(namespace, want_exclusive, want_shared, fds, notes)
 
 
 def _first_interest(exclusive: frozenset,

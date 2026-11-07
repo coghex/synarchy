@@ -11,8 +11,15 @@ pieces it is built from:
    a probe left to build its own engine prints a bracketed preparation line,
    which probe_flake rightly rejects in protocol mode, and a build here would
    have to fit inside the trial's time limit.
-2. Take the probe's declared resource interests across processes, waiting no
-   longer than the 30 minutes AGENTS.md allows for lock contention.
+2. For a `needs-gpu` probe, first take the machine-wide `gpu-desktop` hold (#2932)
+   and wait for it as long as `GPU_WAIT_SECONDS` allows. It is taken before any
+   repository interest, so this trial never queues for the GPU while holding the
+   build state, and the adapter adds the same allowance to the trial's limit so
+   waiting for another checkout's GPU probe is never charged to this one. Running
+   out of that allowance ends the trial as blocked (exit 3, no probe result), not
+   as a failed or timed-out probe.
+   Then take the probe's declared repository interests across processes, waiting
+   no longer than the 30 minutes AGENTS.md allows for lock contention.
 3. Run probe_flake with one run, its result document at
    `$QURUNTUL_TRIAL_PREFIX.probe-flake.json`, where the adapter's `outcomes`
    hook reads it. It is given NO `--artifact-root` (#2931): a failing trial's
@@ -25,6 +32,7 @@ pieces it is built from:
 
 probe_flake exits 0 for any valid measurement, whatever the checks did.
 """
+import contextlib
 import json
 import os
 import sys
@@ -32,6 +40,7 @@ import time
 from pathlib import Path
 
 LOCK_WAIT_SECONDS = 1800
+GPU_WAIT_SECONDS = 4 * 3600  # keep equal to the adapter's: it extends the trial limit by this much
 
 key = sys.argv[1]
 prefix = os.environ["QURUNTUL_TRIAL_PREFIX"]
@@ -41,6 +50,7 @@ sys.path.insert(0, str(root / "tools"))
 
 import probe_engine  # noqa: E402
 import probe_flake  # noqa: E402
+import probe_gpu_hold  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_runner_resources  # noqa: E402
 import save_compat_audit_codec  # noqa: E402
@@ -55,14 +65,24 @@ if not (probe_engine.runner_executable(os.environ)
 probe_runner_resources.ENGINE_EXECUTABLE = probe_runner_resources.engine_preflight(namespace, announce=announce)
 probe_runner_resources.CODEC_EXECUTABLE = probe_runner_resources.codec_preflight(namespace, announce=announce)
 
-hold = probe_resource_lock.wait_acquire(
-    exclusive=probe_runner_resources.exclusive_resources(key),
-    shared=probe_runner_resources.shared_resources(key),
-    namespace=namespace, purpose=f"quruntul {key}", deadline=time.monotonic() + LOCK_WAIT_SECONDS)
-try:
-    code = probe_flake.main(["--probe", key, "--runs", "1", "--result", prefix + ".probe-flake.json"])
-finally:
-    hold.release()
+with contextlib.ExitStack() as stack:
+    try:
+        stack.enter_context(probe_gpu_hold.hold_for_probe(
+            key, namespace=namespace, deadline=time.monotonic() + GPU_WAIT_SECONDS))
+    except probe_resource_lock.ResourceBusy as busy:
+        print(f"quruntul: {busy.describe()}; gave up after {GPU_WAIT_SECONDS} s of waiting. "
+              "This is contention, not a probe result.", flush=True)
+        raise SystemExit(3)
+    # The host-wide interest is now held (and exported for probe_flake), so the
+    # repository set drops it: only what is still ours to wait for is bounded.
+    exclusive, shared = probe_runner_resources.cross_process_interests(key, namespace)
+    hold = probe_resource_lock.wait_acquire(
+        exclusive=exclusive, shared=shared,
+        namespace=namespace, purpose=f"quruntul {key}", deadline=time.monotonic() + LOCK_WAIT_SECONDS)
+    try:
+        code = probe_flake.main(["--probe", key, "--runs", "1", "--result", prefix + ".probe-flake.json"])
+    finally:
+        hold.release()
 # Where the failure evidence went, if any: the result document names it.
 try:
     kept = json.loads(Path(prefix + ".probe-flake.json").read_text()).get("retained_artifacts") or []

@@ -40,6 +40,10 @@ HSPEC_SLICE = 400
 LOCK_WAIT_SECONDS = 1800  # AGENTS.md: wait for cabal-build for up to 30 minutes
 BUILD_SECONDS = 5400  # a cold engine and codec build, in prepare's own budget
 TRIAL_MARGIN_SECONDS = 300  # process start-up and teardown around a probe
+# Waiting for the machine-wide `gpu-desktop` hold (#2932) while another checkout's
+# GPU probe runs. A `needs-gpu` trial's limit is extended by this much so the wait is
+# never charged to the probe; keep it equal to `probe_trial.GPU_WAIT_SECONDS`.
+GPU_WAIT_SECONDS = 4 * 3600
 # Probes run_probes.py cannot launch unattended: they need a mode flag on a
 # direct invocation (tools/ci_probes.py MANUAL_ONLY_REASONS says so).
 DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which run_probes.py cannot pass"}
@@ -148,6 +152,7 @@ class Synarchy:
         ]
         registry, eligible = tools["probe_runner_registry"], tools["ci_probes"].CI_ELIGIBLE
         protocol = tools["probe_flake"].PROTOCOL_PROBES
+        gpu_keys = tools["ci_probes"].gpu_probe_keys()
         ports = _port_bases(registry, [key for key, _, _ in registry.PROBES])
         for key, script, description in registry.PROBES:
             entry = census.get(key) or {}
@@ -159,6 +164,8 @@ class Synarchy:
             timeout = float(registry.effective_timeout(key))
             # prepare builds; a trial only waits for the probe's resources and runs it.
             trial = int(timeout + LOCK_WAIT_SECONDS + TRIAL_MARGIN_SECONDS)
+            if key in gpu_keys:
+                trial += GPU_WAIT_SECONDS
             suites.append(ctx.Suite(
                 id=_suite_id(key), kind="ci" if ci else "probe", framework=framework,
                 description=description, area=key.split("_")[0],

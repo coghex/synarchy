@@ -38,6 +38,7 @@ from collections.abc import Callable
 
 import probe_engine
 import probe_evidence
+import probe_gpu_hold
 
 # The user's graphical instance lives on 8008; probes must never touch it.
 GUI_PORT = 8008
@@ -314,6 +315,13 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
         # The error already names preparation; the label says which
         # engine's preparation it was.
         sys.exit(f"{label}: {error}")
+    # A window or a Vulkan device belongs to the whole machine (#2932): wait
+    # for `gpu-desktop` before launching, AFTER the preparation above so no
+    # repository resource is ever waited for while it is held. The hold lasts
+    # until this process exits, which covers a probe's later engines and its
+    # teardown. Headless and `--dump` boots, and a boot a runner already
+    # covers, return without touching a lock.
+    probe_gpu_hold.ensure_for_launch(cmd[1:], label)
     logf = open(logpath, "w")
     # Under a runner (#2931), list this log so a FAILING run keeps a copy
     # of it whatever fixed path the probe chose and whatever it later does

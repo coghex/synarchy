@@ -61,7 +61,9 @@ Ownership, in order, and what each step may not do
    across processes. `probe_runner_resources.ResourceLedger` coordinates
    only the probes inside one runner process, so without this a `/deflake`
    measurement and a `tools/run_probes.py` sweep would happily boot two
-   engines into the same tracked `config/` tree. Non-blocking here: a
+   engines into the same tracked `config/` tree. A `needs-gpu` probe's
+   interests include the machine-wide `gpu-desktop` exclusion (#2932), under
+   the same policy. Non-blocking here: a
    conflict is reported as `resource-busy` and the claim is given back,
    because an agent that waited would hold a probe hostage for however
    long a foreign sweep takes.
@@ -960,7 +962,11 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
 
     measurement = None
     try:
-        with hold:
+        # `exported_host_hold` marks the host-wide interests this hold took
+        # (`gpu-desktop` for a `needs-gpu` probe, #2932) in the environment, so
+        # `probe_flake.measure` and the probe beneath it treat them as already
+        # held instead of queueing for them behind this very process.
+        with hold, probe_runner_resources.exported_host_hold(hold):
             # ---- 7. Measure ---------------------------------------------
             # The last check before an hour of engine time: still ours,
             # still live, lease refreshed. Starting a measurement this

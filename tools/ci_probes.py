@@ -859,6 +859,20 @@ KNOWN_REASON_CATEGORIES = {
 MANUAL_ONLY_LABEL = "manual-only"
 
 
+def gpu_probe_keys(reasons: "dict[str, tuple[Reason, ...]] | None" = None) -> frozenset:
+    """Registered probes classified `needs-gpu`: the keys that drive the GPU or desktop.
+
+    The ONE derivation of that set. `probe_runner_resources` reads it to give
+    those probes the host-wide `gpu-desktop` exclusion, so the machine-wide
+    one-at-a-time rule follows the classification a reader can already see in
+    `--status` instead of a second list kept by hand. `reasons` exists only so a
+    self-test can derive from a synthetic mapping.
+    """
+    table = MANUAL_ONLY_REASONS if reasons is None else reasons
+    return frozenset(key for key, records in table.items()
+                     if any(r.category == NEEDS_GPU for r in records))
+
+
 def validate_manual_only_reasons(mapping: object) -> list[str]:
     """Return every structural problem in a probe -> reason-records mapping.
 
