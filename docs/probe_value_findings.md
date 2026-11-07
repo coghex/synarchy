@@ -40,7 +40,7 @@ concrete precondition
 - [x] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run — [no-issue]
 - [x] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep — [no-issue]
 - [x] PRB-14. The cost and value data needed to rank probes is not tracked — [#2947]
-- [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+- [x] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file — [#2948]
 
 ---
 
@@ -471,7 +471,9 @@ Ranking probes by what they cost and what they catch needed three sources that a
 - **Scope and constraints:** `docs/probe_census.json` is PR-only (listed in `~/.config/docs-push.json`); `tools/test_probe_census.py` and `python3 .quruntul/checks.py` apply. Not a duplicate of #2931 (failure evidence) or #2932 (GPU lock).
 - **Remaining uncertainty:** The issue-title sample is a GitHub relevance-ranked search limited to 150, so it understates catches filed under other titles.
 
-### PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+### [#2948] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+
+> **Note:** Owner decision 2026-11-07: measure first. #2948 adds `tools/bootstrap_timing.py`, which times the probes' per-file loop against the `startup_loader` arena profile's one-call path on fresh engines, with no change to any probe, `probelib` or the loader. Whether to roll the one-call path out to the 71 files, given its superset of loaded families, is a separate decision to take from those numbers; it is not filed.
 
 Added 2026-11-07 while processing PRB-10 (owner decision: append as a new unprocessed finding, with a timing measurement as its first step). Seventy-one files under `tools/` load the game definitions into each engine they boot by sending one debug-console command per YAML file (`engine.loadItemYaml(path)`, `engine.loadUnitYaml(path)`, and the other loaders), 75 files for the usual set: 4 substances, 39 items, 1 equipment, 13 materials, 1 faction, 1 physiology, 8 units, 8 buildings. The same bootstrap repeats on every fresh-process engine of the multi-engine probes, so its cost may be a large share of the roughly 34 s per engine seen in `persistence_contract` (PRB-8) and `gameplay_tag_persistence` (PRB-10). It is unmeasured, and no row of the report covers it.
 
