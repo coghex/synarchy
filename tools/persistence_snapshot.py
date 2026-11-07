@@ -42,7 +42,7 @@ performed:
 
   - a `cabal repl` recompiles into the shared inplace package database,
     so `persistence_contract` and `persistence_contract_sweep` had to
-    hold `cabal-build` EXCLUSIVELY and the compact probe ran ALONE,
+    hold `cabal-build` EXCLUSIVELY and the `persistence_contract` probe ran ALONE,
     after every other probe in a `--jobs 2` sweep had finished;
   - and it was the only reason the `behavior-probes` CI job built
     `synarchy-test-headless` at all, which on the 2026-09-02 runs

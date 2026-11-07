@@ -202,10 +202,12 @@ PROBES = [
     ("offscreen", "offscreen_probe.py",
      "--offscreen render mode: windowless Vulkan boot, UI flow, screenshots, input injection, parallel instances (#650; needs a GPU)"),
     ("persistence_contract", "persistence_contract_probe.py",
-     "compact fresh-process persistence contract smoke: three real "
+     "fresh-process persistence contract core: three real "
      "save->load->save cycles compared structurally (SessionSnapshot Eq + "
      "lua.* payload byte-equality) through the real production codec, "
-     "plus reset-policy and paused-stability checks (#767)"),
+     "plus reset-policy and paused-stability checks (#767), and three "
+     "mind-episode engines (old-default save, changed-default load repair, "
+     "second generation; #2840, #2943)"),
     ("persistence_contract_sweep", "persistence_contract_sweep.py",
      "broader persistence contract sweep: a real generated-world "
      "representative scenario (craft bill, mine designation, identity) "
@@ -216,6 +218,11 @@ PROBES = [
      "survives a save/restart/load round trip as a non-blocking diagnostic, "
      "and a corrupted save is rejected without touching the already-loaded "
      "live session (#764)"),
+    ("persistence_system_cycles", "persistence_system_cycles_probe.py",
+     "manual-only focused fresh-process save/load cycles: combat engagement "
+     "(#2834), exhaustion/sleep (#2835), cardio/circulation (#2836), blood "
+     "(#2837) and live relation causes (#2548); split out of "
+     "persistence_contract (#2943)"),
     ("physiology", "physiology_probe.py",
      "thermoregulation/circulation sanity across controlled environments"),
     ("plant", "plant_probe.py",
@@ -582,7 +589,14 @@ PROBE_EXPECTED_SECONDS: dict[str, float] = {
     # #2555: new and unmeasured on a PR run; one arena boot, a scenario
     # load and one save/load round trip. Refresh from CI's per-probe line.
     "flora_condition": 50.0,
-    "persistence_contract": 206.0,
+    # #2943: the core after the split (engines A-D plus the three mind-episode
+    # engines), one focused run on 2026-11-07 (265.4 s, macOS/aarch64, with
+    # other checkouts building alongside); it was 206 s for the old four-engine
+    # smoke and about 686 s once the system cycles had grown into it.
+    "persistence_contract": 265.0,
+    # #2943: manual-only; sixteen engines (E-T), one focused run on 2026-11-07
+    # (641.5 s, same machine and load). Not path-targeted and in no CI gate.
+    "persistence_system_cycles": 642.0,
     "craft": 97.0,
     "repair_item": 88.0,
     "cargo_capacity": 85.0,

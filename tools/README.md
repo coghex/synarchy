@@ -27,6 +27,40 @@ experiment, not a CI probe. Run `python3 tools/test_chunk_memory_measure.py` for
 its focused checks. The [protocol and results](../docs/chunk_memory_measurement.md)
 define the matrix, limitations and owner disposition.
 
+## Bootstrap timing measurement (`bootstrap_timing.py`, #2948)
+
+`bootstrap_timing.py` is a measurement for one question, not a probe (it is not a
+`*_probe.py` and is not registered with the runner): how long does the per-file
+definition loading that about seventy probes repeat on every engine take
+compared with the startup loader's one-call `arena` profile? On a fresh
+`--headless --arena` engine, on an isolated resource root and a non-8008 port,
+it times path A, the eight-family loop of `cargo_capacity_probe.py`
+`bootstrap()` with one console round trip per YAML file (each call also returns the loader's
+count and parse outcome), and path B,
+`startup_loader.build('arena')` plus `runAll()` as a single console call that
+answers its own `isDone()`/`isFailed()`. Each path runs on three fresh engines
+(`--repeats`, at least three, interleaved A, B, A, B, ...). It reports engine
+boot (process launch to that process's own `READY` line), each wall time and its
+median, the round-trip count and median seconds per round trip, the engine-side
+time of the per-family loader verbs from the unreset `debug.getLuaCallStats`
+window, per-family file counts and returned totals for both paths (a family's
+total counts textures, declarations, systems or definitions, so it is only
+comparable within a family), and the registry sizes afterwards. Before each
+timing the engine is shown to be unloaded (no loader verb called, every
+queryable registry empty, no loader line in the log); a failed or incomplete
+load fails the run and writes no report. Both paths keep `probelib.send`'s
+default idle wait, which is part of what a probe pays per round trip. It builds
+nothing inside a timed interval, changes no probe, `probelib` or loader, and
+recommends no migration.
+
+```
+python3 tools/bootstrap_timing.py --output <report.json> [--port 9473] [--repeats 3]
+python3 tools/test_bootstrap_timing.py        # engine-free self-test
+```
+
+The output is a table on stdout and a `bootstrap-timing/v1` JSON document at
+`--output`. Headless boots take no `gpu-desktop` hold and need no slot grant.
+
 ## Manual map-page codec measurement (#2303)
 
 `python3 tools/map_page_codec_measure.py --corpus-only` generates and verifies
@@ -925,7 +959,8 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `movement_probe.py` | movement arc (general, closed) | arena | Obstacle-course movement (pathing/climbs/falls/ramps) via `movement_arena.lua` courses; `--list` shows courses. |
 | `multiworld_save_probe.py` | #214, #219, #365, #2707, #2708 | worldgen + arena | Multi-world save → quit → restart → load; cross-page entity survival. `--arena` adds the arena pages: base reconstruction and expansion past the footprint (#2707), and a FINITE 100×40 arena (#2708) — rectangle, corner edits, a unit ordered off the map, edge water kept inside, outside chunks refused, save bytes untouched. |
 | `offscreen_probe.py` | #650 | offscreen (needs a GPU) | `--offscreen` render mode end to end: windowless Vulkan boot + real UI flow, non-blank screenshot capture, F2 input injection driving the UI, parallel instances on separate ports, and (unless `--skip-worldgen`) a full click-to-generate-world path to the in-game HUD. The generated world is **pinned** (#2166): seed, world size and plate count are set through the create-world screen's own controls before Generate World is clicked, `world.getSeed` confirms the world that came out, `--seed` overrides the default, and every run prints a one-line `FIXTURE` identity. A bounded search that finds no buildable position prints every candidate it rejected (resolved tile, `canPlaceAt` verdict and reason, full `remoteCheck` classification) and is reported as a `[SETUP]` fixture failure — counted separately from product assertions in the closing summary, still non-zero at exit. `--force-search-miss` exercises that path without editing the file. |
-| `persistence_contract_probe.py` | #767 | worldgen (size 8, four real engine boots, isolated resource root) | Compact fresh-process persistence contract smoke: three real fresh-process save → load → save cycles (four engine boots -- one to create the initial save, three more each loading the prior generation and saving the next), each save/load tied to its own `engine.getSaveStatus()`/`getLoadStatus()` request id reaching its terminal phase (not just the file appearing on disk), compared structurally (`SessionSnapshot` `Eq` + `lua.*` payload byte-equality, via `tools/persistence_snapshot.compare_session_files`) through the real production codec, plus reset-policy (seeded with a real unit/building/tile selection + non-default tool mode beforehand, each verified immediately after it's set), a pre-load-only throwaway page proving a load replaces rather than merges, paused-stability-dwell checks, and (#2515) a unit of every legacy faction -- player, legacy-hostile, wildlife, neutral, debug -- whose `unit.getFaction` answer is re-checked after each load, plus a player spawned after the last load reading as the same local controller. |
+| `persistence_contract_probe.py` | #767 | worldgen (size 8, seven real engine boots, isolated resource root) | The CI-eligible fresh-process persistence contract core (engines A-D, plus the three mind-episode engines described at the end of this row): three real fresh-process save → load → save cycles (four engine boots -- one to create the initial save, three more each loading the prior generation and saving the next), each save/load tied to its own `engine.getSaveStatus()`/`getLoadStatus()` request id reaching its terminal phase (not just the file appearing on disk), compared structurally (`SessionSnapshot` `Eq` + `lua.*` payload byte-equality, via `tools/persistence_snapshot.compare_session_files`) through the real production codec, plus reset-policy (seeded with a real unit/building/tile selection + non-default tool mode beforehand, each verified immediately after it's set), a pre-load-only throwaway page proving a load replaces rather than merges, paused-stability-dwell checks, and (#2515) a unit of every legacy faction -- player, legacy-hostile, wildlife, neutral, debug -- whose `unit.getFaction` answer is re-checked after each load, plus a player spawned after the last load reading as the same local controller. Then (#2943) three engines of the S11a brain/mind episodes -- a first engine on the PRE-S11b registry (`make_legacy_root`) saves a real old-default mind episode set, a fresh shipped-registry engine loads it (the logged changed-default normalization lines, the SD-23 defaults, the nomad pin) and saves again, and a third loads that and repairs nothing -- kept in CI by the owner's 2026-11-07 ruling. The focused engagement, exhaustion/sleep, cardio, blood and relation-cause cycles are `persistence_system_cycles_probe.py` below; shared fixtures live in `persistence_probe_common.py`. |
+| `persistence_system_cycles_probe.py` | #2943, #2834, #2835, #2836, #2837, #2548 | worldgen (size 8, sixteen real engine boots, isolated resource root; headless, manual-only) | The focused fresh-process save/load cycles that used to run after engines A-D of `persistence_contract_probe.py`, moved here unchanged in what they assert: combat engagement (E-G; a pending and an applied engagement across fresh processes), exhaustion and sleep (H-J), cardio and the derived circulation (K-M), blood in the dedicated field (N-P; engine N on the PRE-S11b registry) and live directed relation causes (Q-T; a codec-seeded save carried through three fresh processes). No CI gate runs it and it is not path-targeted: run it with `python3 tools/run_probes.py --only persistence_system_cycles --exact` when changing those subsystems' persistence or their save components. |
 | `persistence_contract_sweep.py` | #767 | worldgen (size 64, four real engine boots, isolated resource root) | Broader persistence contract sweep: the SAME three-cycle/four-boot fresh-process structural comparison against a real generated-world representative scenario (a built craft station running a bill, an acolyte_portal roster + a real unit_ai attack for non-vacuous Lua state, a mine designation, a world identity, a SECOND real saved page with its own identity/visibility — round-6 review — and a pre-load-only throwaway page proving a load replaces rather than merges — round-5 review); actually RUNS (via `run_probes.py --only ... --exact --retries 1`) a DEFAULT set of 10 of the 11 cross-referenced probes and propagates any failure. `craft_bill` remains opt-in because it is independently flaky per `ci_probes.py --status`. All 11 are isolated (round-6 review retrofitted `--resource-root` support into `chop`/`till`/`crop`/`plant`/`construction`/`power`/`transactional_load`/`save_barrier`, which previously wrote into this repo's real `saves/` directory), so `--cross-probe-keys` only ever accepts one of the 11 registered keys. |
 | `persistence_integrity_probe.py` | #764, #1484 | worldgen (isolated resource root) | Shared save/load integrity graph: a unit's `attackTargetUid` pointing at a destroyed unit survives a real save → quit → restart → load round trip as a non-blocking diagnostic naming the component/kind/id, and a truncated save is rejected with `LoadFailed` while leaving the already-loaded live session's active page/unit state and paused status completely unchanged. Also the converse (#1484): an acolyte's cached `buildTarget` whose construction site was destroyed is cleared by the AI's own next ticks, so the same save carries no `lua.unit_ai` `dangling-reference` diagnostic for that unit/building pair. |
 | `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
@@ -1305,7 +1340,7 @@ probes use a shared build interest, and `persistence_contract` uses the
 compiled codec passed in by the runner.
 `persistence_contract` was the third until #2274. It held the resource
 because `persistence_snapshot.compare_session_files` ran `cabal repl
-test:synarchy-test-headless`, so the compact probe ran ALONE, after every
+test:synarchy-test-headless`, so the `persistence_contract` probe ran ALONE, after every
 other probe in a `--jobs 2` sweep had finished — 177–206 s of dead time
 at the end of every CI probe step on the 2026-09-02 runs. That comparison
 is now `app-save-codec/Main.hs`'s `compare` operation, execed through the
@@ -4300,6 +4335,8 @@ tools/
 ├── preview/                (family owners + shared harness behind preview_probe.py, #2089 — libraries, not probes)
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
+├── bootstrap_timing.py     (per-file vs one-call definition loading timing, #2948 — a measurement, not a probe; see above)
+├── test_bootstrap_timing.py    (its engine-free self-test)
 ├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
 ├── river_runtime/          (hydraulic harness runner + recovered baseline characterization, #2719 — manual, not a probe)
 ├── river_runtime_arena.py  (manual socket river laboratory, #2719 — not a probe)

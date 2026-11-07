@@ -1436,7 +1436,7 @@ removing it.
   `RelationValueDTO`). Replaced by a load on the texture palette's seam and
   emptied by Exit to Menu only. Evidence: hspec `Faction relation store` and the
   `relation_cause_cycles` of
-  `tools/persistence_contract_probe.py`; contract:
+  `tools/persistence_system_cycles_probe.py` (manual-only); contract:
   `docs/engine_contracts.md` §Relations and autonomous combat.
 
 ### FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API
