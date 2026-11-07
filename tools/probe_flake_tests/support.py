@@ -230,6 +230,16 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         time.sleep(600)
         raise SystemExit(0)
 
+    if mode == "owned_hang":
+        # A probe that keeps a save OUTSIDE its attempt and is killed by its
+        # timeout before any cleanup can run.
+        owned = os.environ["SYNTHETIC_OWNED_DIR"]
+        os.makedirs(owned, exist_ok=True)
+        probe_evidence.register_owned_path(owned)
+        open(os.path.join(owned, "world.synworld"), "w").write("the save\\n")
+        rep.check("alpha", True, "the first check")
+        time.sleep(600)
+
     if mode in ("scratch_fail", "scratch_pass", "scratch_strict"):
         # A probe that owns a scratch tree and an engine log at a FIXED
         # path, then does what a real probe's `finally` does: discard the

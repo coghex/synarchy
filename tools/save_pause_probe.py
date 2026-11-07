@@ -246,6 +246,7 @@ def _run(args, rep):
     # Never reuse or clobber an existing save directory (belt-and-suspenders
     # on top of the random SAVE_NAME).
     save_dir = os.path.join("saves", SAVE_NAME)
+    probe_evidence.register_owned_path(save_dir)  # archived if we are killed
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
 

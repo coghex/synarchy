@@ -70,6 +70,12 @@ MARKER_SCHEMA = "probe-evidence/v1"
 ENGINE_LOG_MANIFEST = "engine-logs.txt"
 # Where the runner copies those logs inside a kept attempt.
 ENGINE_LOG_DIR = "engine-logs"
+# Paths a probe owns OUTSIDE its attempt (the checkout's own saves/), listed
+# before they are created so a killed probe's saves can still be archived.
+OWNED_PATHS_MANIFEST = "owned-paths.txt"
+OWNED_DIR = "owned-paths"
+# One kept run's own completion time (see `stamp_run`).
+RUN_STAMP = ".completed-at"
 # The attempt's complete stdout/stderr capture, saved when it is kept.
 CAPTURE_FILE = "stdout.txt"
 
@@ -245,7 +251,11 @@ def _failed_units(probe_dir: Path) -> list[tuple[str, str, str, Path, Path | Non
         except OSError:
             continue
         for run in runs:
-            units.append((stamp, name, run.name, run, path))
+            try:
+                own = (run / RUN_STAMP).read_text(encoding="utf-8").strip()
+            except OSError:
+                own = ""
+            units.append((own or stamp, name, run.name, run, path))
         if not runs:
             # Finalized and holding nothing: not evidence, only clutter.
             with contextlib.suppress(OSError):
@@ -339,6 +349,72 @@ def archive_engine_logs(directory: Path) -> list[str]:
     return problems
 
 
+def register_owned_path(path) -> None:
+    """List a path this probe will create OUTSIDE its attempt directory.
+
+    Probes that write the checkout's own `saves/` cannot have it redirected
+    by `TMPDIR`, and a probe killed by its timeout never reaches its own
+    cleanup. Listing the path first lets the runner copy whatever is there
+    into a kept attempt after the process group is gone. A no-op outside a
+    runner; the original is never removed by the runner.
+    """
+    held = evidence_dir()
+    if not held:
+        return
+    with contextlib.suppress(OSError):
+        with open(os.path.join(held, OWNED_PATHS_MANIFEST), "a",
+                  encoding="utf-8") as handle:
+            handle.write(os.path.abspath(str(path)) + "\n")
+
+
+def archive_owned_paths(directory: Path) -> list[str]:
+    """Copy every registered path that still exists into the kept attempt.
+
+    Returns problems; a copy that fails leaves the original alone and says
+    where it still is. Paths already inside the attempt are skipped.
+    """
+    problems = []
+    try:
+        listed = (directory / OWNED_PATHS_MANIFEST).read_text(
+            encoding="utf-8").splitlines()
+    except OSError:
+        return problems
+    seen = set()
+    inside = directory.resolve()
+    for index, raw in enumerate(listed):
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        source = Path(raw)
+        if not source.is_dir() or source.is_symlink():
+            continue
+        with contextlib.suppress(OSError):
+            if inside in source.resolve().parents:
+                continue
+        target = directory / OWNED_DIR / f"{index:02d}-{source.name}"
+        try:
+            target.parent.mkdir(exist_ok=True)
+            shutil.copytree(source, target, symlinks=True)
+        except OSError as error:
+            shutil.rmtree(target, ignore_errors=True)
+            problems.append(
+                f"could not copy {source} into {directory}: {error}; the "
+                f"original is still at {source}")
+    return problems
+
+
+def stamp_run(run_dir: Path) -> None:
+    """Record when THIS run completed, for pruning across invocations.
+
+    An invocation is finalized once, at its end, so its runs would all
+    inherit that moment; a run that failed earlier in a long batch would then
+    outrank a failure from another invocation that finished in between.
+    """
+    with contextlib.suppress(OSError):
+        (run_dir / RUN_STAMP).write_text(
+            _now().strftime("%Y%m%dT%H%M%S.%fZ") + "\n", encoding="utf-8")
+
+
 # --------------------------------------------------------------------------
 # One attempt
 # --------------------------------------------------------------------------
@@ -414,6 +490,8 @@ class Attempt:
                 say(f"could not save the captured output of {self.path}: "
                     f"{error}")
         for problem in archive_engine_logs(self.path):
+            say(problem)
+        for problem in archive_owned_paths(self.path):
             say(problem)
         try:
             _write_marker(self.path, self.probe, outcome)
@@ -627,6 +705,8 @@ def retire_saves(path, *, strict: bool = False) -> None:
     `ignore_errors=True`.
     """
     held = evidence_dir()
+    if held and not is_runner_owned(path):
+        register_owned_path(path)
     if held and os.path.isdir(path) and not is_runner_owned(path):
         destination = os.path.join(
             held, RETIRED_DIR,

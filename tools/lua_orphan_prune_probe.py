@@ -221,6 +221,7 @@ def main() -> int:
 
 def _run(args, rep: probe_protocol.Reporter) -> int:
     save_dir = os.path.join("saves", SAVE_NAME)
+    probe_evidence.register_owned_path(save_dir)  # archived if we are killed
     if os.path.exists(save_dir):
         rep.abort(f"refusing to run: {save_dir} already exists")
         return 2

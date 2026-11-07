@@ -206,6 +206,9 @@ def main() -> int:
 
 def _run(args, rep):
     for name in (SAVE_NAME, SAVE_NAME_PAUSED):
+        # archived if we are killed (#2931)
+        probe_evidence.register_owned_path(os.path.join("saves", name))
+    for name in (SAVE_NAME, SAVE_NAME_PAUSED):
         if os.path.exists(os.path.join("saves", name)):
             sys.exit(f"refusing to run: saves/{name} already exists")
 

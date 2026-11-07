@@ -1026,8 +1026,10 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
                 cleanly, so the result never reads as "nothing went
                 wrong, nothing retained".
                 """
-                for problem in probe_evidence.archive_engine_logs(run_dir):
+                for problem in (probe_evidence.archive_engine_logs(run_dir)
+                                + probe_evidence.archive_owned_paths(run_dir)):
                     print(problem, file=sys.stderr)
+                probe_evidence.stamp_run(run_dir)
                 measurement.status = "harness-error"
                 measurement.error = f"run {index}: {detail}"
                 measurement.error_run = RunRecord(
@@ -1061,8 +1063,25 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
                 # Read BEFORE the delete: a removal that fails part-way has
                 # already taken files, this one among them.
                 strict = (run_dir / probe_evidence.STRICT_MARK).exists()
+                # A delete that fails PART-WAY has already taken files; keep
+                # what the failure's evidence is made of so it can be put back.
+                manifests = {}
+                if strict:
+                    for name in (probe_evidence.ENGINE_LOG_MANIFEST,
+                                 probe_evidence.OWNED_PATHS_MANIFEST):
+                        with contextlib.suppress(OSError):
+                            manifests[name] = (run_dir / name).read_text(
+                                encoding="utf-8")
                 removal = _remove_tree(run_dir)
                 if removal and strict:
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    for name, text in manifests.items():
+                        with contextlib.suppress(OSError):
+                            (run_dir / name).write_text(text, encoding="utf-8")
+                    with contextlib.suppress(OSError):
+                        stdout_path.write_text(out or "", encoding="utf-8")
+                    with contextlib.suppress(OSError):
+                        events_path.write_text(events_text, encoding="utf-8")
                     # A probe whose cleanup is a contract retired its tree
                     # and the harness could not delete it: the run is not a
                     # pass. Its checks stay as scored; only the run's outcome
@@ -1073,8 +1092,10 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
                         with open(stdout_path, "a", encoding="utf-8") as fh:
                             fh.write(f"\n[FAIL] {removal}\n")
             if keep:
-                for problem in probe_evidence.archive_engine_logs(run_dir):
+                for problem in (probe_evidence.archive_engine_logs(run_dir)
+                                + probe_evidence.archive_owned_paths(run_dir)):
                     print(problem, file=sys.stderr)
+                probe_evidence.stamp_run(run_dir)
             measurement.runs.append(RunRecord(
                 index, base_port, outcome, elapsed, outcomes,
                 run_dir if keep else None))

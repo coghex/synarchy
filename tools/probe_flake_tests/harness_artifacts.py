@@ -336,6 +336,92 @@ def test_a_failed_removal_after_strict_cleanup_fails_the_run() -> None:
             shutil.rmtree = real
 
 
+def test_a_killed_probe_s_checkout_saves_are_archived() -> None:
+    print("\n-- a TIMEOUT keeps the saves a probe registered outside its attempt (#2931)")
+    with SyntheticTree() as tree, _failure_root_env(tree):
+        owned = tree.root / "checkout-saves" / "probe_slot"
+        os.environ["SYNTHETIC_OWNED_DIR"] = str(owned)
+        try:
+            m = run_synthetic(tree, "owned_hang", runs=1, timeout=3.0,
+                              artifact_root=None)
+        finally:
+            os.environ.pop("SYNTHETIC_OWNED_DIR", None)
+        kept = m.runs[0].artifact_dir
+        copies = (sorted((kept / probe_evidence.OWNED_DIR).glob("*/world.synworld"))
+                  if kept else [])
+        expect(m.runs[0].outcome == probe_flake.RUN_TIMEOUT and len(copies) == 1
+               and copies[0].read_text() == "the save\n",
+               "the killed probe's save was copied into the kept run")
+        expect((owned / "world.synworld").exists(),
+               "and the original is left where the probe put it")
+
+
+def test_a_partial_deletion_still_keeps_the_failure_evidence() -> None:
+    print("\n-- strict cleanup that fails PART-WAY keeps its evidence (#2931)")
+    import io
+    import contextlib
+    import shutil
+    with SyntheticTree() as tree, _failure_root_env(tree):
+        fixed = tree.root / "fixed-engine.log"
+        os.environ["SYNTHETIC_FIXED_LOG"] = str(fixed)
+        real = shutil.rmtree
+
+        def partial(path, *args, **kwargs):
+            if "run-" in str(path):
+                # What a real mid-delete failure does: the files it reached
+                # first are gone, then it raises.
+                for name in ("stdout.txt", "events.jsonl",
+                             probe_evidence.ENGINE_LOG_MANIFEST):
+                    try:
+                        os.unlink(os.path.join(str(path), name))
+                    except OSError:
+                        pass
+                raise OSError("synthetic: directory busy")
+            return real(path, *args, **kwargs)
+
+        shutil.rmtree = partial
+        seen = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(seen):
+                m = run_synthetic(tree, "scratch_strict", runs=1,
+                                  artifact_root=None)
+        finally:
+            shutil.rmtree = real
+            os.environ.pop("SYNTHETIC_FIXED_LOG", None)
+        kept = m.runs[0].artifact_dir
+        expect(m.runs[0].outcome == probe_flake.RUN_FAIL and kept is not None,
+               "the run is a failure and is kept")
+        if kept:
+            expect("[FAIL]" in (kept / "stdout.txt").read_text()
+                   and (kept / "events.jsonl").read_text().strip() != "",
+                   "its captured output and protocol events are restored")
+            logs = list((kept / probe_evidence.ENGINE_LOG_DIR).glob("*"))
+            expect(len(logs) == 1 and logs[0].read_text() == "engine output\n",
+                   "and the engine log the deleted manifest listed is archived")
+
+
+def test_pruning_orders_runs_by_their_own_completion() -> None:
+    print("\n-- an invocation finalized last does not outrank an earlier failure")
+    import time
+    with SyntheticTree() as tree, _failure_root_env(tree) as durable:
+        probe_dir = durable.resolve() / "synthetic"
+        a = probe_dir / "synthetic-A"
+        b = probe_dir / "synthetic-B"
+        (a / "run-001").mkdir(parents=True)
+        probe_evidence.stamp_run(a / "run-001")        # A fails first
+        time.sleep(0.01)
+        (b / "run-001").mkdir(parents=True)
+        probe_evidence.stamp_run(b / "run-001")        # B fails later
+        probe_evidence.finalize_invocation(b, probe="synthetic",
+                                           retained=True, keep=1)
+        time.sleep(0.01)
+        probe_evidence.finalize_invocation(a, probe="synthetic",
+                                           retained=True, keep=1)  # A ends last
+        expect((b / "run-001").exists() and not a.exists(),
+               "KEEP=1 retains B's newer failure, not A's older one that "
+               "merely finalized later")
+
+
 def test_probe_owned_scratch_is_kept_for_the_harness() -> None:
     print("\n-- probe-owned cleanup defers to the harness (#2931) --")
     with SyntheticTree() as tree, _failure_root_env(tree) as durable:
@@ -373,5 +459,8 @@ TESTS = (
     test_failure_evidence_pruning_counts_failed_runs,
     test_a_harness_error_reports_an_archive_failure,
     test_a_failed_removal_after_strict_cleanup_fails_the_run,
+    test_a_killed_probe_s_checkout_saves_are_archived,
+    test_a_partial_deletion_still_keeps_the_failure_evidence,
+    test_pruning_orders_runs_by_their_own_completion,
     test_probe_owned_scratch_is_kept_for_the_harness,
 )

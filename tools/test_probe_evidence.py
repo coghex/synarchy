@@ -64,6 +64,12 @@ SCRATCH_PROBE = textwrap.dedent('''\
     code = codes[min(attempt, len(codes)) - 1]
     scratch = tempfile.mkdtemp(prefix='scratch_')
     open(os.path.join(scratch, 'evidence.txt'), 'w').write('save %d\\n' % attempt)
+    ownedfile = {owned!r}
+    if os.path.exists(ownedfile):
+        owned = open(ownedfile).read().strip()
+        os.makedirs(owned, exist_ok=True)
+        probe_evidence.register_owned_path(owned)
+        open(os.path.join(owned, 'world.synworld'), 'w').write('the save\\n')
     fixed = {fixed!r}
     open(fixed, 'w').write('engine output %d\\n' % attempt)
     probe_evidence.record_engine_log(fixed)
@@ -87,7 +93,8 @@ def add_scratch_probe(tree: Tree, name: str, behave: str) -> Path:
     (tree.root / "tools" / script).write_text(SCRATCH_PROBE.format(
         tools=str(Path(__file__).resolve().parent),
         counter=str(tree.root / f"{name}.counter"),
-        behave=str(behave_file), fixed=str(fixed)), encoding="utf-8")
+        behave=str(behave_file), fixed=str(fixed),
+        owned=str(tree.root / f"{name}.owned")), encoding="utf-8")
     tree.probes.append((name, script, f"synthetic {name}"))
     return fixed
 
@@ -360,6 +367,79 @@ def test_saves_outside_the_attempt_are_copied_before_removal() -> None:
         os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
         if saved is not None:
             os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_a_timeout_keeps_checkout_saves_the_probe_registered() -> None:
+    print("\n-- run_probes: a killed probe's registered saves are archived")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "killed", "hang")
+        owned = tree.root / "checkout-saves" / "probe_slot"
+        (tree.root / "killed.owned").write_text(str(owned))
+        rc, out = main_with(tree, ["--only", "killed", "--exact",
+                                   "--timeout", "3"])
+        kept = attempts(tree, "killed")
+        copies = (sorted((kept[0] / probe_evidence.OWNED_DIR)
+                         .glob("*/world.synworld")) if kept else [])
+        expect(rc == 1 and len(copies) == 1
+               and copies[0].read_text() == "the save\n",
+               f"the save the killed probe never cleaned up was copied in "
+               f"({kept})")
+        expect((owned / "world.synworld").exists(),
+               "and the original stays where the probe made it")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_the_persistence_sweep_s_real_cleanup_keeps_its_tree() -> None:
+    print("\n-- persistence_contract_sweep.main's cleanup paths keep the tree")
+    import persistence_contract_sweep as sweep  # noqa: E402
+    saved_env = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    saved_tempdir = tempfile.tempdir
+    real_root = sweep.make_isolated_root
+    try:
+        for label, extra in (("uninstrumented", []), ("instrumented", ["dest"])):
+            with tempfile.TemporaryDirectory(prefix="evidence-sweep-") as temp:
+                temp = Path(temp).resolve()
+                attempt = temp / "attempt"
+                (attempt / "tmp").mkdir(parents=True)
+                os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+                tempfile.tempdir = str(attempt / "tmp")
+
+                def boom(base):
+                    Path(base, "world.synworld").write_text("the save")
+                    Path(base, "engineA.log").write_text("engine log")
+                    raise RuntimeError("synthetic failure inside the sweep")
+
+                sweep.make_isolated_root = boom
+                argv = ["--skip-cross-probes"]
+                if extra:
+                    argv += ["--keep-generations", str(temp / "dest")]
+                saved_argv = sys.argv
+                sys.argv = ["persistence_contract_sweep.py", *argv]
+                try:
+                    try:
+                        sweep.main()
+                    except RuntimeError:
+                        pass
+                finally:
+                    sys.argv = saved_argv
+                    tempfile.tempdir = saved_tempdir
+                saves = list((attempt / probe_evidence.RETIRED_DIR).glob(
+                    "persistence_contract_sweep_*/world.synworld"))
+                logs = list((attempt / probe_evidence.RETIRED_DIR).glob(
+                    "persistence_contract_sweep_*/engineA.log"))
+                expect(len(saves) == 1 and len(logs) == 1
+                       and saves[0].read_text() == "the save",
+                       f"{label}: the real finally path retired the tree "
+                       f"with its save and engine log inside")
+    finally:
+        sweep.make_isolated_root = real_root
+        tempfile.tempdir = saved_tempdir
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved_env is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved_env
 
 
 def test_a_failed_save_copy_leaves_the_original_in_place() -> None:
@@ -651,12 +731,14 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                 "fluid_reaction_visual", "debug_console_boot", "audio_null",
                 "save_pause", "multiworld_save", "lua_orphan_prune",
                 "pause_speed", "tutorial", "tutorial_hud",
-                "expedition_loop")
+                "expedition_loop", "persistence_contract_sweep")
     call = re.compile(r"^[^#\n]*\bshutil\.rmtree\(", re.M)
     for name in migrated:
-        text = (Path(__file__).parent / f"{name}_probe.py").read_text()
+        script = (f"{name}.py" if name == "persistence_contract_sweep"
+                  else f"{name}_probe.py")
+        text = (Path(__file__).parent / script).read_text()
         expect(call.search(text) is None,
-               f"{name}_probe.py has no direct shutil.rmtree call: its "
+               f"{script} has no direct shutil.rmtree call: its "
                f"teardown retires trees through probe_evidence, so the saves "
                f"and logs inside them survive a failure")
 
@@ -901,6 +983,8 @@ TESTS = (
     test_a_root_inside_a_worktree_is_refused,
     test_a_failed_removal_after_strict_cleanup_fails_the_run,
     test_saves_outside_the_attempt_are_copied_before_removal,
+    test_a_timeout_keeps_checkout_saves_the_probe_registered,
+    test_the_persistence_sweep_s_real_cleanup_keeps_its_tree,
     test_a_failed_save_copy_leaves_the_original_in_place,
     test_the_expedition_cleanup_helper_retires_the_tree,
     test_directly_launched_engine_logs_survive_finalization,

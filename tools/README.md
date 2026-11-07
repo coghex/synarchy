@@ -1798,7 +1798,7 @@ the newest `$SYNARCHY_PROBE_FAILURE_KEEP` (default 5) FAILED ATTEMPTS per probe
 — each failed `run-NNN` of a `probe_flake` batch counts on its own, so one
 batch cannot hold the limit hostage; an unmarked (active) directory and a
 symlink are never touched. A root inside a worktree is refused
-before any probe runs (exit 2 from `run_probes.py`), and so is a `<root>/<probe>` symlink that leads into one. A probe whose cleanup is a contract (`retire`, `release_tree`) fails if the runner then cannot delete what it retired. Every `--retries` attempt
+before any probe runs (exit 2 from `run_probes.py`), and so is a `<root>/<probe>` symlink that leads into one. A probe whose cleanup is a contract (`retire`, `release_tree`) fails if the runner then cannot delete what it retired, and that failure is finalized like any other. A probe that keeps a save in the checkout's own `saves/` lists it first (`register_owned_path`), so a TIMEOUT that never reached its cleanup still has the save copied into `owned-paths/`; each kept run also carries its own completion time (`.completed-at`), which orders pruning across batches. Every `--retries` attempt
 keeps its own directory, so a failed attempt survives a retry that passes. The
 four `--keep-artifacts` probes (`flora_growth`, `flora_condition`,
 `location_embark`, `location_content`) release their tree through the same

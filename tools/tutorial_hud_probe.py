@@ -134,6 +134,7 @@ def remove_probe_slot() -> None:
     saves = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "saves")
     target = os.path.join(saves, SLOT)
+    probe_evidence.register_owned_path(target)  # archived if we are killed
     if (os.path.basename(target) == SLOT
             and os.path.dirname(target) == saves
             and os.path.isdir(target)

@@ -754,6 +754,7 @@ def _run(args, rep):
     # data (false pass) and the cleanup delete a dir this run didn't create.
     save_name = f"{SAVE_PREFIX}{uuid.uuid4().hex[:12]}"
     save_dir = os.path.join("saves", save_name)
+    probe_evidence.register_owned_path(save_dir)  # archived if we are killed
     save_file = os.path.join(save_dir, "world.synworld")
     # Belt-and-suspenders on top of the random name: never reuse/clobber an
     # existing directory, so file existence below is proof THIS run wrote it.
