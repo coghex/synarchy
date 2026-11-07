@@ -1,0 +1,1330 @@
+{
+  "schema": "bootstrap-timing/v1",
+  "engine_executable": "/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2948-bootstrap-timing/dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy/synarchy",
+  "engine_executable_bytes": 225730296,
+  "engine_executable_mtime": "2026-11-07T13:42:08-0800",
+  "repo_head": "e99993157d598eace8a1d5974bb98f6d2988e1f5",
+  "repo_dirty": false,
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.8",
+  "port": 9473,
+  "console_idle_s": 0.3,
+  "ready_poll_s": 0.05,
+  "summary": {
+    "engine_boot_s": {
+      "A": {
+        "values": [
+          2.966757332906127,
+          0.17111458303406835,
+          0.2163415001705289
+        ],
+        "median": 0.2163415001705289
+      },
+      "B": {
+        "values": [
+          0.23810241697356105,
+          0.15820458298549056,
+          0.17060187505558133
+        ],
+        "median": 0.17060187505558133
+      },
+      "all": {
+        "values": [
+          2.966757332906127,
+          0.23810241697356105,
+          0.17111458303406835,
+          0.15820458298549056,
+          0.2163415001705289,
+          0.17060187505558133
+        ],
+        "median": 0.19372804160229862
+      }
+    },
+    "path_a": {
+      "load_wall_s": {
+        "values": [
+          25.38124008430168,
+          25.083323792088777,
+          25.55126883275807
+        ],
+        "median": 25.38124008430168
+      },
+      "round_trips": 75,
+      "median_round_trip_s": {
+        "values": [
+          0.30822320794686675,
+          0.3084719590842724,
+          0.31021270900964737
+        ],
+        "median": 0.3084719590842724
+      },
+      "idle_floor_s": 22.5,
+      "engine_side_load_s": {
+        "values": [
+          2.155319,
+          1.8507,
+          2.226829
+        ],
+        "median": 2.155319
+      }
+    },
+    "path_b": {
+      "load_wall_s": {
+        "values": [
+          2.3960308339446783,
+          2.158814125228673,
+          2.472404833883047
+        ],
+        "median": 2.3960308339446783
+      },
+      "round_trips": 1,
+      "idle_floor_s": 0.3,
+      "engine_side_load_s": {
+        "values": [
+          2.086137,
+          1.844312,
+          2.157122
+        ],
+        "median": 2.086137
+      }
+    },
+    "difference_s": {
+      "definition": "median(A load wall) minus median(B load wall); negative means B was slower",
+      "value": 22.985209250357002
+    },
+    "estimate_against_historical_probe_engine_cost": {
+      "denominator_s": 34.0,
+      "denominator_source": "docs/probe_value_findings.md PRB-15: an estimate (a probe total divided by its engine count), not a newly measured end-to-end probe total",
+      "path_a_fraction": 0.7465070613029906,
+      "path_b_fraction": 0.07047149511601995,
+      "signed_saving_fraction": 0.6760355661869707
+    },
+    "scope": "this headless --arena bootstrap comparison only: B also loads vegetation, infections, recipes, loot tables, loot profiles and locations, and both paths include the console's per-round-trip idle wait"
+  },
+  "families": [
+    {
+      "family": "material",
+      "returned_count_unit": "textures",
+      "path_a": {
+        "files": 13,
+        "returned_total": 219
+      },
+      "path_b": {
+        "files": 13,
+        "returned_total": 219
+      }
+    },
+    {
+      "family": "vegetation",
+      "returned_count_unit": "textures",
+      "path_a": null,
+      "path_b": {
+        "files": 5,
+        "returned_total": 77
+      }
+    },
+    {
+      "family": "substance",
+      "returned_count_unit": "definitions",
+      "path_a": {
+        "files": 4,
+        "returned_total": 16
+      },
+      "path_b": {
+        "files": 4,
+        "returned_total": 16
+      }
+    },
+    {
+      "family": "infection",
+      "returned_count_unit": "definitions",
+      "path_a": null,
+      "path_b": {
+        "files": 1,
+        "returned_total": 8
+      }
+    },
+    {
+      "family": "recipe",
+      "returned_count_unit": "definitions",
+      "path_a": null,
+      "path_b": {
+        "files": 6,
+        "returned_total": 19
+      }
+    },
+    {
+      "family": "item",
+      "returned_count_unit": "definitions",
+      "path_a": {
+        "files": 39,
+        "returned_total": 67
+      },
+      "path_b": {
+        "files": 39,
+        "returned_total": 67
+      }
+    },
+    {
+      "family": "equipment",
+      "returned_count_unit": "classes",
+      "path_a": {
+        "files": 1,
+        "returned_total": 1
+      },
+      "path_b": {
+        "files": 1,
+        "returned_total": 1
+      }
+    },
+    {
+      "family": "building",
+      "returned_count_unit": "definitions",
+      "path_a": {
+        "files": 8,
+        "returned_total": 8
+      },
+      "path_b": {
+        "files": 8,
+        "returned_total": 8
+      }
+    },
+    {
+      "family": "faction",
+      "returned_count_unit": "declarations",
+      "path_a": {
+        "files": 1,
+        "returned_total": 8
+      },
+      "path_b": {
+        "files": 1,
+        "returned_total": 8
+      }
+    },
+    {
+      "family": "physiology",
+      "returned_count_unit": "systems",
+      "path_a": {
+        "files": 1,
+        "returned_total": 11
+      },
+      "path_b": {
+        "files": 1,
+        "returned_total": 11
+      }
+    },
+    {
+      "family": "unit",
+      "returned_count_unit": "definitions",
+      "path_a": {
+        "files": 8,
+        "returned_total": 8
+      },
+      "path_b": {
+        "files": 8,
+        "returned_total": 8
+      }
+    },
+    {
+      "family": "loot_table",
+      "returned_count_unit": "tables (0 or 1 per file)",
+      "path_a": null,
+      "path_b": {
+        "files": 1,
+        "returned_total": 1
+      }
+    },
+    {
+      "family": "loot_profile",
+      "returned_count_unit": "profiles (0 or 1 per file)",
+      "path_a": null,
+      "path_b": {
+        "files": 1,
+        "returned_total": 1
+      }
+    },
+    {
+      "family": "location",
+      "returned_count_unit": "definitions",
+      "path_a": null,
+      "path_b": {
+        "files": 1,
+        "returned_total": 1
+      }
+    }
+  ],
+  "registry_entries_after": {
+    "A": {
+      "substance": 16,
+      "item": 67,
+      "equipment": 1,
+      "material": 73,
+      "building": 8,
+      "unit": 8,
+      "physiology": 6,
+      "infection": 0,
+      "recipe": 0,
+      "location": 0,
+      "loot_profile": 0
+    },
+    "B": {
+      "substance": 16,
+      "item": 67,
+      "equipment": 1,
+      "material": 73,
+      "building": 8,
+      "unit": 8,
+      "physiology": 6,
+      "infection": 8,
+      "recipe": 19,
+      "location": 1,
+      "loot_profile": 1
+    }
+  },
+  "samples": [
+    {
+      "path": "A",
+      "index": 1,
+      "engine_boot_s": 2.966757332906127,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 25.38124008430168,
+      "round_trips": 75,
+      "round_trip_s": [
+        0.3096994156949222,
+        0.36741558322682977,
+        0.31802899995818734,
+        0.3127512917853892,
+        0.30238249991089106,
+        0.3193783750757575,
+        0.30193912517279387,
+        0.303889499977231,
+        0.3062970000319183,
+        0.3057029591873288,
+        0.30346795776858926,
+        0.3033892083913088,
+        0.30753395799547434,
+        0.30614479212090373,
+        0.3167978748679161,
+        0.3119713752530515,
+        0.31368104089051485,
+        0.3170315003953874,
+        0.3059733328409493,
+        0.307909750379622,
+        0.3076300825923681,
+        0.3035853751935065,
+        0.3019419168122113,
+        0.30307733407244086,
+        0.3040458750911057,
+        0.31782791670411825,
+        0.30786124989390373,
+        0.31872779224067926,
+        0.30589458299800754,
+        0.3049477497115731,
+        0.31092395912855864,
+        0.30336041608825326,
+        0.3032174576073885,
+        0.30471591698005795,
+        0.3110730843618512,
+        0.3053153329528868,
+        0.3064637496136129,
+        0.3161839582026005,
+        0.3165002088062465,
+        0.30822320794686675,
+        0.30712983291596174,
+        0.3205918329767883,
+        0.30349700013175607,
+        0.3041149592027068,
+        0.3103258339688182,
+        0.3035777499899268,
+        0.30413454212248325,
+        0.30612479196861386,
+        0.30519012501463294,
+        0.31834912532940507,
+        0.312971250154078,
+        0.31233262503519654,
+        0.3162027089856565,
+        0.30798966716974974,
+        0.30854383297264576,
+        0.3056922503747046,
+        0.30394787481054664,
+        0.3035018751397729,
+        0.3096490423195064,
+        0.7864797497168183,
+        1.0877485838718712,
+        0.4903465830720961,
+        0.34869050001725554,
+        0.38496149983257055,
+        0.33128320798277855,
+        0.35593570908531547,
+        0.8369804169051349,
+        0.31211758265271783,
+        0.30782912485301495,
+        0.31086220825091004,
+        0.31635404098778963,
+        0.30350241670385003,
+        0.3097969591617584,
+        0.31661008298397064,
+        0.31364399986341596
+      ],
+      "median_round_trip_s": 0.30822320794686675,
+      "families": {
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        }
+      },
+      "engine_side": {
+        "load_calls": 75,
+        "load_seconds": 2.155319,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.009882
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.000684
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000678
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.010611
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.007911
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.001706
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.001245
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 2.122602
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 0,
+        "recipe": 0,
+        "location": 0,
+        "loot_profile": 0
+      }
+    },
+    {
+      "path": "B",
+      "index": 1,
+      "engine_boot_s": 0.23810241697356105,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 2.3960308339446783,
+      "round_trips": 1,
+      "families": {
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "vegetation": {
+          "files": 5,
+          "returned_total": 77
+        },
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "infection": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "recipe": {
+          "files": 6,
+          "returned_total": 19
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "loot_table": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "loot_profile": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "location": {
+          "files": 1,
+          "returned_total": 1
+        }
+      },
+      "loader_status": {
+        "done": true,
+        "failed": false
+      },
+      "engine_side": {
+        "load_calls": 90,
+        "load_seconds": 2.086137,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.001273
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.000167
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000301
+          },
+          "engine.loadInfectionYaml": {
+            "calls": 1,
+            "seconds": 0.00053
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.003598
+          },
+          "engine.loadLocationYaml": {
+            "calls": 1,
+            "seconds": 0.003112
+          },
+          "engine.loadLootProfileYaml": {
+            "calls": 1,
+            "seconds": 0.00017
+          },
+          "engine.loadLootTableYaml": {
+            "calls": 1,
+            "seconds": 0.000116
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.003726
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.001205
+          },
+          "engine.loadRecipeYaml": {
+            "calls": 6,
+            "seconds": 0.000913
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.00064
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 2.06827
+          },
+          "engine.loadVegetationYaml": {
+            "calls": 5,
+            "seconds": 0.002116
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 8,
+        "recipe": 19,
+        "location": 1,
+        "loot_profile": 1
+      }
+    },
+    {
+      "path": "A",
+      "index": 2,
+      "engine_boot_s": 0.17111458303406835,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 25.083323792088777,
+      "round_trips": 75,
+      "round_trip_s": [
+        0.3135556671768427,
+        0.36331154219806194,
+        0.32510504173114896,
+        0.3060242501087487,
+        0.30712758284062147,
+        0.30696654226630926,
+        0.3092982918024063,
+        0.30740141635760665,
+        0.3030617502517998,
+        0.3034726670011878,
+        0.30415137484669685,
+        0.3047357089817524,
+        0.3099630419164896,
+        0.3025252497754991,
+        0.3186898333951831,
+        0.31297929119318724,
+        0.3166280831210315,
+        0.30650116689503193,
+        0.30594045808538795,
+        0.31060670781880617,
+        0.3084631669335067,
+        0.3038185411132872,
+        0.30433795880526304,
+        0.31071062479168177,
+        0.3164714998565614,
+        0.30641979118809104,
+        0.3104561250656843,
+        0.3061069999821484,
+        0.30877479212358594,
+        0.30401008296757936,
+        0.3038593749515712,
+        0.3046183749102056,
+        0.30569349974393845,
+        0.30709304101765156,
+        0.30270595801994205,
+        0.30382779194042087,
+        0.30430983286350965,
+        0.3040881250053644,
+        0.3101974157616496,
+        0.31235491717234254,
+        0.31734645878896117,
+        0.31348354229703546,
+        0.30687537463381886,
+        0.3061657501384616,
+        0.30484866676852107,
+        0.30416720919311047,
+        0.3084719590842724,
+        0.3036510837264359,
+        0.30385991698130965,
+        0.30487099988386035,
+        0.30477604176849127,
+        0.30893358401954174,
+        0.3034974583424628,
+        0.31765849981456995,
+        0.3112019170075655,
+        0.3186527080833912,
+        0.3071011248975992,
+        0.30448216665536165,
+        0.30589191569015384,
+        0.723273416981101,
+        1.029714375268668,
+        0.4773651249706745,
+        0.35322949988767505,
+        0.3781774593517184,
+        0.33471666695550084,
+        0.35065704211592674,
+        0.6842864998616278,
+        0.31683729169890285,
+        0.31399512523785233,
+        0.317432124633342,
+        0.3121497919782996,
+        0.3172557093203068,
+        0.3129878747276962,
+        0.3100896249525249,
+        0.3176524583250284
+      ],
+      "median_round_trip_s": 0.3084719590842724,
+      "families": {
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        }
+      },
+      "engine_side": {
+        "load_calls": 75,
+        "load_seconds": 1.8507,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.002777
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.00027
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000439
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.011197
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.006051
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.001343
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.001187
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 1.827436
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 0,
+        "recipe": 0,
+        "location": 0,
+        "loot_profile": 0
+      }
+    },
+    {
+      "path": "B",
+      "index": 2,
+      "engine_boot_s": 0.15820458298549056,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 2.158814125228673,
+      "round_trips": 1,
+      "families": {
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "vegetation": {
+          "files": 5,
+          "returned_total": 77
+        },
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "infection": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "recipe": {
+          "files": 6,
+          "returned_total": 19
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "loot_table": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "loot_profile": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "location": {
+          "files": 1,
+          "returned_total": 1
+        }
+      },
+      "loader_status": {
+        "done": true,
+        "failed": false
+      },
+      "engine_side": {
+        "load_calls": 90,
+        "load_seconds": 1.844312,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.001132
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.000182
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000296
+          },
+          "engine.loadInfectionYaml": {
+            "calls": 1,
+            "seconds": 0.000542
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.003869
+          },
+          "engine.loadLocationYaml": {
+            "calls": 1,
+            "seconds": 0.003148
+          },
+          "engine.loadLootProfileYaml": {
+            "calls": 1,
+            "seconds": 0.000178
+          },
+          "engine.loadLootTableYaml": {
+            "calls": 1,
+            "seconds": 0.000117
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.00393
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.001218
+          },
+          "engine.loadRecipeYaml": {
+            "calls": 6,
+            "seconds": 0.000875
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.000639
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 1.827418
+          },
+          "engine.loadVegetationYaml": {
+            "calls": 5,
+            "seconds": 0.000768
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 8,
+        "recipe": 19,
+        "location": 1,
+        "loot_profile": 1
+      }
+    },
+    {
+      "path": "A",
+      "index": 3,
+      "engine_boot_s": 0.2163415001705289,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 25.55126883275807,
+      "round_trips": 75,
+      "round_trip_s": [
+        0.30393045814707875,
+        0.33786545880138874,
+        0.31851962488144636,
+        0.3141997088678181,
+        0.3089382918551564,
+        0.31502204202115536,
+        0.30386191699653864,
+        0.3064997079782188,
+        0.3115210412070155,
+        0.30428841710090637,
+        0.3086911248974502,
+        0.31881004199385643,
+        0.31092758290469646,
+        0.3114469591528177,
+        0.3060705829411745,
+        0.3035985417664051,
+        0.3094125003553927,
+        0.30409079184755683,
+        0.3041186658665538,
+        0.3067543748766184,
+        0.3074067076668143,
+        0.30304220831021667,
+        0.30359545862302184,
+        0.30440541729331017,
+        0.30569675005972385,
+        0.318957791198045,
+        0.3194797500036657,
+        0.31182770896703005,
+        0.31663320772349834,
+        0.30371200013905764,
+        0.30297779105603695,
+        0.30754283303394914,
+        0.30393770802766085,
+        0.3042322499677539,
+        0.3033283748663962,
+        0.30751325003802776,
+        0.31021270900964737,
+        0.3173392917960882,
+        0.3130337907932699,
+        0.31145116593688726,
+        0.3148560840636492,
+        0.30359112517908216,
+        0.3072316669858992,
+        0.3049351670779288,
+        0.30733158392831683,
+        0.3037476250901818,
+        0.3341579590924084,
+        0.3130119158886373,
+        0.30658662505447865,
+        0.3138854578137398,
+        0.3053469588048756,
+        0.3089515003375709,
+        0.30835537519305944,
+        0.3053157920949161,
+        0.3045392921194434,
+        0.30630891723558307,
+        0.31865074997767806,
+        0.31976995803415775,
+        0.3177860830910504,
+        0.8042400418780744,
+        1.142794624902308,
+        0.5578062077984214,
+        0.36151874996721745,
+        0.4029153329320252,
+        0.33930495800450444,
+        0.3557742917910218,
+        0.7772912499494851,
+        0.320741958450526,
+        0.31510941637679935,
+        0.31343645928427577,
+        0.3125847498886287,
+        0.3171281246468425,
+        0.3127106251195073,
+        0.30943908309563994,
+        0.3175483327358961
+      ],
+      "median_round_trip_s": 0.31021270900964737,
+      "families": {
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        }
+      },
+      "engine_side": {
+        "load_calls": 75,
+        "load_seconds": 2.226829,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.003728
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.000748
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000949
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.009224
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.008534
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.004504
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.001211
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 2.197931
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 0,
+        "recipe": 0,
+        "location": 0,
+        "loot_profile": 0
+      }
+    },
+    {
+      "path": "B",
+      "index": 3,
+      "engine_boot_s": 0.17060187505558133,
+      "baseline": {
+        "load_verb_calls": {},
+        "registry_entries": {
+          "substance": 0,
+          "item": 0,
+          "equipment": 0,
+          "material": 0,
+          "building": 0,
+          "unit": 0,
+          "physiology": 0,
+          "infection": 0,
+          "recipe": 0,
+          "location": 0,
+          "loot_profile": 0
+        },
+        "log_has_loader_lines": false
+      },
+      "load_wall_s": 2.472404833883047,
+      "round_trips": 1,
+      "families": {
+        "material": {
+          "files": 13,
+          "returned_total": 219
+        },
+        "vegetation": {
+          "files": 5,
+          "returned_total": 77
+        },
+        "substance": {
+          "files": 4,
+          "returned_total": 16
+        },
+        "infection": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "recipe": {
+          "files": 6,
+          "returned_total": 19
+        },
+        "item": {
+          "files": 39,
+          "returned_total": 67
+        },
+        "equipment": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "building": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "faction": {
+          "files": 1,
+          "returned_total": 8
+        },
+        "physiology": {
+          "files": 1,
+          "returned_total": 11
+        },
+        "unit": {
+          "files": 8,
+          "returned_total": 8
+        },
+        "loot_table": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "loot_profile": {
+          "files": 1,
+          "returned_total": 1
+        },
+        "location": {
+          "files": 1,
+          "returned_total": 1
+        }
+      },
+      "loader_status": {
+        "done": true,
+        "failed": false
+      },
+      "engine_side": {
+        "load_calls": 90,
+        "load_seconds": 2.157122,
+        "by_verb": {
+          "engine.loadBuildingYaml": {
+            "calls": 8,
+            "seconds": 0.001227
+          },
+          "engine.loadEquipmentYaml": {
+            "calls": 1,
+            "seconds": 0.000186
+          },
+          "engine.loadFactionYaml": {
+            "calls": 1,
+            "seconds": 0.000296
+          },
+          "engine.loadInfectionYaml": {
+            "calls": 1,
+            "seconds": 0.00054
+          },
+          "engine.loadItemYaml": {
+            "calls": 39,
+            "seconds": 0.003757
+          },
+          "engine.loadLocationYaml": {
+            "calls": 1,
+            "seconds": 0.003338
+          },
+          "engine.loadLootProfileYaml": {
+            "calls": 1,
+            "seconds": 0.000184
+          },
+          "engine.loadLootTableYaml": {
+            "calls": 1,
+            "seconds": 0.00012
+          },
+          "engine.loadMaterialYaml": {
+            "calls": 13,
+            "seconds": 0.003726
+          },
+          "engine.loadPhysiologyYaml": {
+            "calls": 1,
+            "seconds": 0.001202
+          },
+          "engine.loadRecipeYaml": {
+            "calls": 6,
+            "seconds": 0.000878
+          },
+          "engine.loadSubstanceYaml": {
+            "calls": 4,
+            "seconds": 0.000629
+          },
+          "engine.loadUnitYaml": {
+            "calls": 8,
+            "seconds": 2.140257
+          },
+          "engine.loadVegetationYaml": {
+            "calls": 5,
+            "seconds": 0.000782
+          }
+        }
+      },
+      "registry_after": {
+        "substance": 16,
+        "item": 67,
+        "equipment": 1,
+        "material": 73,
+        "building": 8,
+        "unit": 8,
+        "physiology": 6,
+        "infection": 8,
+        "recipe": 19,
+        "location": 1,
+        "loot_profile": 1
+      }
+    }
+  ]
+}
