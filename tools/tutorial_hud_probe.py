@@ -95,6 +95,7 @@ import sys
 import tempfile
 import time
 
+import probe_evidence
 from probelib import (boot, capture_request_id, poll_until, quit_engine,
                       send, send_json, wait_load_published,
                       wait_save_complete)
@@ -133,11 +134,12 @@ def remove_probe_slot() -> None:
     saves = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "saves")
     target = os.path.join(saves, SLOT)
+    probe_evidence.register_owned_path(target)  # archived if we are killed
     if (os.path.basename(target) == SLOT
             and os.path.dirname(target) == saves
             and os.path.isdir(target)
             and not os.path.islink(target)):
-        shutil.rmtree(target)
+        probe_evidence.retire_saves(target, strict=True)
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -1131,6 +1133,12 @@ def main() -> int:
     args = ap.parse_args()
 
     w, h = (int(v) for v in args.size.lower().split("x"))
+    # The slot lives in the checkout's saves/, which TMPDIR cannot redirect:
+    # list it BEFORE any engine can create it, so a TIMEOUT that never
+    # reaches the cleanup below still has the save archived (#2931).
+    probe_evidence.register_owned_path(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "saves", SLOT))
     shots = tempfile.mkdtemp(prefix="tutorial_hud_probe_")
     print(f"== offscreen boot (port {args.port}, {args.size}) ==")
     print(f"   screenshots: {shots}")

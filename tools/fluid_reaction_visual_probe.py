@@ -44,6 +44,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, camera_state, quit_engine, poll_until, send,
                       send_json, viewport, win_to_fb)
 from offscreen_probe import (find_widget, png_differs, png_region_changed_pixels,
@@ -628,7 +629,7 @@ def main() -> int:
     port = args.port
     chk = Checks()
 
-    with tempfile.TemporaryDirectory(prefix="fluid_reaction_visual_") as base:
+    with probe_evidence.temporary_directory(prefix="fluid_reaction_visual_") as base:
         shots = args.shots or os.path.join(base, "shots")
         os.makedirs(shots, exist_ok=True)
         log = os.path.join(base, "engine.log")

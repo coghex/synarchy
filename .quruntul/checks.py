@@ -286,7 +286,8 @@ class AdapterChecks(unittest.TestCase):
         resources.exclusive_resources = lambda key: set()
         resources.shared_resources = lambda key: {"cabal-build"}
         flake = types.ModuleType("probe_flake")
-        flake.main = lambda argv: calls.append(("measure",)) or 0
+        measured = []
+        flake.main = lambda argv: calls.append(("measure",)) or measured.append(list(argv)) or 0
         names = ("probe_flake", "probe_resource_lock", "probe_runner_resources", "probe_engine", "save_compat_audit_codec")
         saved = {name: sys.modules.get(name) for name in names}
         sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources,
@@ -320,6 +321,10 @@ class AdapterChecks(unittest.TestCase):
         self.assertIsNotNone(waits[0].get("deadline"))
         self.assertNotIn(("cabal-build",), [w.get("exclusive") for w in waits])
         self.assertEqual([c[0] for c in calls], ["engine", "codec", "wait", "measure", "release"])
+        # #2931: a lab trial takes the durable failure-evidence policy, so it
+        # must not supply a temporary artifact root of its own.
+        self.assertEqual(len(measured), 1)
+        self.assertNotIn("--artifact-root", measured[0])
 
     def test_direct_only_probes_really_cannot_run_through_run_probes(self):
         # run_probes.py passes only --port; these exit before testing anything.

@@ -61,6 +61,7 @@ Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
 """
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
+import probe_evidence
 from probelib import (FixtureNotRegistered, clear_find_water, quit_engine,
                       boot, load_fixture_yaml, send, send_json,
                       wait_load_published)
@@ -422,7 +423,7 @@ def main():
                     args=["--resource-root", root])
         return _run(port, proc, args, passed, fixture_path)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _run(port, proc, args, passed, fixture_path):

@@ -79,6 +79,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence
 from probelib import boot, send, send_json, quit_engine, poll_until  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -611,7 +612,7 @@ def main() -> int:
         # directory beside it would SHADOW it -- loadWorld prefers the
         # directory, so the flat save would become unloadable by its own
         # name while still sitting on disk.
-        shutil.rmtree(os.path.join(saves_dir, "autosave-2"))
+        probe_evidence.retire(os.path.join(saves_dir, "autosave-2"))
         legacy_flat = os.path.join(saves_dir, "autosave-2.synworld")
         shutil.copyfile(os.path.join(saves_dir, "manual_slot", "world.synworld"),
                         legacy_flat)
@@ -666,7 +667,7 @@ def main() -> int:
             chk.ok(listing(args.port).get(reserved, {}).get("autosave")
                    is False,
                    f"{reserved} is still listed after the refusal")
-            shutil.rmtree(os.path.join(saves_dir, reserved))
+            probe_evidence.retire(os.path.join(saves_dir, reserved))
 
         # ---------------------------------------------------------
         # 10. Normal rotation: autosave-1 stays newest, owned slots only.
@@ -851,7 +852,7 @@ def main() -> int:
         if args.keep_root:
             print(f"  (resource root kept at {root})")
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            probe_evidence.discard_scratch(base)
 
 
 if __name__ == "__main__":

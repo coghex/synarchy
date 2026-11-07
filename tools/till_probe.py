@@ -27,6 +27,7 @@ Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
 """
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
+import probe_evidence
 from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
@@ -142,7 +143,7 @@ def main():
                     args=["--resource-root", root])
         return _run(port, proc, args, passed)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _run(port, proc, args, passed):

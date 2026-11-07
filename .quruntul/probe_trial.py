@@ -15,16 +15,19 @@ pieces it is built from:
    longer than the 30 minutes AGENTS.md allows for lock contention.
 3. Run probe_flake with one run, its result document at
    `$QURUNTUL_TRIAL_PREFIX.probe-flake.json`, where the adapter's `outcomes`
-   hook reads it. Its raw artifacts go under the temp directory — probe_flake
-   refuses an artifact root inside a worktree, and the ledger lives under .git —
-   with a pointer to them beside the trial.
+   hook reads it. It is given NO `--artifact-root` (#2931): a failing trial's
+   evidence goes to the durable failure root (`$SYNARCHY_PROBE_FAILURE_ROOT`,
+   else `~/.local/state/synarchy/probe-failures`), which survives a reboot and
+   a per-session TMPDIR and is pruned to the newest few failures per probe.
+   probe_flake still refuses a root inside a worktree, and the ledger lives
+   under .git. A pointer to the kept directory is written beside the trial once
+   the run has finished, and only when it kept something.
 
 probe_flake exits 0 for any valid measurement, whatever the checks did.
 """
-import hashlib
+import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -52,17 +55,19 @@ if not (probe_engine.runner_executable(os.environ)
 probe_runner_resources.ENGINE_EXECUTABLE = probe_runner_resources.engine_preflight(namespace, announce=announce)
 probe_runner_resources.CODEC_EXECUTABLE = probe_runner_resources.codec_preflight(namespace, announce=announce)
 
-artifacts = Path(tempfile.gettempdir()) / "quruntul-synarchy" / hashlib.sha256(prefix.encode()).hexdigest()[:16]
-artifacts.mkdir(parents=True, exist_ok=True)
-Path(prefix + ".probe-artifacts.path").write_text(str(artifacts) + "\n")
-
 hold = probe_resource_lock.wait_acquire(
     exclusive=probe_runner_resources.exclusive_resources(key),
     shared=probe_runner_resources.shared_resources(key),
     namespace=namespace, purpose=f"quruntul {key}", deadline=time.monotonic() + LOCK_WAIT_SECONDS)
 try:
-    code = probe_flake.main(["--probe", key, "--runs", "1", "--result", prefix + ".probe-flake.json",
-                             "--artifact-root", str(artifacts)])
+    code = probe_flake.main(["--probe", key, "--runs", "1", "--result", prefix + ".probe-flake.json"])
 finally:
     hold.release()
+# Where the failure evidence went, if any: the result document names it.
+try:
+    kept = json.loads(Path(prefix + ".probe-flake.json").read_text()).get("retained_artifacts") or []
+except (OSError, ValueError):
+    kept = []
+if kept:
+    Path(prefix + ".probe-artifacts.path").write_text("\n".join(kept) + "\n")
 raise SystemExit(code)

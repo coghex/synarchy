@@ -143,17 +143,19 @@ def defect_handoff(*, attempt: str = DEFECT_ATTEMPT,
 @contextlib.contextmanager
 def staged_evidence(document, *, events=DEFECT_EVENTS,
                     stdout=DEFECT_STDOUT, engine=DEFECT_ENGINE_LOG,
-                    only=None):
+                    only=None, skip=0):
     """The retained artifacts a real failing batch would have left.
 
     Every other fixture here treats an artifact path as a STRING,
     because #1439 stores references and never opens one. This workflow
     reads them, so the tree has to exist. `only` stages a prefix of the
     run list, which is how "the artifacts were pruned" is expressed.
+    `skip` leaves the OLDEST runs unstaged instead, which is what the
+    durable root's pruning of a probe's oldest failures (#2931) does.
     """
     paths = [Path(entry) for entry
              in document["diagnosis_outcome"]["retained_artifacts"]]
-    staged = paths if only is None else paths[:only]
+    staged = (paths if only is None else paths[:only])[skip:]
     try:
         for directory in staged:
             (directory / "engine").mkdir(parents=True, exist_ok=True)
@@ -752,6 +754,24 @@ def test_a_symlinked_artifact_component_reaches_nothing() -> None:
                 substitute.unlink()
     finally:
         shutil.rmtree(elsewhere, ignore_errors=True)
+
+
+def test_pruned_oldest_runs_do_not_hide_newer_evidence() -> None:
+    """The durable root prunes a probe's oldest failures (#2931), so the
+    first runs a handoff lists may be gone while the later ones are not.
+    Only reading the first MAX_EVIDENCE_RUNS would refuse an issue newer,
+    available evidence could have carried."""
+    document = defect_handoff()
+    total = len(document["diagnosis_outcome"]["retained_artifacts"])
+    expect(total > di.MAX_EVIDENCE_RUNS,
+           "the fixture has more failing runs than the issue quotes")
+    with staged_evidence(document, skip=di.MAX_EVIDENCE_RUNS), \
+            census_file() as path:
+        _published, publication, _probe, _pr = file_defect(document, path)
+        body = publication.creates[0]["body"]
+        expect(body.count("#### baseline run ") == total - di.MAX_EVIDENCE_RUNS,
+               "the runs that survived pruning are quoted although the "
+               "first three listed are gone")
 
 
 def test_the_quoted_evidence_is_bounded() -> None:

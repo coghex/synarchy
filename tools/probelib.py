@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable
 
 import probe_engine
+import probe_evidence
 
 # The user's graphical instance lives on 8008; probes must never touch it.
 GUI_PORT = 8008
@@ -314,6 +315,10 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
         # engine's preparation it was.
         sys.exit(f"{label}: {error}")
     logf = open(logpath, "w")
+    # Under a runner (#2931), list this log so a FAILING run keeps a copy
+    # of it whatever fixed path the probe chose and whatever it later does
+    # to that path. Outside a runner this does nothing.
+    probe_evidence.record_engine_log(logpath)
     proc = None
     try:
         proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)

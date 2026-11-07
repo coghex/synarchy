@@ -371,9 +371,10 @@ def test_lease_root_is_tmpdir_independent() -> None:
                f"({first}, {second}, {third})")
         expect(first == Path("/tmp"),
                f"the lease root is anchored at the fixed shared /tmp ({first})")
-        expect(moved_artifacts != probe_flake.default_artifact_root(),
-               "the ARTIFACT root does follow TMPDIR — only the lease "
-               "namespace is pinned")
+        expect(moved_artifacts == probe_flake.default_artifact_root(),
+               "neither root follows TMPDIR now (#2931): the lease namespace "
+               "is pinned to /tmp and the failure-evidence root is durable, "
+               "so a reboot or a per-session TMPDIR cannot move or clear it")
     finally:
         tempfile.tempdir = None
         if saved is None:

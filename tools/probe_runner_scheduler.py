@@ -22,9 +22,11 @@ permitted to consume.
 """
 from __future__ import annotations
 import concurrent.futures
+import os
 import sys
 import time
 
+import probe_evidence
 import probe_resource_lock
 import probe_runner_diagnostics as diagnostics
 import probe_runner_lifecycle as lifecycle
@@ -32,8 +34,75 @@ import probe_runner_registry as registry
 import probe_runner_resources as resources
 
 
+def run_attempt(script, port, timeout, groups, *, key=None, hold_env=None,
+                retention=None, kept=None):
+    """ONE probe execution under the failure-evidence rule (#2931).
+
+    With no `retention` this is exactly `lifecycle.run_one`, which is what
+    every direct caller (and every test that wants no evidence on disk)
+    gets. With one, the execution gets its own attempt directory under the
+    durable root and, once `run_one` has returned -- after the probe's
+    whole process group is reaped -- the attempt is finalized with the
+    OUTCOME this runner observed: a PASS leaves nothing behind, anything
+    else (FAIL, TIMEOUT, or an exception in the runner itself) keeps the
+    directory, and its path is appended to `kept`.
+
+    Each execution has its own attempt, so a failed attempt survives a
+    later retry that passes.
+    """
+    attempt = None
+    if retention is not None and not (groups is not None
+                                      and groups.stopping.is_set()):
+        name = key or os.path.splitext(os.path.basename(script))[0]
+        try:
+            attempt = retention.begin(name)
+        except (OSError, probe_evidence.RootRejected) as error:
+            # The promise is that a failing probe keeps its evidence. A probe
+            # run without an attempt directory would clean up after itself
+            # exactly as it always did and silently break it, so it does not
+            # run: this is a failure of the attempt, named, with nothing
+            # launched.
+            message = (f"(not started: could not allocate a failure-evidence "
+                       f"directory for {name} under {retention.root}: "
+                       f"{error})\n")
+            print(f"error: {message.strip()}", file=sys.stderr)
+            return False, False, 0.0, message
+    try:
+        ok, timed_out, elapsed, out = lifecycle.run_one(
+            script, port, timeout, groups, hold_env=hold_env,
+            evidence_dir=str(attempt.path) if attempt else None)
+    except BaseException:
+        # An exception in the runner itself, or Ctrl-C: nothing will print
+        # a summary after this, so say where the attempt went here.
+        if attempt is not None:
+            where = attempt.finish("ERROR")
+            if where is not None:
+                print(f"evidence kept: {where}", file=sys.stderr)
+        raise
+    if attempt is not None:
+        outcome = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+        where = attempt.finish(outcome, capture=out)
+        if attempt.removal_error:
+            # The probe's strict cleanup only retired its tree; the removal
+            # that makes it "gone" happens here, and it failed. A green
+            # result beside leftover artifacts is exactly what those probes'
+            # cleanup contracts forbid, so the run fails.
+            ok = False
+            out = (out or "") + f"\n  [FAIL] {attempt.removal_error}\n"
+        if where is not None and kept is not None:
+            kept.append(str(where))
+    return ok, timed_out, elapsed, out
+
+
+def print_evidence(paths, indent: str = "    ") -> None:
+    """Where the failing attempts' evidence is, whatever `--tail` says."""
+    for path in paths or ():
+        print(f"{indent}evidence kept: {path}")
+
+
 def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
-                   key=None, namespace=None, waiting=None):
+                   key=None, namespace=None, waiting=None, retention=None,
+                   kept=None):
     """Run a probe, re-running SOLO up to `retries` times on failure.
 
     Returns (status, elapsed, out, attempts). `announce(kind, attempt,
@@ -56,8 +125,9 @@ def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
     while True:
         with resources.resource_hold(key, namespace if key else None,
                                      announce=waiting):
-            ok, timed_out, elapsed, out = lifecycle.run_one(
-                script, port, timeout, groups, hold_env=hold_env)
+            ok, timed_out, elapsed, out = run_attempt(
+                script, port, timeout, groups, key=key, hold_env=hold_env,
+                retention=retention, kept=kept)
         attempt += 1
         if ok or attempt > retries:
             break
@@ -92,7 +162,8 @@ def present_failure(out: str, tail: int, indent: str = "    ") -> None:
 
 
 def run_sequential(chosen, results, *, port, explicit_timeout, retries, tail,
-                   namespace, groups, waiting) -> None:
+                   namespace, groups, waiting, retention=None,
+                   evidence=None) -> None:
     """The mode CI relies on: live, ordered, inline retry."""
     n = len(chosen)
     print(f"Running {n} probe(s) sequentially "
@@ -107,12 +178,18 @@ def run_sequential(chosen, results, *, port, explicit_timeout, retries, tail,
         print(f"[{i}/{n}] {script} ... "
               f"[timeout {registry.format_timeout(timeout)}] ",
               end="", flush=True)
+        kept = evidence.setdefault(key, []) if evidence is not None else None
         status, elapsed, out, attempts = run_with_retry(
             script, port, timeout, retries, announce,
-            groups, key=key, namespace=namespace, waiting=waiting)
+            groups, key=key, namespace=namespace, waiting=waiting,
+            retention=retention, kept=kept)
         note = (f"  [passed on retry {attempts}]"
                 if status == "PASS" and attempts > 1 else "")
         print(f"{status} ({elapsed:.1f}s){note}")
+        # Before the tail, and whatever `--tail` is: the path is the one
+        # thing a reader needs from a failure, including a failed attempt
+        # a later retry outlived.
+        print_evidence(kept)
         if status != "PASS" and tail > 0:
             present_failure(out, tail)
         results[key] = (script, status, elapsed, out)
@@ -120,7 +197,8 @@ def run_sequential(chosen, results, *, port, explicit_timeout, retries, tail,
 
 def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                  explicit_timeout, retries, tail, namespace, groups, progress,
-                 total_attempts, waiting) -> None:
+                 total_attempts, waiting, retention=None,
+                 evidence=None) -> None:
     """Parallel (#531) — one independent engine per probe, up to `jobs` at
     once, each on a unique port. That isolates exactly two dimensions and
     claims nothing further: separate processes cannot corrupt each other's
@@ -152,11 +230,13 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
         # span, which the allocation laid clear of every other selected
         # probe's (#1571). Never `base + idx`: a two-port probe binds its
         # neighbour's base under that.
-        ok, timed_out, elapsed, out = lifecycle.run_one(
-            script, parallel_ports[idx], timeout, groups,
-            hold_env=resources.descendant_hold_env(key, namespace))
+        kept = []
+        ok, timed_out, elapsed, out = run_attempt(
+            script, parallel_ports[idx], timeout, groups, key=key,
+            hold_env=resources.descendant_hold_env(key, namespace),
+            retention=retention, kept=kept)
         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-        return key, script, status, elapsed, out, timeout
+        return key, script, status, elapsed, out, timeout, kept
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
         # SUBMISSION is inside the try as well as completion: a Ctrl-C
@@ -276,7 +356,8 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                     ledger.release(probe_exclusive, probe_shared)
                     hold.release()
                     done += 1
-                    key, script, status, elapsed, out, timeout = fut.result()
+                    (key, script, status, elapsed, out, timeout,
+                     kept) = fut.result()
                     progress.end(
                         diagnostics.attempt_identity(key, script, 1,
                                                      total_attempts),
@@ -284,6 +365,9 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                     print(f"[{done}/{n}] {script} ... "
                           f"[timeout {registry.format_timeout(timeout)}] "
                           f"{status} ({elapsed:.1f}s)")
+                    if evidence is not None:
+                        evidence.setdefault(key, []).extend(kept)
+                    print_evidence(kept)
                     results[key] = (script, status, elapsed, out)
         except BaseException:
             # Ctrl-C, or any orchestration failure. cancel() alone cannot
@@ -321,15 +405,20 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                 retry_identity = diagnostics.attempt_identity(
                     key, script, r + 1, total_attempts)
                 progress.begin(retry_identity, "solo retry")
+                kept = []
                 with resources.resource_hold(key, namespace, announce=waiting):
-                    ok, timed_out, elapsed, out = lifecycle.run_one(
-                        script, parallel_base, timeout, groups,
-                        hold_env=resources.descendant_hold_env(key, namespace))
+                    ok, timed_out, elapsed, out = run_attempt(
+                        script, parallel_base, timeout, groups, key=key,
+                        hold_env=resources.descendant_hold_env(key, namespace),
+                        retention=retention, kept=kept)
                 status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                 progress.end(retry_identity, f"{status} ({elapsed:.1f}s)")
                 print(f"  {script} solo retry {r}/{retries} ... "
                       f"[timeout {registry.format_timeout(timeout)}] "
                       f"{status} ({elapsed:.1f}s)")
+                if evidence is not None:
+                    evidence.setdefault(key, []).extend(kept)
+                print_evidence(kept, indent="    ")
                 results[key] = (script, status, elapsed, out)
                 if ok:
                     break
@@ -342,8 +431,15 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                 present_failure(r[3], tail)
 
 
-def summarize(chosen, results, *, wall: float, jobs: int) -> int:
-    """The ordered final counts, the FAILED list, and the exit status."""
+def summarize(chosen, results, *, wall: float, jobs: int,
+              evidence=None) -> int:
+    """The ordered final counts, the FAILED list, and the exit status.
+
+    `evidence` (#2931) maps a probe key to the directories its failed
+    attempts kept. They are listed last, once, in registry order -- a
+    probe that failed and then passed on a retry is listed too, because its
+    failed attempt's evidence is still on disk.
+    """
     n = len(chosen)
     ordered = [(key, results[key][0], results[key][1], results[key][2])
                for key, *_ in chosen]
@@ -357,13 +453,20 @@ def summarize(chosen, results, *, wall: float, jobs: int) -> int:
         for key, script, status, _ in ordered:
             if status != "PASS":
                 print(f"  {status:8s} {script}")
-        return 1
-    return 0
+    held = [(script, evidence[key]) for key, script, _, _ in ordered
+            if evidence and evidence.get(key)]
+    if held:
+        print("FAILURE EVIDENCE (kept; removed only by newer failures of the "
+              "same probe):")
+        for script, paths in held:
+            for path in paths:
+                print(f"  {script}: {path}")
+    return 0 if passed == n else 1
 
 
 def execute(chosen, *, jobs, port, parallel_base, parallel_ports,
             explicit_timeout, retries, tail, namespace, groups, progress,
-            wall_start, waiting) -> int:
+            wall_start, waiting, retention=None) -> int:
     """Run the whole validated selection and return the process exit status.
 
     0 = every selected probe passed, 1 = at least one failed, 130 =
@@ -373,13 +476,16 @@ def execute(chosen, *, jobs, port, parallel_base, parallel_ports,
     parses an argument or exits a process.
     """
     results: dict[str, tuple[str, str, float, str]] = {}
+    # probe key -> the evidence directories its failed attempts kept (#2931)
+    evidence: dict[str, list[str]] = {}
     total_attempts = retries + 1
     try:
         if jobs <= 1:
             run_sequential(chosen, results, port=port,
                            explicit_timeout=explicit_timeout, retries=retries,
                            tail=tail, namespace=namespace, groups=groups,
-                           waiting=waiting)
+                           waiting=waiting, retention=retention,
+                           evidence=evidence)
         else:
             run_parallel(chosen, results, jobs=jobs,
                          parallel_base=parallel_base,
@@ -387,7 +493,8 @@ def execute(chosen, *, jobs, port, parallel_base, parallel_ports,
                          explicit_timeout=explicit_timeout, retries=retries,
                          tail=tail, namespace=namespace, groups=groups,
                          progress=progress, total_attempts=total_attempts,
-                         waiting=waiting)
+                         waiting=waiting, retention=retention,
+                         evidence=evidence)
     except KeyboardInterrupt:
         # Each run_one already reaped its own group on the way out; this is
         # the backstop for a group whose worker never got that far.
@@ -396,4 +503,5 @@ def execute(chosen, *, jobs, port, parallel_base, parallel_ports,
         print("\ninterrupted — every probe still running, and the engine it "
               "booted, has been terminated", file=sys.stderr)
         return 130
-    return summarize(chosen, results, wall=time.time() - wall_start, jobs=jobs)
+    return summarize(chosen, results, wall=time.time() - wall_start, jobs=jobs,
+                     evidence=evidence)

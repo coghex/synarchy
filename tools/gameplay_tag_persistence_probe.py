@@ -90,6 +90,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                       wait_save_complete, capture_request_id)
 from persistence_snapshot import prepare_decoder
@@ -989,7 +990,7 @@ def main() -> int:
         if chk.failed:
             print(f"  logs kept at {tmp}")
         else:
-            shutil.rmtree(tmp, ignore_errors=True)
+            probe_evidence.discard_scratch(tmp)
     if chk.failed:
         print(f"\n    SOME FAILED ({chk.failed})")
         return 1

@@ -53,6 +53,7 @@ import subprocess
 import sys
 import uuid
 
+import probe_evidence
 import probe_protocol
 from probelib import (boot, capture_request_id, poll_until, quit_engine,
                       send, wait_load_published, wait_save_complete)
@@ -205,6 +206,9 @@ def main() -> int:
 
 def _run(args, rep):
     for name in (SAVE_NAME, SAVE_NAME_PAUSED):
+        # archived if we are killed (#2931)
+        probe_evidence.register_owned_path(os.path.join("saves", name))
+    for name in (SAVE_NAME, SAVE_NAME_PAUSED):
         if os.path.exists(os.path.join("saves", name)):
             sys.exit(f"refusing to run: saves/{name} already exists")
 
@@ -281,7 +285,7 @@ def _run(args, rep):
         # Safe to delete: both names are unique to this run and main()
         # refused to start if either directory already existed.
         for name in (SAVE_NAME, SAVE_NAME_PAUSED):
-            shutil.rmtree(os.path.join("saves", name), ignore_errors=True)
+            probe_evidence.retire_saves(os.path.join("saves", name))
 
     rep.note("")
     if chk.failed:

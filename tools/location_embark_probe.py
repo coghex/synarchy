@@ -108,6 +108,7 @@ import tempfile
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence
 from probelib import boot, quit_engine
 from probe_runner_diagnostics import FailureEmitter   # noqa: E402 - durable failure records (#1982)
 
@@ -294,7 +295,10 @@ def report(art: RunArtifacts, keep: bool) -> int:
                         f"{art.base} ({'retained' if keep else 'removed'})")
         print(f"location_embark_probe: {len(failures)} check(s) FAILED")
         if not keep:
-            print("  (re-run with --keep-artifacts to retain this run's "
+            print("  (this run's engine logs, saves and screenshots are kept "
+                  "in the runner's failure evidence)"
+                  if probe_evidence.evidence_dir() else
+                  "  (re-run with --keep-artifacts to retain this run's "
                   "engine logs, saves and screenshots)")
         return 1
     print("location_embark_probe: all checks passed")

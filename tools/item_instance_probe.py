@@ -52,6 +52,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import probe_evidence
 from probelib import (boot, capture_request_id, quit_engine, send,
                       wait_load_published, wait_save_complete)
 
@@ -147,7 +148,7 @@ def remove_run_root(base: str) -> bool:
     sibling isolated-root probes already use.
     """
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         print(f"  [FAIL] could not remove this run's resource root "
               f"{base}: {exc}")

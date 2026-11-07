@@ -110,6 +110,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+import probe_evidence
 from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
@@ -300,7 +301,7 @@ def main() -> int:
         root = make_isolated_root(tmpdir)
         return _run(port, root)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _run(port: int, root: str) -> int:
@@ -1011,7 +1012,7 @@ def _run(port: int, root: str) -> int:
             quit_engine(port, procB)
         for path in (save_dir, ev_save_dir):
             if os.path.exists(path):
-                shutil.rmtree(path, ignore_errors=True)
+                probe_evidence.discard_scratch(path)
 
 
 if __name__ == "__main__":
