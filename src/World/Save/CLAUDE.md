@@ -26,8 +26,12 @@ recovered from `.prev`.
 `tools/current_save_schema_audit.py` compares the freshly compiled candidate
 schema record with the record in the committed base. It is a compiled-schema
 guard, not proof of successful serialization or restoration; the retained
-Hspec groups and `persistence_contract` probe provide that behavioral
-evidence. It cannot infer custom serializers or Lua payload meaning, so
+Hspec groups and the `persistence_contract` probe (the CI core: engines A-D
+plus the mind-episode engines) provide that behavioral evidence. The focused
+engagement, exhaustion/sleep, cardio, blood and relation-cause cycles are the
+manual-only `persistence_system_cycles` probe (#2943): no CI gate runs them,
+so run `python3 tools/run_probes.py --only persistence_system_cycles --exact`
+when you change those subsystems' persistence or their save components. It cannot infer custom serializers or Lua payload meaning, so
 those changes need explicit version updates and current behavior coverage.
 `currentSaveVersion` describes only the in-memory bridge and is not an
 on-disk compatibility guard.
@@ -115,11 +119,14 @@ session through the real codec, every field via derived `Eq`),
 `python3 tools/current_save_schema_audit.py --base-ref origin/master`,
 and `python3 tools/test_save_compat_audit.py` on every non-docs code
 change; the compiled-schema check is not path-selected. Probes —
-`persistence_contract_probe.py` (CI-eligible smoke:
+`persistence_contract_probe.py` (the CI-eligible core:
 three real fresh-process save→load→save cycles compared via
 `tools/persistence_snapshot.compare_session_files`, which since #2274
 execs the compiled `exe:synarchy-save-codec` rather than a `cabal repl`
-of the headless suite),
+of the headless suite, plus three mind-episode engines),
+`persistence_system_cycles_probe.py` (manual-only, #2943: the engagement,
+exhaustion/sleep, cardio, blood and relation-cause cycles; shared fixtures in
+`persistence_probe_common.py`),
 `persistence_contract_sweep.py`, `save_barrier_probe.py`,
 `save_storage_probe.py`, `transactional_load_probe.py`,
 `persistence_integrity_probe.py`, `multiworld_save_probe.py`, and
