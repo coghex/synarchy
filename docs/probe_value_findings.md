@@ -27,11 +27,11 @@ concrete precondition
 ## Status
 
 - [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
-- [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [deferred]: needs one completed sweep trial on a revision with #2919
-- [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [deferred]: needs one farm_ai run with per-phase elapsed times
-- [ ] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
-- [ ] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
-- [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+- [x] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [#2936]
+- [x] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [#2937] [#2938]
+- [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
+- [x] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time — [#2939] [#2940]
+- [x] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades — [#2941]
 - [ ] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
 - [ ] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x
 - [ ] PRB-9. Three pairs of companion probes pay two boots for one fixture
@@ -68,9 +68,9 @@ concrete precondition
 - **Scope and constraints:** The probe must stay runnable with `python3 tools/run_probes.py --only expedition_loop --exact`; `python3 .quruntul/checks.py` must stay green; docs that name it as the arc's final gate (its docstring cites `docs/expedition_gameplay_loop.md` step 9) need to say it is opt-in.
 - **Remaining uncertainty:** How often the lab actually selects it (selection is staleness-driven, not read here); which phase dominates the 1,119 s (the probe reports a total only); whether the Hspec groups `Unit.RuinOccupantSurvival` and `Location discovery` cover enough of the loop to make an opt-in acceptable to the owner.
 
-### [deferred] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
+### [#2936] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs
 
-> **Deferred:** All three 900 s timeouts were spent waiting on the nested `save_compat_migration` probe (about an hour, retired by #2912/#2919) and, in runs A and B, on `transactional_load` (then 520-533 s, now 158 s); `COMPARE_MISMATCH` appears in run A only; and the nested set is requirement 14 of #767. The sweep has not completed on a revision without them, so the cap and the duplication cannot be judged — re-decide once one completed `persistence_contract_sweep` trial exists on a revision containing #2919 (its duration and whether `COMPARE_MISMATCH` recurs decide between no-issue, an issue for the lab double-run, or a bug issue). Owner decision 2026-11-07: defer until measured.
+> **Note:** Filed (owner decision 2026-11-07, after a measured sweep run `ba00c8d8` on `848d0e01f`) as a bug issue for the `COMPARE_MISMATCH` only: gen2, gen3 and gen4 `world.synworld` differ structurally while the Lua components match, in 2 of the 4 recorded runs. The 900 s cap overrun (nested `construction` took 574 s and `transactional_load` was cut off) is not part of that issue; it is handled by PRB-5 (the cost of `construction`). The nested-probe fan-out stays: it is requirement 14 of #767.
 
 The sweep is a meta-probe: besides its own four-boot structural comparison it fans out to ten other registered probes by default. Those probes are already registered, measured and runnable on their own. It reached the runner's 900 s cap in runs A, B and C, so it has never reported a complete pass, and its own comparison fails on `COMPARE_MISMATCH`.
 
@@ -92,9 +92,9 @@ The sweep is a meta-probe: besides its own four-boot structural comparison it fa
 - **Scope and constraints:** `python3 tools/test_persistence_contract_sweep.py` guards the selectable list; `CLAUDE.md` names it as the self-test for changes to `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS`; `tools/README.md` rows for the sweep must follow.
 - **Remaining uncertainty:** The sweep's own phase on a passing run is unmeasured (it has never passed); whether the mismatch is nondeterminism or an artefact of the probe's comparison is undiagnosed.
 
-### [deferred] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
+### [#2937] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
 
-> **Deferred:** The scan is not shown to be the cost: the "O(n^2) scan, ~11 min" note dates from the #721 registration and no phase was ever timed; `till_probe` uses the same scan at 74 s in total; and `farm_ai` carries real-time AI waits (90, 120, 60, 30 and 90 s deadlines, a time-scale dwell, a save/reload). `farm_ai_probe.py` prints no per-phase times today, so the measuring run needs them added — re-decide after one `farm_ai` run with per-phase elapsed times (the six `find_tillable` scans versus each AI wait), scheduled by the manager after the PRB-2 measurement. Owner decision 2026-11-07: defer and measure.
+> **Note:** Measured (two `farm_ai` runs on `c42ea0a1f`, 2026-11-07: 693 s and 660 s) and re-decided by the owner as "bug first, then fixture". About 546 of 660 s is tile scanning (five up-front scans with setup 484 s, the sixth with the re-designation wait 62 s); the AI waits are short. This issue is the bug: a planted `tomato_plant` is missing when read (after save/load in both direct runs, at the re-designation check in lab run C); the probe is red until it is found. The fixture issue #2938 replaces the scans with a fixed tillable patch and follows this one.
 
 `farm_ai` is the slowest probe that is not a multi-boot scenario, and the registry itself attributes the time to a tile scan.
 
@@ -126,7 +126,7 @@ The sweep is a meta-probe: besides its own four-boot structural comparison it fa
 
 ## Overlap with focused gates
 
-### PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
+### [#2935] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
 
 The transfer arc (#1013) has a focused gate per slice. `unified_transfer` is the arc's integration gate, an offscreen boot that replays all of them in one session. It failed in runs A and B at different stages and passed in run C.
 
@@ -152,7 +152,9 @@ The transfer arc (#1013) has a focused gate per slice. `unified_transfer` is the
 - **Scope and constraints:** The cross-class round trip needs an owner decision; `.quruntul/checks.py` and `tools/test_run_probes.py` follow registry changes.
 - **Remaining uncertainty:** Whether the Hspec groups cover every one of `unified_transfer`'s 72 checks was not compared; `tools/unified_transfer_probe.py` stage `modeA` and `save` failures were not diagnosed (no retained failure output beyond the runner tail, see #2931).
 
-### PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
+### [#2939] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
+
+> **Note:** Re-verified 2026-11-07 and split by owner decision into two issues. Part 1, "replace like PRB-4": `repair_ai` is replaced by focused coverage (#2939); "shadowed by an Hspec group" holds for its phase 10 only, so its other phases move into Hspec first. Part 2, "small fix issue": `construction` did not regress (its "4 phases" record predates #799's phases 6-9); the fix reports its phase times, corrects that record and gives the sweep a timeout budget, which resolves the PRB-2 cap overrun. The second issue is #2940.
 
 Two AI-job probes where the cost or the instability does not match what only they guard.
 
@@ -179,7 +181,9 @@ Two AI-job probes where the cost or the instability does not match what only the
 - **Scope and constraints:** `repair` and `repair_item` (CI) stay; `tools/ci_probes.py`, `tools/README.md` and the census follow a retirement.
 - **Remaining uncertainty:** Whether Hspec's stub-VM groups cover phases 1 and 3 (own-inventory and mule spare gear) was not checked; the `construction` phase times are unrecorded; `craft_bill` is flaky on CI per `tools/ci_probes.py:201` and failed in run B, with no phase breakdown.
 
-### PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+### [#2941] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: retire the whole probe (it never failed; Hspec grades the arithmetic), moving the clock-source and clot-progression checks into Hspec where they can be stated deterministically and accepting the loss of live-unit-tick wiring coverage. Corrections to the finding: the realistic saving is under about 100 s of dwell, and the four `nominal_*` checks (#2837) account for the growth from 289 s to 379 s.
 
 The blood family is covered in-process by six Hspec files; the real-engine probes add the unit-thread wiring. `bleeding_trail` is by far the heaviest and grew from 288 s to 379 s.
 
