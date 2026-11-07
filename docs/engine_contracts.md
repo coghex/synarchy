@@ -503,6 +503,16 @@ that happens. A fork pull request runs the same way (its head is a fork, so
 the image is never published); identity is always the pull request number plus
 the SHA, never a branch name.
 
+**Who requests the re-run.** The repository declares its admission job in the
+root `.drain-prs.json` (`{"ci_admission_check": "ci-admission"}`), and the PR
+drainer (kanban#855) then re-runs a gated-out attempt itself: once per head,
+from a fresh read of the pull request and its review markers, only with a live
+head-bound approval at an up-to-date head, and never a run whose real jobs
+failed. `merge-pr` only waits on or stops at the drainer's answers. The commands
+above remain the manual form for a head the drainer is not handling. The drainer
+reads `.drain-prs.json` from the primary checkout, so the declaration takes
+effect once it is on `master` and the checkout has fast-forwarded.
+
 **Admission.** `tools/ci_pr_admission.py` runs first. It reads LIVE state (the
 pull request, the base branch and git), reads no other workflow run, and fails
 closed on any evidence it cannot read:
