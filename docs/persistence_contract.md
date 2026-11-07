@@ -200,7 +200,17 @@ one, and the structural save comparison
 blood volume (`uisBlood`) of a unit whose `blood` override is Nominal (#2837):
 the load rewrites it to the current canonical maximum, so a stale saved copy
 (a body-mass change after the pin) and its rebuilt successor are one durable
-state. A Simulated unit's volume stays compared exactly. The comparison is
+state. A Simulated unit's volume stays compared exactly. The comparison also
+distinguishes the LIVE capture (the first save of a chain) from the re-saves
+taken across loads (`World.Save.Compare`, #2936): a load clears the
+runtime-only `uiAnimOverride`, and `publishToRender` resolves
+`uiCurrentAnim` from `chooseAnim pose override stateAnim` every tick,
+restarting `uiAnimStart` when the name changes, so a live session saved while
+the Lua combat AI held a unit in a stance (`combat_idle_*`, an `attack_*`
+swing) re-saves as the state animation. That pair of fields is therefore not
+compared between the live capture and the first re-save, but it IS compared
+exactly between loaded generations, and every other field of the live capture
+is compared against the first re-save as before. The comparison is
 registry-free, so it sees a pin and nothing else; the Persistence spec
 guards that no shipped definition defaults blood to Nominal. Everything else in the physiology stat set is
 durable and compared exactly: a Simulated system's pools and meters, the
