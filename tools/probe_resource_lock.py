@@ -894,6 +894,8 @@ class ResourceHold:
         # host's when it includes a host-wide resource.
         self._notes = (list(note) if isinstance(note, (list, tuple))
                        else ([note] if note is not None else []))
+        # Resources whose descriptor a child process was handed (#2932).
+        self._handed_to_children: set = set()
         self.released = False
 
     def __enter__(self) -> "ResourceHold":
@@ -909,6 +911,23 @@ class ResourceHold:
         if resource in self.shared:
             return SHARED
         return None
+
+    def descriptor_for_child(self, resource: str) -> int | None:
+        """The lock descriptor of `resource`, to be passed to a child process.
+
+        An flock belongs to the open file description, so a child that inherits
+        the descriptor (`subprocess.Popen(pass_fds=...)`) keeps the interest
+        held after this process is gone, until the child exits or closes it.
+        That ties a host-wide hold to the lifetime of the engine it exists for
+        even when its parent is terminated first. Handing it out also means
+        `release` closes OUR descriptor without an explicit unlock, which would
+        release the child's hold too; the lock then ends when the last holder
+        does. Returns None when `resource` is not held here.
+        """
+        if self.released or resource not in self._fds:
+            return None
+        self._handed_to_children.add(resource)
+        return self._fds[resource]
 
     def release(self) -> None:
         """Give every held interest back. Idempotent, and never raises.
@@ -926,9 +945,10 @@ class ResourceHold:
         for note in self._notes:
             note.withdraw()
         self._notes = []
-        for fd in self._fds.values():
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+        for name, fd in self._fds.items():
+            if name not in self._handed_to_children:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
             with contextlib.suppress(OSError):
                 os.close(fd)
         self._fds = {}

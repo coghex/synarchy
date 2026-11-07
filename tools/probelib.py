@@ -223,6 +223,11 @@ def load_fixture_yaml(port: int, loader: str, path: str,
 # --------------------------------------------------------------------------
 # Engine boot / teardown
 # --------------------------------------------------------------------------
+#: The engine executable `boot` last prepared in this process (#2932): reused by
+#: later boots while the process holds `gpu-desktop`, never re-prepared under it.
+_PREPARED_ENGINE: list[str] = []
+
+
 def _log_path(port: int, log: str | None) -> str:
     return log if log else f"/tmp/synarchy_probe_{port}.log"
 
@@ -306,11 +311,21 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     # log is not even opened until it has succeeded, so an empty one
     # can no longer be the only artifact of a build that overran.
     try:
-        cmd = probe_engine.prepare_command(
-            [*mode, "--port", str(port), *(args or [])],
-            log_path=f"{logpath}.prepare", timeout=prepare_timeout,
-            announce=lambda note: print(f"[{label}] {note}",
-                                        file=sys.stderr, flush=True))
+        if probe_gpu_hold.holds_own() and _PREPARED_ENGINE:
+            # This probe already holds the machine-wide `gpu-desktop` (#2932).
+            # Preparing again would wait for `cabal-build` EXCLUSIVELY while
+            # holding it, and a runner queued for the GPU plus a shared
+            # `cabal-build` would then block that preparation behind itself: a
+            # cycle neither side can leave. The binary was prepared before the
+            # hold was taken, so reuse it.
+            cmd = [_PREPARED_ENGINE[0], *mode, "--port", str(port), *(args or [])]
+        else:
+            cmd = probe_engine.prepare_command(
+                [*mode, "--port", str(port), *(args or [])],
+                log_path=f"{logpath}.prepare", timeout=prepare_timeout,
+                announce=lambda note: print(f"[{label}] {note}",
+                                            file=sys.stderr, flush=True))
+            _PREPARED_ENGINE[:] = [cmd[0]]
     except probe_engine.EngineExecutableError as error:
         # The error already names preparation; the label says which
         # engine's preparation it was.
@@ -329,7 +344,8 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     probe_evidence.record_engine_log(logpath)
     proc = None
     try:
-        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                                pass_fds=probe_gpu_hold.child_fds())
         if on_launch is not None:
             on_launch(proc)
     except BaseException:

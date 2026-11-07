@@ -31,6 +31,13 @@ pieces it is built from:
    the run has finished, and only when it kept something.
 
 probe_flake exits 0 for any valid measurement, whatever the checks did.
+
+`probe_trial.py KEY --run-probes PORT` is the same trial for a probe that is not on
+the `probe-result/v1` protocol (the `exit` suites): it takes the `gpu-desktop` hold
+under the same bounded wait and exit-3 rule, then runs `tools/run_probes.py --only
+KEY --exact --jobs 1 --port PORT` beneath it and exits with that runner's status. A
+`needs-gpu` exit suite is launched this way so that giving up on the GPU is a blocked
+trial, never a probe FAIL or TIMEOUT, whichever framework the probe uses.
 """
 import contextlib
 import json
@@ -43,10 +50,13 @@ LOCK_WAIT_SECONDS = 1800
 GPU_WAIT_SECONDS = 4 * 3600  # keep equal to the adapter's: it extends the trial limit by this much
 
 key = sys.argv[1]
-prefix = os.environ["QURUNTUL_TRIAL_PREFIX"]
+run_probes_port = sys.argv[3] if len(sys.argv) > 3 and sys.argv[2] == "--run-probes" else None
+prefix = os.environ.get("QURUNTUL_TRIAL_PREFIX", "")
 root = Path(__file__).resolve().parents[1]
 os.chdir(root)
 sys.path.insert(0, str(root / "tools"))
+
+import subprocess  # noqa: E402
 
 import probe_engine  # noqa: E402
 import probe_flake  # noqa: E402
@@ -57,6 +67,21 @@ import save_compat_audit_codec  # noqa: E402
 
 namespace = probe_resource_lock.repository_namespace(root)
 announce = lambda message: print(f"quruntul: {message}", flush=True)  # noqa: E731
+if run_probes_port is not None:
+    # A non-protocol probe: the GPU wait is bounded and blocked-not-failed exactly as
+    # below, then the coordinated runner (which builds nothing: the adapter handed it
+    # the prepared executables) runs the probe under the exported hold.
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(probe_gpu_hold.hold_for_probe(
+                key, namespace=namespace, deadline=time.monotonic() + GPU_WAIT_SECONDS))
+        except probe_resource_lock.ResourceBusy as busy:
+            print(f"quruntul: {busy.describe()}; gave up after {GPU_WAIT_SECONDS} s of waiting. "
+                  "This is contention, not a probe result.", flush=True)
+            raise SystemExit(3)
+        done = subprocess.run([sys.executable, "tools/run_probes.py", "--only", key, "--exact",
+                               "--jobs", "1", "--port", run_probes_port])
+    raise SystemExit(done.returncode)
 if not (probe_engine.runner_executable(os.environ)
         and probe_engine.runner_executable(os.environ, save_compat_audit_codec.ENV_CODEC_EXE)):
     print("quruntul: no prepared engine and codec were handed down; the adapter's prepare did not run", flush=True)

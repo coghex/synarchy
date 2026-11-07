@@ -1221,16 +1221,36 @@ GUARD_SRC = textwrap.dedent("""\
     if plan.get("boot") is not None:
         import probelib, probe_engine
         # The real engine is never built or run: a stand-in that prints READY.
-        probe_engine.prepare_command = lambda args, **kw: [
-            sys.executable, "-c",
-            "import time; print('READY', flush=True); time.sleep(60)", *args]
+        engine = Path(root) / "stand-in-engine.sh"
+        engine.write_text("#!/bin/sh\\necho READY\\nexec sleep 60\\n")
+        engine.chmod(0o755)
+        prepared = []
+        if plan.get("real_prepare"):
+            # `prepare_command` is the real one; only the Cabal contact is
+            # replaced by what it asks of the lock: an EXCLUSIVE `cabal-build`,
+            # taken without waiting so a deadlock shows up as a refusal.
+            def prepare_executable(repo_root=None, **kw):
+                prepared.append(1)
+                lock.acquire(exclusive={"cabal-build"}, namespace=namespace,
+                             purpose="stand-in preparation").release()
+                return str(engine)
+            probe_engine.prepare_executable = prepare_executable
+        else:
+            probe_engine.prepare_command = lambda args, **kw: [str(engine), *args]
         procs = []
-        for mode in plan["boot"]:
+        for index, mode in enumerate(plan["boot"]):
             procs.append(probelib.boot(9999, log=str(Path(root) / "engine.log"),
                                        mode=tuple(mode)))
             report["calls"].append(probe_gpu_hold.holding())
-        for proc in procs:
-            proc.kill()
+            if plan.get("gate") and index == 0:
+                Path(ready + ".mid").write_text("first engine up")
+                while not Path(release + ".go").exists():
+                    time.sleep(0.02)
+        report["prepared"] = len(prepared)
+        report["engine_pids"] = [proc.pid for proc in procs]
+        if not plan.get("leave_engines"):
+            for proc in procs:
+                proc.kill()
     for argv in plan.get("launch", []):
         hold = probe_gpu_hold.ensure_for_launch(argv)
         report["calls"].append(hold is not None)
@@ -1477,6 +1497,79 @@ def test_an_exported_host_hold_marks_the_environment_only_while_it_lasts() -> No
         scratch.cleanup()
 
 
+def test_a_second_engine_is_not_prepared_under_the_hold_beside_a_queued_runner() -> None:
+    print("\n-- no preparation while holding gpu-desktop: a queued runner cannot wedge a "
+          "multi-engine direct probe")
+    scratch = Scratch()
+    try:
+        guard = Guard(scratch, {"boot": [["--offscreen"], ["--offscreen"]],
+                                "real_prepare": True, "gate": True})
+        mid = Path(str(guard.ready) + ".mid")
+        deadline = time.monotonic() + 30
+        while not mid.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        expect(mid.exists(), "the first offscreen engine is up and the probe holds gpu-desktop")
+        # A sequential runner now queues for {gpu-desktop exclusive, cabal-build shared}.
+        runner = scratch.waiter(exclusive={GPU}, shared={"cabal-build", "repo-config"},
+                                purpose="run_probes queued behind the probe")
+        expect(runner.queued(), "a runner queues behind the direct probe's hold")
+        Path(str(guard.release_flag) + ".go").write_text("go")
+        report = guard.report(30.0)
+        expect(report.get("calls") == [True, True] and report.get("prepared") == 1,
+               f"the second boot proceeds and reuses the engine prepared before the hold, "
+               f"instead of asking for cabal-build exclusively behind the queued runner "
+               f"({report})")
+        guard.stop()
+        expect(runner.took_it(), "and the runner runs once the probe is gone")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_hold_lasts_as_long_as_the_engine_even_if_the_probe_is_killed() -> None:
+    print("\n-- killing the probe does not release gpu-desktop while its engine runs")
+    scratch = Scratch()
+    try:
+        clone = _other_checkout(scratch)
+        guard = Guard(scratch, {"boot": [["--offscreen"]], "leave_engines": True})
+        report = guard.report()
+        pids = report.get("engine_pids") or []
+        expect(len(pids) == 1 and report.get("calls") == [True], f"the probe booted an engine ({report})")
+        try:
+            os.kill(guard.proc.pid, signal.SIGTERM)
+            guard.proc.wait(timeout=30)
+            expect(guard.proc.returncode is not None, "the probe was terminated without teardown")
+            expect(_alive(pids[0]), "its engine outlived it")
+            hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+            expect(hold is None and busy is not None,
+                   "and gpu-desktop is STILL held: the engine carries the lock")
+            if hold is not None:
+                hold.release()
+        finally:
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        deadline = time.monotonic() + 30
+        while _alive(pids[0]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        hold, busy, error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is not None, f"released once the engine is gone (busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def _alive(pid: int) -> bool:
+    try:
+        done = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    except OSError:
+        return False
+    state = done.stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_two_shared_holders_coexist()
@@ -1520,6 +1613,8 @@ def main() -> int:
     test_a_runner_launched_probe_inherits_the_hold_instead_of_retaking_it()
     test_every_graphical_launch_site_is_guarded()
     test_an_exported_host_hold_marks_the_environment_only_while_it_lasts()
+    test_a_second_engine_is_not_prepared_under_the_hold_beside_a_queued_runner()
+    test_the_hold_lasts_as_long_as_the_engine_even_if_the_probe_is_killed()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

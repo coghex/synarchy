@@ -20,7 +20,10 @@ probe that merely mentions a graphical flag on a path that fails before any
 window or device (`tools/debug_console_boot_probe.py`, `tools/preview_cli_probe.py`)
 launches through `probe_engine.engine_command`, which this module does not touch.
 
-One hold per PROCESS, kept until the process exits. A probe may boot several
+One hold per PROCESS, kept until the process exits, and handed to each engine it
+launches as an inherited lock descriptor (`child_fds`): the flock lives as long
+as any process holds that open file description, so the exclusion lasts until
+the ENGINE is gone even if the probe is killed before it can tear it down. A probe may boot several
 engines, in sequence or at once (`offscreen_probe.py` runs two together); each
 call after the first finds the hold already taken, and the hold outlives every
 engine the probe started because it is only dropped by the interpreter's exit
@@ -87,6 +90,26 @@ def holding() -> bool:
     """True when this process, or an ancestor, holds the host-wide GPU resource."""
     return (_held is not None and not _held.released) or (
         resources.GPU_RESOURCE in resources.inherited_host_resources())
+
+
+def child_fds() -> list:
+    """Descriptors to pass to an engine this process is about to launch.
+
+    The hold this process took is handed to the engine as an inherited lock
+    descriptor (`Popen(pass_fds=...)`), so `gpu-desktop` stays held until the
+    ENGINE exits even if the probe is terminated first and never reaches its own
+    teardown. A hold inherited from an ancestor is the ancestor's to keep;
+    nothing is passed for it.
+    """
+    if _held is None or _held.released:
+        return []
+    fd = _held.descriptor_for_child(resources.GPU_RESOURCE)
+    return [fd] if fd is not None else []
+
+
+def holds_own() -> bool:
+    """True when THIS process took `gpu-desktop` (not merely inherited it)."""
+    return _held is not None and not _held.released
 
 
 def release() -> None:
@@ -198,4 +221,4 @@ def ensure_for_launch(argv, label: str = "engine", **kwargs):
 
 
 __all__ = ["engine_uses_gpu", "ensure_for_launch", "acquire", "release",
-           "holding", "hold_for_probe"]
+           "holding", "hold_for_probe", "child_fds", "holds_own"]

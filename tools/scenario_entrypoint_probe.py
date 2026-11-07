@@ -224,7 +224,8 @@ class Engine:
         self.logf = open(self.log, "w")
         probe_evidence.record_engine_log(self.log)  # not via probelib.boot (#2931)
         self.proc = subprocess.Popen(cmd, cwd=launch, stdout=self.logf,
-                                     stderr=subprocess.STDOUT)
+                                     stderr=subprocess.STDOUT,
+                                     pass_fds=probe_gpu_hold.child_fds())
 
     def text(self) -> str:
         try:

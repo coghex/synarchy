@@ -170,7 +170,13 @@ class AdapterChecks(unittest.TestCase):
     def test_launches_go_through_synarchys_runners(self):
         for key, suite in self.probes().items():
             prepared = self.adapter.prepare(Context(), suite)
-            if suite.framework == "exit":
+            if suite.framework == "exit" and key in ci_probes.gpu_probe_keys():
+                # #2932: the bounded, blocked-not-failed GPU wait wraps the same runner command.
+                self.assertTrue(prepared.argv[1].endswith("probe_trial.py"), key)
+                self.assertEqual(prepared.argv[2:4], [key, "--run-probes"], key)
+                self.assertEqual(prepared.argv[4], str(suite.data["port"]), key)
+                self.assertNotEqual(int(prepared.argv[-1]), 8008)
+            elif suite.framework == "exit":
                 self.assertEqual(prepared.argv[1:7], ["tools/run_probes.py", "--only", key, "--exact", "--jobs", "1"])
                 self.assertNotEqual(int(prepared.argv[-1]), 8008)
             else:
@@ -212,7 +218,7 @@ class AdapterChecks(unittest.TestCase):
             if a in ports and b in ports:
                 self.assertNotEqual(ports[a], ports[b], (a, b))
         for key, suite in self.probes().items():
-            if suite.framework == "exit":
+            if suite.framework == "exit" and key not in ci_probes.gpu_probe_keys():
                 self.assertEqual(self.adapter.prepare(Context(), suite).argv[-2:], ["--port", str(suite.data["port"])])
 
     def test_identities_cover_runner_tool_and_build_inputs(self):
@@ -364,6 +370,71 @@ class AdapterChecks(unittest.TestCase):
         # must not supply a temporary artifact root of its own.
         self.assertEqual(len(measured), 1)
         self.assertNotIn("--artifact-root", measured[0])
+
+    def test_an_exit_suite_gpu_trial_that_cannot_get_the_gpu_is_blocked_not_failed(self):
+        # #2932: every GPU-classified probe is an `exit` suite today, so this is the path
+        # that matters. Expiry of the bounded GPU wait ends the trial as blocked (3)
+        # before run_probes.py is ever started; with the hold, the runner is started
+        # under it and its status is the trial's.
+        import runpy
+        import types
+        calls = []
+        lock = types.ModuleType("probe_resource_lock")
+        lock.repository_namespace = lambda root: "ns"
+
+        class Busy(Exception):
+            def describe(self):
+                return "gpu-desktop busy"
+
+        lock.ResourceBusy = Busy
+        busy = []
+
+        @contextlib.contextmanager
+        def hold_for_probe(key, **kwargs):
+            calls.append(("gpu", key, kwargs))
+            if busy:
+                raise Busy()
+            yield {}
+
+        gpu_hold = types.ModuleType("probe_gpu_hold")
+        gpu_hold.hold_for_probe = hold_for_probe
+        engine = types.ModuleType("probe_engine")
+        flake = types.ModuleType("probe_flake")
+        resources = types.ModuleType("probe_runner_resources")
+        codec = types.ModuleType("save_compat_audit_codec")
+        names = ("probe_flake", "probe_resource_lock", "probe_runner_resources", "probe_engine",
+                 "save_compat_audit_codec", "probe_gpu_hold")
+        saved = {name: sys.modules.get(name) for name in names}
+        sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources,
+                           probe_engine=engine, save_compat_audit_codec=codec, probe_gpu_hold=gpu_hold)
+        argv, cwd = sys.argv, os.getcwd()
+        real_run = subprocess.run
+        subprocess.run = lambda cmd, **kw: calls.append(("run", list(cmd))) or types.SimpleNamespace(returncode=7)
+        try:
+            sys.argv = ["probe_trial.py", "blood_impact", "--run-probes", "9123"]
+            busy.append(True)
+            with self.assertRaises(SystemExit) as blocked:
+                runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+            self.assertEqual(blocked.exception.code, 3)
+            self.assertEqual([c[0] for c in calls], ["gpu"], "no probe was started")
+            self.assertIsNotNone(calls[0][2].get("deadline"), "the GPU wait is bounded")
+            del calls[:]
+            busy.clear()
+            with self.assertRaises(SystemExit) as ran:
+                runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+            self.assertEqual(ran.exception.code, 7, "the runner's status is the trial's")
+            self.assertEqual([c[0] for c in calls], ["gpu", "run"])
+            self.assertEqual(calls[1][1][1:], ["tools/run_probes.py", "--only", "blood_impact", "--exact",
+                                              "--jobs", "1", "--port", "9123"])
+        finally:
+            subprocess.run = real_run
+            sys.argv = argv
+            os.chdir(cwd)
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
 
     def test_direct_only_probes_really_cannot_run_through_run_probes(self):
         # run_probes.py passes only --port; these exit before testing anything.

@@ -208,6 +208,12 @@ class Synarchy:
         else:
             argv = [sys.executable, "tools/run_probes.py", "--only", key, "--exact", "--jobs", "1",
                     "--port", str(suite.data["port"])]
+            if key in _tools(checkout)["ci_probes"].gpu_probe_keys():
+                # Waiting for the machine-wide GPU hold is bounded and blocked-not-failed
+                # (#2932), the same as a protocol trial's: probe_trial.py takes it, then
+                # runs the very command above beneath it.
+                argv = [sys.executable, str(checkout / ".quruntul" / "probe_trial.py"), key,
+                        "--run-probes", str(suite.data["port"])]
         return ctx.Prepared(argv=argv, cwd=str(checkout), environment=environment,
                             provenance=dict(key=key, executables=environment))
 

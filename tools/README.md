@@ -2855,7 +2855,11 @@ lock is the host-wide resource `gpu-desktop`, held EXCLUSIVELY:
   `scenario_entrypoint_probe.py --offscreen` (CI-eligible by default) and
   `audio_manual_probe.py --interactive` are covered without being listed. The hold
   is one per process, kept to its exit, so a probe that boots several engines
-  (`offscreen_probe.py` runs two at once) never queues behind itself. A runner,
+  (`offscreen_probe.py` runs two at once) never queues behind itself, and later
+  boots reuse the engine prepared before the hold rather than preparing under it.
+  The hold's lock descriptor is also handed to each engine (`pass_fds`), so
+  `gpu-desktop` stays held until the ENGINE exits even if the probe is killed
+  first. A runner,
   `/deflake` or trial that already holds it passes it down in
   `SYNARCHY_PROBE_HELD_HOST`, and the probe takes nothing.
 * **Host-wide.** Unlike `repo-config` and `cabal-build`, which stay scoped to one
@@ -2869,8 +2873,9 @@ lock is the host-wide resource `gpu-desktop`, held EXCLUSIVELY:
   and is never a FAIL or TIMEOUT. A dead holder is detected by the lock itself
   (the `flock` dies with the process). The exceptions are the callers that cannot
   wait: `/deflake` reports `resource-busy` as for any other resource, and the
-  quruntul trial gives up after `GPU_WAIT_SECONDS` as blocked (exit 3, no probe
-  result), with the same allowance added to its trial limit.
+  quruntul trial (protocol and `exit` suites alike, through
+  `.quruntul/probe_trial.py`) gives up after `GPU_WAIT_SECONDS` as blocked (exit 3,
+  no probe result), with the same allowance added to its trial limit.
 * **Lock order.** `gpu-desktop` is taken before any repository resource and is
   never waited for while one is held (a runner takes its whole set in one
   all-or-nothing attempt; the direct guard runs after the engine is prepared), so
