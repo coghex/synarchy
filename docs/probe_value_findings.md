@@ -29,7 +29,7 @@ concrete precondition
 - [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
 - [ ] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [deferred]: needs one completed sweep trial on a revision with #2919
 - [ ] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [deferred]: needs one farm_ai run with per-phase elapsed times
-- [ ] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
+- [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
 - [ ] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
 - [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
 - [ ] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
@@ -126,7 +126,7 @@ The sweep is a meta-probe: besides its own four-boot structural comparison it fa
 
 ## Overlap with focused gates
 
-### PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
+### [#2935] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate
 
 The transfer arc (#1013) has a focused gate per slice. `unified_transfer` is the arc's integration gate, an offscreen boot that replays all of them in one session. It failed in runs A and B at different stages and passed in run C.
 
