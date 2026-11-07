@@ -37,10 +37,10 @@ concrete precondition
 - [x] PRB-9. Three pairs of companion probes pay two boots for one fixture — [no-issue]
 - [x] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain — [no-issue]
 - [x] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run — [#2944] [#2945]
-- [ ] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
-- [ ] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
-- [ ] PRB-14. The cost and value data needed to rank probes is not tracked
-- [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+- [x] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run — [no-issue]
+- [x] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep — [no-issue]
+- [x] PRB-14. The cost and value data needed to rank probes is not tracked — [#2947]
+- [x] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file — [#2948]
 
 ---
 
@@ -380,7 +380,9 @@ Twenty-three probes covering Lua gameplay logic that has no in-process equivalen
 - **Scope and constraints:** Run `tools/physiology_probe.py` after any physiology change; do not change its thresholds, stimuli or checks without the owner (per #2761's acceptance text).
 - **Remaining uncertainty:** `mental_state`'s 5,395 lines are a maintenance cost (21 commits) but no runtime cost beyond 183 s; any split is a refactor, not part of this report.
 
-### PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
+### [no-issue] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification: keep all 19 probes. Both red probes are already tracked. `location_overlay` (red 3 of 3 at the same point, phase 2 `engine.loadSave` not accepted) is open issue #2799: the restarted boot has not registered the `processing_unit` item that six location significant-item references name. `construction_blueprint_footprint` (red 3 of 3 on whole-frame diff boxes of 1024x768) was fixed by #2654, closed 2026-11-01 after the last lab run (10-19), so "red in all three runs" is stale and its current state is unconfirmed. #2654's root cause (the simulation is not paused between captures, so the live world flickers 1-7 luma across the whole frame) is the first candidate for the `tutorial_hud` still-frame failure; an evidence comment quoting it was posted on #2942 (https://github.com/coghex/synarchy/issues/2942#issuecomment-6710792645, marked `issue-spec:no-amend`). `offscreen`, `location_embark` and `etymology` failed in runs A and B and passed in run C with no fix named; they may be flaky. `location_content`'s 436-714 s has no saving without a split, which is a refactor.
 
 Nineteen probes whose value is in pixels, windows, GPU resources or generated-world placement, which headless Hspec cannot see.
 
@@ -420,7 +422,9 @@ Nineteen probes whose value is in pixels, windows, GPU resources or generated-wo
 - **Scope and constraints:** Sprite and render signoff rules in CLAUDE.md still apply.
 - **Remaining uncertainty:** Which of `location_content`'s phases accounts for its 436-714 s spread.
 
-### PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
+### [no-issue] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification: keep all five probes as they are. All five passed in all three runs (run C 41 s in total) and each guards a real-process contract Hspec cannot state: the executable run from outside the repo (#636), the gitignored runtime config boundary against `git status` (#638, #1937), the per-file DEBUG and single INFO asset-logging ownership (#1930), and `decodeUtf8` not throwing on malformed bytes through the real Lua API (#618). `config_migration` (10 s, the pre-#661 legacy config upgrade path) is the same kind of legacy-compatibility protection that #2912 made opt-in for saves; the owner chose to keep it routine, as making it opt-in would save only 10 s. The 3 s `text_encoding` boot is recorded as evidence under PRB-15.
 
 Five probes of 3-12 s each guard contracts only a real boot can show.
 
@@ -447,7 +451,9 @@ Five probes of 3-12 s each guard contracts only a real boot can show.
 
 ## Measurement
 
-### PRB-14. The cost and value data needed to rank probes is not tracked
+### [#2947] PRB-14. The cost and value data needed to rank probes is not tracked
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: one small issue. Corrections to the finding: the census is not the natural owner of lab cost data (its samples are 10-run flake measurements, its writer refuses CI-eligible probes), so the issue adds a separate generated table read from the lab ledger; and per-phase timing is not part of it, because #2938 (`farm_ai`), #2940 (`construction`) and PRB-15 add it probe by probe first. A fresh search of the 7,389 `master` commit messages for a probe catching a defect still finds one hit, a defect in the probe itself.
 
 Ranking probes by what they cost and what they catch needed three sources that are not in the repository, and the value side is not recorded anywhere.
 
@@ -465,7 +471,9 @@ Ranking probes by what they cost and what they catch needed three sources that a
 - **Scope and constraints:** `docs/probe_census.json` is PR-only (listed in `~/.config/docs-push.json`); `tools/test_probe_census.py` and `python3 .quruntul/checks.py` apply. Not a duplicate of #2931 (failure evidence) or #2932 (GPU lock).
 - **Remaining uncertainty:** The issue-title sample is a GitHub relevance-ranked search limited to 150, so it understates catches filed under other titles.
 
-### PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+### [#2948] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
+
+> **Note:** Owner decision 2026-11-07: measure first. #2948 adds `tools/bootstrap_timing.py`, which times the probes' per-file loop against the `startup_loader` arena profile's one-call path on fresh engines, with no change to any probe, `probelib` or the loader. Whether to roll the one-call path out to the 71 files, given its superset of loaded families, is a separate decision to take from those numbers; it is not filed.
 
 Added 2026-11-07 while processing PRB-10 (owner decision: append as a new unprocessed finding, with a timing measurement as its first step). Seventy-one files under `tools/` load the game definitions into each engine they boot by sending one debug-console command per YAML file (`engine.loadItemYaml(path)`, `engine.loadUnitYaml(path)`, and the other loaders), 75 files for the usual set: 4 substances, 39 items, 1 equipment, 13 materials, 1 faction, 1 physiology, 8 units, 8 buildings. The same bootstrap repeats on every fresh-process engine of the multi-engine probes, so its cost may be a large share of the roughly 34 s per engine seen in `persistence_contract` (PRB-8) and `gameplay_tag_persistence` (PRB-10). It is unmeasured, and no row of the report covers it.
 
@@ -477,11 +485,12 @@ Added 2026-11-07 while processing PRB-10 (owner decision: append as a new unproc
 
 - `tools/cargo_capacity_probe.py:30-47` — `bootstrap()` loops over eight `data/<family>/*.yaml` globs and calls `send(PORT, f"{fn}('{path}'); return 'ok'")` once per file; the probe then makes about 180 more round trips in its overfill loop and takes 85-86 s in all three shakedown runs, which puts a console round trip at roughly 0.2-0.3 s and the 75-file bootstrap at roughly 15-25 s. This is an inference from one probe's total, not a measurement.
 - `tools/persistence_contract_probe.py:230-243` and `tools/gameplay_tag_persistence_probe.py:143` define the same `bootstrap_defs`; the former boots about 20 fresh engines and the latter about 11, each calling it (`persistence_contract` 686 s in run C, `gameplay_tag_persistence` 395 s, both about 34 s per engine).
-- `git grep -l "engine.loadItemYaml" -- tools` returns 71 files, many with a private copy of the loop (`bootstrap_defs` in `bleeding_trail`, `blood_impact`, `circadian`, `combat_anim`, `item_instance`, `lua_orphan_prune` and others, `load_defs` in `location_content` and `location_stamp_idempotent`). I found no bulk loader verb in `src/Engine/Scripting` or `tools/probelib.py`.
+- `tools/text_encoding_probe.py` (PRB-13) boots a real engine, runs its checks and quits in 3 s in all three shakedown runs, so the bare cost of an engine boot is about 3 s; the 15-34 s per engine seen in the arena and persistence probes is therefore mostly bootstrap (the per-YAML console loading) and the engine's world setup, not the engine itself. Also an inference until the first-step measurement is taken.
+- `git grep -l "engine.loadItemYaml" -- tools` returns 71 files, many with a private copy of the loop (`bootstrap_defs` in `bleeding_trail`, `blood_impact`, `circadian`, `combat_anim`, `item_instance`, `lua_orphan_prune` and others, `load_defs` in `location_content` and `location_stamp_idempotent`). There is no bulk console verb in `src/Engine/Scripting` or `tools/probelib.py`, but there is a bulk path in Lua: `scripts/startup_loader.lua`, the game's own asset queue, has an `arena` profile, and `build("arena")` followed by `runAll()` drains the whole queue synchronously in one call (headless scenario boots already drive it, `scripts/scenario_startup.lua`; `etymology_probe`, `debug_grab_capture` and `chunk_memory_measure` already wait on the loader). **Superset caveat:** the probes' private loops load 8 families in a fixed order (substances, items, equipment, materials, factions, physiology, units, buildings), while the arena profile loads those plus vegetation, infections, recipes, loot tables, loot profiles and locations, in the production order (factions and physiology before units). Swapping one for the other is therefore not mechanical: a probe that now also sees recipes or locations can behave differently, so each of the up to 71 files needs checking. How much of the per-engine cost is the console round trips, the engine's parse, or boot, and how much the one-call path saves, is unmeasured.
 
 **Handoff context:**
 
 - **Current behavior:** Each engine boot pays about 75 serial console round trips of definition loading before its scenario starts, and 71 files carry their own copy of the loop.
-- **Expected direction:** First step, a measurement and nothing else: time `bootstrap_defs` (wall seconds around the loop) in one probe, for example `cargo_capacity` and one engine of `persistence_contract`, and compare with that probe's total. Only if it is a large share, consider one engine-side or `probelib` bulk loader (a single console call that loads every family) used by the probes; that is a separate decision with its own issue. No saving is estimated here.
+- **Expected direction:** First step, a measurement and nothing else: time `bootstrap_defs` (wall seconds around the loop) in one probe, for example `cargo_capacity` and one engine of `persistence_contract`, and compare with that probe's total. Only if it is a large share, consider routing the probes through the existing `startup_loader` arena profile with one shared `probelib` bootstrap (the superset caveat above applies); that is a separate decision with its own issue. No saving is estimated here.
 - **Scope and constraints:** A bulk path must load exactly the same definitions in the same order as the per-file loop, because several probes depend on load order and on a clean per-run registry; `tools/probelib.py` is shared by every probe, so a change there needs the probe tool self-tests (`python3 tools/test_probelib.py`).
 - **Remaining uncertainty:** The per-round-trip latency and the bootstrap's share of any probe are inferred, not measured; whether the console round trip or the engine-side parse dominates is unknown.
