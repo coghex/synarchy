@@ -612,7 +612,7 @@ def main() -> int:
         # directory beside it would SHADOW it -- loadWorld prefers the
         # directory, so the flat save would become unloadable by its own
         # name while still sitting on disk.
-        shutil.rmtree(os.path.join(saves_dir, "autosave-2"))
+        probe_evidence.retire(os.path.join(saves_dir, "autosave-2"))
         legacy_flat = os.path.join(saves_dir, "autosave-2.synworld")
         shutil.copyfile(os.path.join(saves_dir, "manual_slot", "world.synworld"),
                         legacy_flat)
@@ -667,7 +667,7 @@ def main() -> int:
             chk.ok(listing(args.port).get(reserved, {}).get("autosave")
                    is False,
                    f"{reserved} is still listed after the refusal")
-            shutil.rmtree(os.path.join(saves_dir, reserved))
+            probe_evidence.retire(os.path.join(saves_dir, reserved))
 
         # ---------------------------------------------------------
         # 10. Normal rotation: autosave-1 stays newest, owned slots only.

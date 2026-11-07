@@ -123,6 +123,9 @@ def test_a_failing_run_keeps_its_directory_and_prints_the_path() -> None:
                "the engine log at a fixed path was copied in")
         fixed.unlink()
         expect(logs[0].exists(), "and survives the original being removed")
+        expect("FAIL: a check failed" in
+               (where / probe_evidence.CAPTURE_FILE).read_text(),
+               "the attempt's complete captured output is saved with it")
     finally:
         tree.cleanup()
         shutil.rmtree(tree.root, ignore_errors=True)
@@ -184,6 +187,10 @@ def test_a_failed_attempt_outlives_a_retry_that_passes() -> None:
                         .glob("scratch_*/evidence.txt"))[0].read_text()
                    == "save 1\n",
                    "and holds the FIRST attempt's data, not the retry's")
+            expect("FAIL: a check failed" in
+                   (kept[0] / probe_evidence.CAPTURE_FILE).read_text(),
+                   "and the FIRST attempt's output, which the retry's "
+                   "success would otherwise have replaced")
         expect("FAILURE EVIDENCE" in out,
                "the summary lists it although the probe passed")
     finally:
@@ -201,6 +208,9 @@ def test_the_path_is_printed_whatever_tail_says() -> None:
         expect(rc == 1 and kept and str(kept[0].resolve()) in out
                and "FAIL: a check failed" not in out,
                "the tail is suppressed and the path is not")
+        expect(kept and "FAIL: a check failed" in
+               (kept[0] / probe_evidence.CAPTURE_FILE).read_text(),
+               "and the output the tail would have shown is saved anyway")
     finally:
         tree.cleanup()
         shutil.rmtree(tree.root, ignore_errors=True)
@@ -218,6 +228,8 @@ def test_parallel_attempts_never_collide() -> None:
             kept = attempts(tree, name)
             expect(len(kept) == 1 and str(kept[0].resolve()) in out,
                    f"{name} kept and printed its own attempt ({kept})")
+            expect(kept and (kept[0] / probe_evidence.CAPTURE_FILE).is_file(),
+                   f"{name}'s parallel attempt saved its output")
         expect(attempts(tree, "ok") == [], "the passing probe kept nothing")
         expect(rc == 1, "and the run still fails")
     finally:
@@ -309,6 +321,79 @@ def test_pruning_keeps_the_newest_n_and_only_what_it_owns() -> None:
         other.finish("FAIL")
         expect(len(list((retention.root / "q").iterdir())) == 1,
                "another probe's evidence is its own budget")
+
+
+def test_pruning_counts_failed_runs_inside_an_invocation() -> None:
+    print("\n-- one invocation of many failed runs cannot exceed the limit")
+    with tempfile.TemporaryDirectory(prefix="evidence-runs-") as temp:
+        probe_dir = Path(temp).resolve() / "root" / "p"
+        invocations = []
+        for batch in range(3):
+            invocation = probe_dir / f"p-batch{batch}"
+            for index in range(1, 5):
+                (invocation / f"run-{index:03d}").mkdir(parents=True)
+            probe_evidence.finalize_invocation(
+                invocation, probe="p", retained=True, keep=3)
+            invocations.append(invocation)
+        left = sorted(str(p.relative_to(probe_dir))
+                      for p in probe_dir.glob("*/run-*"))
+        expect(len(left) == 3 and all(x.startswith("p-batch2") for x in left),
+               f"only the newest three failed runs remain ({left})")
+        expect(not invocations[0].exists() and not invocations[1].exists(),
+               "emptied invocations are removed, not left as clutter")
+
+
+def test_scratch_cleanup_failures_still_propagate() -> None:
+    print("\n-- temporary_directory keeps TemporaryDirectory's strictness")
+    real = shutil.rmtree
+
+    def refuse(path, *args, **kwargs):
+        raise OSError("synthetic: busy")
+
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    try:
+        shutil.rmtree = refuse
+        raised = False
+        try:
+            with probe_evidence.temporary_directory(prefix="strict_"):
+                pass
+        except OSError:
+            raised = True
+        finally:
+            shutil.rmtree = real
+        expect(raised, "a failed cleanup raises, so the probe cannot exit "
+               "successfully with scratch left behind")
+        with probe_evidence.temporary_directory(prefix="gone_") as made:
+            real(made)
+        expect(True, "a tree that already vanished is not an error")
+        expect("probe_evidence.retire(temporary)" in
+               (Path(__file__).parent / "audio_null_probe.py").read_text(),
+               "audio_null's strict cleanup still raises")
+    finally:
+        shutil.rmtree = real
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_invocation_owned_trees_are_never_deleted_directly() -> None:
+    print("\n-- no migrated probe deletes an invocation-owned tree itself")
+    import re
+    migrated = ("autosave", "chop", "construction", "crop", "farm_ai",
+                "foraging", "gameplay_tag_persistence", "item_instance",
+                "item_temp", "location_overlay", "location_stamp_idempotent",
+                "persistence_contract", "persistence_integrity", "plant",
+                "power", "save_barrier", "save_storage", "scenario_entrypoint",
+                "till", "transactional_load", "transfer_order",
+                "unified_transfer", "fluid_exact_restart",
+                "fluid_exact_restart_render", "fluid_reaction",
+                "fluid_reaction_visual", "debug_console_boot", "audio_null")
+    call = re.compile(r"^[^#\n]*\bshutil\.rmtree\(", re.M)
+    for name in migrated:
+        text = (Path(__file__).parent / f"{name}_probe.py").read_text()
+        expect(call.search(text) is None,
+               f"{name}_probe.py has no direct shutil.rmtree call: its "
+               f"teardown retires trees through probe_evidence, so the saves "
+               f"and logs inside them survive a failure")
 
 
 def test_concurrent_allocation_and_pruning() -> None:
@@ -551,7 +636,10 @@ TESTS = (
     test_a_root_inside_a_worktree_is_refused,
     test_a_bad_keep_count_is_refused_not_defaulted,
     test_pruning_keeps_the_newest_n_and_only_what_it_owns,
+    test_pruning_counts_failed_runs_inside_an_invocation,
     test_concurrent_allocation_and_pruning,
+    test_scratch_cleanup_failures_still_propagate,
+    test_invocation_owned_trees_are_never_deleted_directly,
     test_archival_and_removal_failures_are_reported_not_swallowed,
     test_probe_side_helpers_defer_to_a_runner,
     test_the_child_environment_is_the_runners_alone,

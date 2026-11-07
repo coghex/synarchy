@@ -985,10 +985,10 @@ def _run(args, root: str) -> int:
             quit_engine(args.port, proc)
         for d in save_dirs:
             if os.path.basename(d).startswith(SAVE_PREFIX) and os.path.isdir(d):
-                shutil.rmtree(d, ignore_errors=True)
+                probe_evidence.discard_scratch(d)
         race_dir = os.path.join(root, "saves", f"{SAVE_PREFIX}race_{run_id}")
         if os.path.isdir(race_dir):
-            shutil.rmtree(race_dir, ignore_errors=True)
+            probe_evidence.discard_scratch(race_dir)
 
 
 if __name__ == "__main__":

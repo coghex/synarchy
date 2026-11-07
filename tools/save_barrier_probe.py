@@ -204,7 +204,7 @@ def _exercise(a, root, rep):
         # already released.
         WFAIL = SAVE + "_writefail"
         wfail_path = os.path.join(root, "saves", WFAIL)
-        if os.path.isdir(wfail_path): shutil.rmtree(wfail_path)
+        if os.path.isdir(wfail_path): probe_evidence.retire(wfail_path)
         elif os.path.exists(wfail_path): os.remove(wfail_path)
         with open(wfail_path, "w") as f: f.write("occupying this path with a plain file")
         try:
@@ -239,7 +239,7 @@ def _exercise(a, root, rep):
         ):
             raise RuntimeError("save rejected right after a prior write failure -- barrier stuck open?")
         wait(lambda: os.path.isfile(os.path.join(followup_path, "world.synworld")), "follow-up save file")
-        shutil.rmtree(followup_path, ignore_errors=True)
+        probe_evidence.discard_scratch(followup_path)
     finally:
         quit_engine(a.port, p)
         try: p.wait(timeout=15)
@@ -325,7 +325,7 @@ def _exercise(a, root, rep):
                 f"first={first_size}, second={second_size}"
             )
     finally:
-        quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True); shutil.rmtree(resave_path, ignore_errors=True)
+        quit_engine(a.port, p); probe_evidence.discard_scratch(path); probe_evidence.discard_scratch(resave_path)
     p = boot(
         a.port,
         log=rep.engine_log_path("save_barrier_probe_reload2.log", "/tmp/save_barrier_probe_reload2.log"),
@@ -359,7 +359,7 @@ def _exercise(a, root, rep):
                 f"got {loaded_far2!r}"
             )
     finally:
-        quit_engine(a.port, p); shutil.rmtree(path2, ignore_errors=True)
+        quit_engine(a.port, p); probe_evidence.discard_scratch(path2)
     rep.note('PASS: save owners acknowledged, post-release mutation isolated, later save captured its own boundary, a disk write failure surfaced as SaveFailed without wedging the barrier, and loaded session stayed paused')
 
 if __name__ == "__main__": sys.exit(main())

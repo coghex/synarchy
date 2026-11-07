@@ -1019,7 +1019,8 @@ def _measure_runs(measurement: Measurement, probe: str, script: str,
                 cleanly, so the result never reads as "nothing went
                 wrong, nothing retained".
                 """
-                probe_evidence.archive_engine_logs(run_dir)
+                for problem in probe_evidence.archive_engine_logs(run_dir):
+                    print(problem, file=sys.stderr)
                 measurement.status = "harness-error"
                 measurement.error = f"run {index}: {detail}"
                 measurement.error_run = RunRecord(

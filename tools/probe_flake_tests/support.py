@@ -166,6 +166,10 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
 
     if mode == "raw":
         # Bypass the reporter entirely to forge malformed streams.
+        fixed_log = os.environ.get("SYNTHETIC_FIXED_LOG")
+        if fixed_log:
+            open(fixed_log, "w").write("engine output\\n")
+            probe_evidence.record_engine_log(fixed_log)
         path = os.environ["SYNTHETIC_RAW_PATH"]
         open(os.environ[probe_protocol.ENV_EVENTS], "w").write(
             open(path).read())

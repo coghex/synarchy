@@ -73,7 +73,7 @@ def run_attempt(script, port, timeout, groups, *, key=None, hold_env=None,
         raise
     if attempt is not None:
         outcome = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-        where = attempt.finish(outcome)
+        where = attempt.finish(outcome, capture=out)
         if where is not None and kept is not None:
             kept.append(str(where))
     return ok, timed_out, elapsed, out

@@ -225,6 +225,67 @@ def test_failure_evidence_pruning() -> None:
                "an operator-chosen --artifact-root is never pruned")
 
 
+def test_a_harness_error_reports_an_archive_failure() -> None:
+    print("\n-- a HARNESS_ERROR run reports a failed engine-log archive (#2931)")
+    import io
+    import shutil
+    with SyntheticTree() as tree, _failure_root_env(tree):
+        fixed = tree.root / "fixed-engine.log"
+        bad = tree.root / "bad.jsonl"
+        bad.write_text("not json\n", encoding="utf-8")
+        os.environ["SYNTHETIC_FIXED_LOG"] = str(fixed)
+        os.environ["SYNTHETIC_RAW_PATH"] = str(bad)
+        real = shutil.copyfile
+        seen = io.StringIO()
+
+        def refuse(*args, **kwargs):
+            raise OSError("synthetic: no space left")
+
+        shutil.copyfile = refuse
+        try:
+            import contextlib
+            with contextlib.redirect_stderr(seen):
+                m = run_synthetic(tree, "raw", runs=1, artifact_root=None)
+        finally:
+            shutil.copyfile = real
+            os.environ.pop("SYNTHETIC_FIXED_LOG", None)
+            os.environ.pop("SYNTHETIC_RAW_PATH", None)
+        expect(m.status == "harness-error" and m.error_run is not None
+               and m.error_run.artifact_dir.exists(),
+               "the malformed run is a retained harness error")
+        text = seen.getvalue()
+        expect(str(fixed) in text and "still at" in text
+               and "no space left" in text,
+               f"the failed archive names the log, the error and where the "
+               f"original still is ({text!r})")
+        expect(fixed.read_text() == "engine output\n",
+               "and the original is untouched")
+
+
+def test_failure_evidence_pruning_counts_failed_runs() -> None:
+    print("\n-- the keep limit counts failed runs, not invocations (#2931)")
+    with SyntheticTree() as tree, _failure_root_env(tree, keep=2) as durable:
+        m = run_synthetic(tree, "fail", runs=4, artifact_root=None)
+        left = sorted(p.name for p in m.invocation_dir.iterdir()
+                      if p.name.startswith("run-"))
+        expect(left == ["run-003", "run-004"],
+               f"a four-failure batch keeps only its newest two runs ({left})")
+        m2 = run_synthetic(tree, "fail", runs=1, artifact_root=None)
+        probe_dir = durable.resolve() / "synthetic"
+        runs = sorted(str(p.relative_to(probe_dir))
+                      for p in probe_dir.glob("*/run-*"))
+        expect(len(runs) == 2 and runs[-1].startswith(m2.invocation_dir.name),
+               f"the limit holds across batches too ({runs})")
+        expect(m.invocation_dir.exists() and (m.invocation_dir /
+               probe_evidence.MARKER).exists(),
+               "an invocation that still holds a run keeps its marker")
+        m3 = run_synthetic(tree, "fail", runs=2, artifact_root=None)
+        expect(not m.invocation_dir.exists() and not m2.invocation_dir.exists()
+               and sorted(p.name for p in m3.invocation_dir.iterdir()
+                          if p.name.startswith("run-")) == ["run-001", "run-002"],
+               "an invocation whose last run is pruned goes with it")
+
+
 def test_probe_owned_scratch_is_kept_for_the_harness() -> None:
     print("\n-- probe-owned cleanup defers to the harness (#2931) --")
     with SyntheticTree() as tree, _failure_root_env(tree) as durable:
@@ -259,5 +320,7 @@ TESTS = (
     test_no_tmpdir_default,
     test_failure_evidence_root,
     test_failure_evidence_pruning,
+    test_failure_evidence_pruning_counts_failed_runs,
+    test_a_harness_error_reports_an_archive_failure,
     test_probe_owned_scratch_is_kept_for_the_harness,
 )

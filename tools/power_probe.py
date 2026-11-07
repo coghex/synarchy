@@ -1012,7 +1012,7 @@ def _run(port: int, root: str) -> int:
             quit_engine(port, procB)
         for path in (save_dir, ev_save_dir):
             if os.path.exists(path):
-                shutil.rmtree(path, ignore_errors=True)
+                probe_evidence.discard_scratch(path)
 
 
 if __name__ == "__main__":

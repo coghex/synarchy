@@ -70,6 +70,8 @@ MARKER_SCHEMA = "probe-evidence/v1"
 ENGINE_LOG_MANIFEST = "engine-logs.txt"
 # Where the runner copies those logs inside a kept attempt.
 ENGINE_LOG_DIR = "engine-logs"
+# The attempt's complete stdout/stderr capture, saved when it is kept.
+CAPTURE_FILE = "stdout.txt"
 
 # Outcomes. PASS is the only one that deletes.
 PASS = "PASS"
@@ -177,12 +179,13 @@ def _now() -> datetime:
 # --------------------------------------------------------------------------
 # Marker, pruning
 # --------------------------------------------------------------------------
-def _write_marker(directory: Path, probe: str, outcome: str) -> None:
+def _write_marker(directory: Path, probe: str, outcome: str,
+                  kind: str = "attempt") -> None:
     """The marker is written LAST and atomically, so a half-finalized
     directory is never mistaken for a finished one and pruned under a
     reader."""
     document = {"schema": MARKER_SCHEMA, "probe": probe, "outcome": outcome,
-                "finalized_at": _now().strftime("%Y%m%dT%H%M%S.%fZ")}
+                "kind": kind, "finalized_at": _now().strftime("%Y%m%dT%H%M%S.%fZ")}
     staging = directory / f"{MARKER}.{uuid.uuid4().hex[:8]}"
     staging.write_text(json.dumps(document) + "\n", encoding="utf-8")
     os.replace(staging, directory / MARKER)
@@ -220,18 +223,63 @@ def finalized_entries(probe_dir: Path) -> list[tuple[str, str, Path]]:
     return sorted(found)
 
 
+def _failed_units(probe_dir: Path) -> list[tuple[str, str, str, Path, Path | None]]:
+    """The failed ATTEMPTS under a probe's directory, oldest first.
+
+    A legacy runner attempt is one unit. A `probe_flake` invocation holds a
+    `run-NNN` directory per unsuccessful run and each of those is a unit of
+    its own, so the retention count means failed attempts however the
+    harness batched them. Each unit is `(finalized_at, directory name, run
+    name, path, owning invocation or None)`.
+    """
+    units = []
+    for stamp, name, path in finalized_entries(probe_dir):
+        marker = _read_marker(path) or {}
+        if marker.get("kind") != "invocation":
+            units.append((stamp, name, "", path, None))
+            continue
+        try:
+            runs = sorted(child for child in path.iterdir()
+                          if child.name.startswith("run-")
+                          and child.is_dir() and not child.is_symlink())
+        except OSError:
+            continue
+        for run in runs:
+            units.append((stamp, name, run.name, run, path))
+        if not runs:
+            # Finalized and holding nothing: not evidence, only clutter.
+            with contextlib.suppress(OSError):
+                shutil.rmtree(path)
+    return sorted(units, key=lambda unit: unit[:3])
+
+
 def prune(probe_dir: Path, keep: int) -> list[str]:
-    """Remove all but the newest `keep` finalized attempts; return problems."""
-    entries = finalized_entries(probe_dir)
+    """Keep the newest `keep` failed attempts; return problems.
+
+    Counting is per failed attempt (see `_failed_units`), so one harness
+    invocation with many failing runs cannot hold the limit hostage. An
+    invocation whose last run is pruned goes with it.
+    """
+    units = _failed_units(probe_dir)
     problems = []
-    for _stamp, _name, path in entries[:max(0, len(entries) - keep)]:
+    for _stamp, _name, _run, path, owner in units[:max(0, len(units) - keep)]:
         try:
             shutil.rmtree(path)
         except FileNotFoundError:
-            continue  # a concurrent pruner got there first
+            pass  # a concurrent pruner got there first
         except OSError as error:
             problems.append(f"could not prune old failure evidence {path}: "
                             f"{error}")
+            continue
+        if owner is not None:
+            try:
+                left = [child for child in owner.iterdir()
+                        if child.name.startswith("run-")]
+            except OSError:
+                continue
+            if not left:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(owner)
     return problems
 
 
@@ -307,7 +355,8 @@ class Attempt:
     def tmp(self) -> Path:
         return self.path / "tmp"
 
-    def finish(self, outcome: str, *, announce=None) -> Path | None:
+    def finish(self, outcome: str, *, announce=None,
+               capture: str | None = None) -> Path | None:
         """Apply the retention rule; return the kept path, else None.
 
         PASS deletes the attempt (a deletion that fails is reported and the
@@ -331,6 +380,13 @@ class Attempt:
                     f"{self.path}: {error}")
                 return self.path
             return None
+        if capture is not None:
+            try:
+                (self.path / CAPTURE_FILE).write_text(
+                    capture, encoding="utf-8", errors="replace")
+            except OSError as error:
+                say(f"could not save the captured output of {self.path}: "
+                    f"{error}")
         for problem in archive_engine_logs(self.path):
             say(problem)
         try:
@@ -402,7 +458,7 @@ def finalize_invocation(invocation: Path, *, probe: str, retained: bool,
             invocation.rmdir()
         return
     try:
-        _write_marker(invocation, probe, "FAIL")
+        _write_marker(invocation, probe, "FAIL", kind="invocation")
     except OSError as error:
         say(f"could not mark failure evidence {invocation}: {error}; the "
             f"evidence itself is intact there")
@@ -479,13 +535,18 @@ def temporary_directory(prefix: str = "tmp"):
     """`tempfile.TemporaryDirectory(prefix=...)` that retires under a runner.
 
     Under a runner `TMPDIR` already points into the attempt directory, so
-    the tree is created there.
+    the tree is created there. Like `TemporaryDirectory`, a cleanup that
+    FAILS raises (a vanished tree does not): a probe that left its scratch
+    behind must not exit successfully.
     """
     path = tempfile.mkdtemp(prefix=prefix)
     try:
         yield path
     finally:
-        discard_scratch(path)
+        try:
+            retire(path)
+        except FileNotFoundError:
+            pass
 
 
 REMOVAL_FAILED = "could not remove this run's artifact directory {base}: {error}"
