@@ -37,7 +37,7 @@ concrete precondition
 - [x] PRB-9. Three pairs of companion probes pay two boots for one fixture — [no-issue]
 - [x] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain — [no-issue]
 - [x] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run — [#2944] [#2945]
-- [ ] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
+- [x] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run — [no-issue]
 - [ ] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
 - [ ] PRB-14. The cost and value data needed to rank probes is not tracked
 - [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
@@ -380,7 +380,9 @@ Twenty-three probes covering Lua gameplay logic that has no in-process equivalen
 - **Scope and constraints:** Run `tools/physiology_probe.py` after any physiology change; do not change its thresholds, stimuli or checks without the owner (per #2761's acceptance text).
 - **Remaining uncertainty:** `mental_state`'s 5,395 lines are a maintenance cost (21 commits) but no runtime cost beyond 183 s; any split is a refactor, not part of this report.
 
-### PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
+### [no-issue] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification: keep all 19 probes. Both red probes are already tracked. `location_overlay` (red 3 of 3 at the same point, phase 2 `engine.loadSave` not accepted) is open issue #2799: the restarted boot has not registered the `processing_unit` item that six location significant-item references name. `construction_blueprint_footprint` (red 3 of 3 on whole-frame diff boxes of 1024x768) was fixed by #2654, closed 2026-11-01 after the last lab run (10-19), so "red in all three runs" is stale and its current state is unconfirmed. #2654's root cause (the simulation is not paused between captures, so the live world flickers 1-7 luma across the whole frame) is the first candidate for the `tutorial_hud` still-frame failure; an evidence comment quoting it was posted on #2942 (https://github.com/coghex/synarchy/issues/2942#issuecomment-6710792645, marked `issue-spec:no-amend`). `offscreen`, `location_embark` and `etymology` failed in runs A and B and passed in run C with no fix named; they may be flaky. `location_content`'s 436-714 s has no saving without a split, which is a refactor.
 
 Nineteen probes whose value is in pixels, windows, GPU resources or generated-world placement, which headless Hspec cannot see.
 
