@@ -76,11 +76,19 @@ probe_runner_resources.ENGINE_EXECUTABLE = probe_runner_resources.engine_preflig
 probe_runner_resources.CODEC_EXECUTABLE = probe_runner_resources.codec_preflight(namespace, announce=announce)
 
 exclusive, shared = probe_runner_resources.cross_process_interests(key, namespace)
+
+
+def waiting(busy) -> None:
+    """Say what the wait is for and who holds it, while it lasts (#2932)."""
+    print(f"quruntul: waiting for {busy.resource!r} ({busy.interest}) held outside this trial: "
+          f"{busy.describe()}", flush=True)
+
+
 wait = GPU_WAIT_SECONDS if probe_runner_resources.GPU_RESOURCE in exclusive else LOCK_WAIT_SECONDS
 try:
     hold = probe_resource_lock.wait_acquire(
         exclusive=exclusive, shared=shared, namespace=namespace, purpose=f"quruntul {key}",
-        poll=probe_runner_resources.RESOURCE_WAIT_POLL, deadline=time.monotonic() + wait)
+        poll=probe_runner_resources.RESOURCE_WAIT_POLL, announce=waiting, deadline=time.monotonic() + wait)
 except probe_resource_lock.ResourceBusy as busy:
     print(f"quruntul: {busy.describe()}; gave up after {wait} s of waiting. "
           "This is contention, not a probe result.", flush=True)

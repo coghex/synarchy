@@ -399,6 +399,17 @@ class AdapterChecks(unittest.TestCase):
         self.assertEqual(sorted(waits[0]["shared"]), ["cabal-build", "repo-config"])
         self.assertIsNotNone(waits[0].get("deadline"))
         self.assertEqual([c[0] for c in calls], ["engine", "codec", "wait", "export", "measure", "release"])
+        # While it waits the trial says what it is waiting for and who holds it.
+        import io
+        import types
+        busy = types.SimpleNamespace(
+            resource="gpu-desktop", interest="exclusive",
+            describe=lambda: "held by me pid 42 [run_probes offscreen] since 12:00:00 (3m00s ago)")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            waits[0]["announce"](busy)
+        self.assertIn("waiting for 'gpu-desktop' (exclusive)", out.getvalue())
+        self.assertIn("pid 42 [run_probes offscreen] since 12:00:00", out.getvalue())
 
     def test_an_exit_style_gpu_trial_forwards_its_hold_to_the_runner_it_launches(self):
         code, calls, _, written = self._run_trial(["offscreen", "--run-probes", "9123"], gpu=True, returncode=7)
