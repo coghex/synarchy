@@ -442,6 +442,69 @@ def test_the_persistence_sweep_s_real_cleanup_keeps_its_tree() -> None:
             os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved_env
 
 
+def test_save_slots_are_registered_before_any_engine_boots() -> None:
+    print("\n-- tutorial probes list their checkout save before booting")
+    import tutorial_hud_probe as hud  # noqa: E402
+    import tutorial_probe as tut  # noqa: E402
+    saved_env = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    try:
+        for label, module in (("tutorial_hud", hud), ("tutorial", tut)):
+            with tempfile.TemporaryDirectory(prefix="evidence-register-") as temp:
+                attempt = Path(temp).resolve() / "attempt"
+                attempt.mkdir()
+                os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+                seen = {}
+
+                class Stop(Exception):
+                    pass
+
+                def boot(*args, **kwargs):
+                    manifest = attempt / probe_evidence.OWNED_PATHS_MANIFEST
+                    seen["listed"] = (manifest.read_text().split()
+                                      if manifest.exists() else [])
+                    raise Stop()
+
+                real_boot, saved_argv = module.boot, sys.argv
+                saved_tempdir = tempfile.tempdir
+                tempfile.tempdir = temp     # its screenshot dir dies with temp
+                module.boot = boot
+                sys.argv = [f"{label}_probe.py"]
+                try:
+                    try:
+                        module.main()
+                    except (Stop, SystemExit):
+                        pass
+                finally:
+                    module.boot, sys.argv = real_boot, saved_argv
+                    tempfile.tempdir = saved_tempdir
+                    os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+                expect(any(p.endswith(f"/saves/{module.SLOT}")
+                           for p in seen.get("listed", [])),
+                       f"{label}: the slot is listed by the time the first "
+                       f"engine would boot ({seen.get('listed')}), so a "
+                       f"timeout that never reaches its cleanup still has it "
+                       f"archived")
+    finally:
+        if saved_env is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved_env
+
+
+def test_the_remaining_cleanup_paths_use_the_shared_policy() -> None:
+    print("\n-- preview_cli and structure_construction keep their artifacts")
+    here = Path(__file__).parent
+    preview = (here / "preview_cli_probe.py").read_text()
+    expect("tempfile.TemporaryDirectory" not in preview
+           and "probe_evidence.temporary_directory(" in preview,
+           "preview_cli's isolated config tree retires through the helper")
+    struct = (here / "structure_construction_probe.py").read_text()
+    expect("shutil.rmtree(FIXTURE_DIR" not in struct
+           and "probe_evidence.retire_saves(FIXTURE_DIR)" in struct
+           and struct.index("register_owned_path(FIXTURE_DIR)")
+           < struct.index("write_fixture_art(FIXTURE_DIR)"),
+           "structure_construction lists its checkout fixture before writing "
+           "it and copies it into the evidence before removing it")
+
+
 def test_a_failed_save_copy_leaves_the_original_in_place() -> None:
     print("\n-- retire_saves never destroys the only copy of a save")
     saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
@@ -985,6 +1048,8 @@ TESTS = (
     test_saves_outside_the_attempt_are_copied_before_removal,
     test_a_timeout_keeps_checkout_saves_the_probe_registered,
     test_the_persistence_sweep_s_real_cleanup_keeps_its_tree,
+    test_save_slots_are_registered_before_any_engine_boots,
+    test_the_remaining_cleanup_paths_use_the_shared_policy,
     test_a_failed_save_copy_leaves_the_original_in_place,
     test_the_expedition_cleanup_helper_retires_the_tree,
     test_directly_launched_engine_logs_survive_finalization,

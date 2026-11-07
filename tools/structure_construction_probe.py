@@ -76,6 +76,7 @@ Usage: python3 tools/structure_construction_probe.py [--port 9519]
 """
 from __future__ import annotations
 
+import probe_evidence
 import argparse
 import os
 import shutil
@@ -371,6 +372,7 @@ def main() -> int:
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
+    probe_evidence.register_owned_path(FIXTURE_DIR)  # archived if killed
     write_fixture_art(FIXTURE_DIR)
 
     proc = boot(args.port, args=["--size", args.size], label="offscreen",
@@ -653,7 +655,9 @@ def main() -> int:
     finally:
         if not args.keep_open:
             quit_engine(args.port, proc)
-        shutil.rmtree(FIXTURE_DIR, ignore_errors=True)
+        # The fixture lives in the checkout, so a failing run's copy goes
+        # into the kept evidence before it is removed (#2931).
+        probe_evidence.retire_saves(FIXTURE_DIR)
 
     print()
     for name in ("0_baseline.png", "1_construction.png", "2_with_static.png",

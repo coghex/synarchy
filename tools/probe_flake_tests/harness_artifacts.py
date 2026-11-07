@@ -356,6 +356,36 @@ def test_a_killed_probe_s_checkout_saves_are_archived() -> None:
                "and the original is left where the probe put it")
 
 
+def test_an_exception_mid_run_still_archives_that_run() -> None:
+    print("\n-- an exception out of the run loop keeps the active run's evidence (#2931)")
+    import io
+    import contextlib
+    with SyntheticTree() as tree, _failure_root_env(tree) as durable:
+        fixed = tree.root / "fixed-engine.log"
+        os.environ["SYNTHETIC_FIXED_LOG"] = str(fixed)
+        seen = io.StringIO()
+        raised = None
+        try:
+            with contextlib.redirect_stderr(seen):
+                run_synthetic(tree, "badutf8", runs=1, artifact_root=None)
+        except UnicodeDecodeError as error:
+            raised = error
+        finally:
+            os.environ.pop("SYNTHETIC_FIXED_LOG", None)
+        expect(raised is not None, "the undecodable output still propagates")
+        probe_dir = durable.resolve() / "synthetic"
+        runs = sorted(probe_dir.glob("*/run-*"))
+        expect(len(runs) == 1, f"the in-flight run is kept ({runs})")
+        if runs:
+            logs = list((runs[0] / probe_evidence.ENGINE_LOG_DIR).glob("*"))
+            expect(len(logs) == 1 and logs[0].read_text() == "engine output\n",
+                   "with the external engine log it registered")
+            expect(str(runs[0]) in seen.getvalue(),
+                   f"and its location is reported ({seen.getvalue()!r})")
+            expect((runs[0].parent / probe_evidence.MARKER).exists(),
+                   "and the invocation is finalized so it can be pruned")
+
+
 def test_a_partial_deletion_still_keeps_the_failure_evidence() -> None:
     print("\n-- strict cleanup that fails PART-WAY keeps its evidence (#2931)")
     import io
@@ -460,6 +490,7 @@ TESTS = (
     test_a_harness_error_reports_an_archive_failure,
     test_a_failed_removal_after_strict_cleanup_fails_the_run,
     test_a_killed_probe_s_checkout_saves_are_archived,
+    test_an_exception_mid_run_still_archives_that_run,
     test_a_partial_deletion_still_keeps_the_failure_evidence,
     test_pruning_orders_runs_by_their_own_completion,
     test_probe_owned_scratch_is_kept_for_the_harness,

@@ -958,6 +958,22 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
         return _measure_runs(measurement, probe, script, descriptor, runs,
                              invocation, rts_caps, timeout, start_port,
                              announce)
+    except BaseException:
+        # An exception out of the run loop (a child whose output cannot be
+        # decoded, an interrupt) skips the per-run archiving below it. Any
+        # run directory that never got its completion stamp is the run that
+        # was in flight: the process group is already reaped, so archive
+        # its external engine logs and registered paths now and say where
+        # the evidence is before the error propagates.
+        for run in sorted(invocation.glob("run-*")):
+            if (run / probe_evidence.RUN_STAMP).exists():
+                continue
+            for problem in (probe_evidence.archive_engine_logs(run)
+                            + probe_evidence.archive_owned_paths(run)):
+                print(problem, file=sys.stderr)
+            probe_evidence.stamp_run(run)
+            print(f"run evidence kept after an error: {run}", file=sys.stderr)
+        raise
     finally:
         # On EVERY exit, including a port-exhaustion or an interrupt
         # partway through: an invocation whose passing runs removed

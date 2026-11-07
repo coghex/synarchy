@@ -1133,6 +1133,12 @@ def main() -> int:
     args = ap.parse_args()
 
     w, h = (int(v) for v in args.size.lower().split("x"))
+    # The slot lives in the checkout's saves/, which TMPDIR cannot redirect:
+    # list it BEFORE any engine can create it, so a TIMEOUT that never
+    # reaches the cleanup below still has the save archived (#2931).
+    probe_evidence.register_owned_path(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "saves", SLOT))
     shots = tempfile.mkdtemp(prefix="tutorial_hud_probe_")
     print(f"== offscreen boot (port {args.port}, {args.size}) ==")
     print(f"   screenshots: {shots}")

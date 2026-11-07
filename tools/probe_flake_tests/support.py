@@ -230,6 +230,17 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         time.sleep(600)
         raise SystemExit(0)
 
+    if mode == "badutf8":
+        # Output the runner cannot decode: `run_one` raises before the run is
+        # ever reconciled (#2931).
+        fixed_log = os.environ["SYNTHETIC_FIXED_LOG"]
+        open(fixed_log, "w").write("engine output\\n")
+        probe_evidence.record_engine_log(fixed_log)
+        rep.check("alpha", True, "the first check")
+        sys.stdout.buffer.write(bytes([0xff, 0xfe, 10]))
+        sys.stdout.flush()
+        raise SystemExit(0)
+
     if mode == "owned_hang":
         # A probe that keeps a save OUTSIDE its attempt and is killed by its
         # timeout before any cleanup can run.
