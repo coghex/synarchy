@@ -39,7 +39,7 @@ concrete precondition
 - [x] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run — [#2944] [#2945]
 - [x] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run — [no-issue]
 - [x] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep — [no-issue]
-- [ ] PRB-14. The cost and value data needed to rank probes is not tracked
+- [x] PRB-14. The cost and value data needed to rank probes is not tracked — [#2947]
 - [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
 
 ---
@@ -451,7 +451,9 @@ Five probes of 3-12 s each guard contracts only a real boot can show.
 
 ## Measurement
 
-### PRB-14. The cost and value data needed to rank probes is not tracked
+### [#2947] PRB-14. The cost and value data needed to rank probes is not tracked
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: one small issue. Corrections to the finding: the census is not the natural owner of lab cost data (its samples are 10-run flake measurements, its writer refuses CI-eligible probes), so the issue adds a separate generated table read from the lab ledger; and per-phase timing is not part of it, because #2938 (`farm_ai`), #2940 (`construction`) and PRB-15 add it probe by probe first. A fresh search of the 7,389 `master` commit messages for a probe catching a defect still finds one hit, a defect in the probe itself.
 
 Ranking probes by what they cost and what they catch needed three sources that are not in the repository, and the value side is not recorded anywhere.
 
