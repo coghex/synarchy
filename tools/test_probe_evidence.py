@@ -861,7 +861,8 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                 "fluid_reaction_visual", "debug_console_boot", "audio_null",
                 "save_pause", "multiworld_save", "lua_orphan_prune",
                 "pause_speed", "tutorial", "tutorial_hud",
-                "expedition_loop", "persistence_contract_sweep")
+                "expedition_loop", "persistence_contract_sweep",
+                "persistence_system_cycles")
     call = re.compile(r"^[^#\n]*\bshutil\.rmtree\(", re.M)
     for name in migrated:
         script = (f"{name}.py" if name == "persistence_contract_sweep"
@@ -871,6 +872,12 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                f"{script} has no direct shutil.rmtree call: its "
                f"teardown retires trees through probe_evidence, so the saves "
                f"and logs inside them survive a failure")
+    # #2943: the module both persistence probes share never retires a scratch
+    # tree itself; each entrypoint does, through probe_evidence.
+    shared = (Path(__file__).parent / "persistence_probe_common.py").read_text()
+    expect(call.search(shared) is None,
+           "persistence_probe_common.py has no direct shutil.rmtree call: "
+           "scratch retirement stays with each entrypoint")
 
 
 def test_concurrent_allocation_and_pruning() -> None:

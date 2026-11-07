@@ -3372,6 +3372,23 @@
       "key": "structure_construction",
       "protocol": "legacy",
       "script": "structure_construction_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "persistence_system_cycles",
+      "protocol": "legacy",
+      "script": "persistence_system_cycles_probe.py"
     }
   ],
   "schema": "probe-census/v5"

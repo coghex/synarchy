@@ -1418,8 +1418,8 @@ def test_pause_ai_chunk_reports_each_failure_as_a_reply() -> None:
 
 
 def test_a_failed_ai_pause_stops_the_engine_it_booted() -> None:
-    print("\n-- persistence_contract_probe.engagement_boot stops its engine when pause_ai fails")
-    import persistence_contract_probe as pcp  # type: ignore
+    print("\n-- persistence_probe_common.engagement_boot stops its engine when pause_ai fails")
+    import persistence_probe_common as pcp  # type: ignore
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
     quits: list = []
     saved = {k: getattr(pcp, k) for k in ("boot_probe", "bootstrap_defs", "send",
@@ -1458,7 +1458,7 @@ def test_a_failed_ai_pause_stops_the_engine_it_booted() -> None:
 
 def test_a_successful_boot_pauses_the_ai_after_its_scripts() -> None:
     print("\n-- engagement_boot pauses the AI after loading its scripts, and keeps the engine")
-    import persistence_contract_probe as pcp  # type: ignore
+    import persistence_probe_common as pcp  # type: ignore
     calls: list = []
     saved = {k: getattr(pcp, k) for k in ("boot_probe", "bootstrap_defs", "send",
                                           "pause_ai", "quit_engine")}
