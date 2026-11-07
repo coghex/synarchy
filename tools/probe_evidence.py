@@ -186,12 +186,12 @@ def _now() -> datetime:
 # Marker, pruning
 # --------------------------------------------------------------------------
 def _write_marker(directory: Path, probe: str, outcome: str,
-                  kind: str = "attempt") -> None:
+                  kind: str = "attempt", prunable: bool = True) -> None:
     """The marker is written LAST and atomically, so a half-finalized
     directory is never mistaken for a finished one and pruned under a
     reader."""
     document = {"schema": MARKER_SCHEMA, "probe": probe, "outcome": outcome,
-                "kind": kind, "finalized_at": _now().strftime("%Y%m%dT%H%M%S.%fZ")}
+                "kind": kind, "prunable": prunable, "finalized_at": _now().strftime("%Y%m%dT%H%M%S.%fZ")}
     staging = directory / f"{MARKER}.{uuid.uuid4().hex[:8]}"
     staging.write_text(json.dumps(document) + "\n", encoding="utf-8")
     os.replace(staging, directory / MARKER)
@@ -241,6 +241,10 @@ def _failed_units(probe_dir: Path) -> list[tuple[str, str, str, Path, Path | Non
     units = []
     for stamp, name, path in finalized_entries(probe_dir):
         marker = _read_marker(path) or {}
+        if marker.get("prunable") is False:
+            # Evidence an operator directed to an explicit root: kept until
+            # THEY remove it, whatever the default policy later finds there.
+            continue
         if marker.get("kind") != "invocation":
             units.append((stamp, name, "", path, None))
             continue
@@ -556,9 +560,24 @@ class Retention:
         return resolved
 
     def check_probes(self, probes) -> None:
-        """Refuse BEFORE any probe runs if one's directory is unusable."""
+        """Refuse BEFORE any probe runs if one's directory is unusable.
+
+        Beyond where it resolves to, the directory must exist (or be
+        creatable) and be writable: a regular file at `<root>/<probe>`, or a
+        directory nobody can write, would otherwise surface only when a
+        failing probe needed it.
+        """
         for probe in probes:
-            self.check_probe_dir(probe)
+            resolved = self.check_probe_dir(probe)
+            try:
+                resolved.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise RootRejected(
+                    f"failure-evidence directory {self.probe_dir(probe)} "
+                    f"cannot be created ({error})") from None
+            if not os.access(resolved, os.W_OK | os.X_OK):
+                raise RootRejected(
+                    f"failure-evidence directory {resolved} is not writable")
 
     def begin(self, probe: str) -> Attempt:
         """A fresh, collision-free attempt directory for one execution:
@@ -600,7 +619,8 @@ def finalize_invocation(invocation: Path, *, probe: str, retained: bool,
             invocation.rmdir()
         return
     try:
-        _write_marker(invocation, probe, "FAIL", kind="invocation")
+        _write_marker(invocation, probe, "FAIL", kind="invocation",
+                      prunable=keep is not None)
     except OSError as error:
         say(f"could not mark failure evidence {invocation}: {error}; the "
             f"evidence itself is intact there")

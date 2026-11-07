@@ -452,6 +452,24 @@ def test_pruning_orders_runs_by_their_own_completion() -> None:
                "merely finalized later")
 
 
+def test_explicit_root_evidence_is_never_pruned_by_the_default_policy() -> None:
+    print("\n-- an --artifact-root invocation survives later default pruning (#2931)")
+    with SyntheticTree() as tree, _failure_root_env(tree, keep=1) as durable:
+        shared = durable / "synthetic"          # the default policy's own dir
+        explicit = run_synthetic(tree, "fail", runs=1, artifact_root=shared)
+        marker = explicit.invocation_dir / probe_evidence.MARKER
+        expect(marker.exists() and '"prunable": false' in marker.read_text(),
+               "an explicit-root invocation is marked not prunable")
+        for _ in range(3):
+            run_synthetic(tree, "fail", runs=1, artifact_root=None)
+        expect((explicit.invocation_dir / "run-001").exists(),
+               "and three later default failures with KEEP=1 never touch it")
+        left = [p for p in shared.iterdir()
+                if p.name != explicit.invocation_dir.name]
+        expect(len(left) == 1,
+               f"while the default policy still prunes its own to one ({left})")
+
+
 def test_probe_owned_scratch_is_kept_for_the_harness() -> None:
     print("\n-- probe-owned cleanup defers to the harness (#2931) --")
     with SyntheticTree() as tree, _failure_root_env(tree) as durable:
@@ -490,6 +508,7 @@ TESTS = (
     test_a_harness_error_reports_an_archive_failure,
     test_a_failed_removal_after_strict_cleanup_fails_the_run,
     test_a_killed_probe_s_checkout_saves_are_archived,
+    test_explicit_root_evidence_is_never_pruned_by_the_default_policy,
     test_an_exception_mid_run_still_archives_that_run,
     test_a_partial_deletion_still_keeps_the_failure_evidence,
     test_pruning_orders_runs_by_their_own_completion,

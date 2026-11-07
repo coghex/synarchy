@@ -627,6 +627,73 @@ def test_directly_launched_engine_logs_survive_finalization() -> None:
                f"{name}_probe.py lists the log of the engine it launches itself")
 
 
+def test_an_unusable_evidence_directory_means_no_probe_runs() -> None:
+    print("\n-- a probe never runs without the promised evidence directory")
+    for jobs in ("1", "2"):
+        tree = Tree()
+        try:
+            add_scratch_probe(tree, "bad", "1")
+            add_scratch_probe(tree, "good", "0")
+            tree.evidence_root.mkdir(parents=True)
+            (tree.evidence_root / "bad").write_text("a regular file")
+            rc, out = main_with(tree, ["--jobs", jobs])
+            expect(rc == 2 and "failure-evidence directory" in out
+                   and not (tree.root / "bad.counter").exists()
+                   and not (tree.root / "good.counter").exists(),
+                   f"--jobs {jobs}: a file at <root>/<probe> is refused up "
+                   f"front, before ANY probe launches ({rc})")
+        finally:
+            tree.cleanup()
+            shutil.rmtree(tree.root, ignore_errors=True)
+
+    real = probe_evidence.Retention.begin
+    for jobs in ("1", "2"):
+        tree = Tree()
+        try:
+            add_scratch_probe(tree, "bad", "1")
+
+            def refuse(self, probe):
+                raise OSError("synthetic: no space left on device")
+
+            probe_evidence.Retention.begin = refuse
+            try:
+                rc, out = main_with(tree, ["--only", "bad", "--exact",
+                                           "--jobs", jobs])
+            finally:
+                probe_evidence.Retention.begin = real
+            expect(rc == 1 and "not started: could not allocate" in out
+                   and "no space left" in out
+                   and not (tree.root / "bad.counter").exists(),
+                   f"--jobs {jobs}: an allocation that fails at run time "
+                   f"stops the attempt before the child launches, and says "
+                   f"so ({rc})")
+        finally:
+            probe_evidence.Retention.begin = real
+            tree.cleanup()
+            shutil.rmtree(tree.root, ignore_errors=True)
+    saved = os.environ.get(probe_evidence.ENV_ROOT)
+    with tempfile.TemporaryDirectory(prefix="evidence-ro-") as temp:
+        root = Path(temp).resolve() / "root"
+        retention = probe_evidence.Retention.from_environment(
+            {probe_evidence.ENV_ROOT: str(root)})
+        (root / "locked").mkdir()
+        (root / "locked").chmod(0o500)
+        try:
+            if os.getuid() == 0:
+                expect(True, "(running as root: no mode makes a directory "
+                       "unwritable)")
+            else:
+                try:
+                    retention.check_probes(["locked"])
+                    expect(False, "an unwritable directory is refused")
+                except probe_evidence.RootRejected as error:
+                    expect("not writable" in str(error),
+                           f"an unwritable per-probe directory is refused "
+                           f"({error})")
+        finally:
+            (root / "locked").chmod(0o700)
+
+
 def test_a_symlinked_probe_directory_cannot_reach_a_worktree() -> None:
     print("\n-- <root>/<probe> may not be a way into a checkout")
     target = REPO / "probe-evidence-link-target"
@@ -1053,6 +1120,7 @@ TESTS = (
     test_a_failed_save_copy_leaves_the_original_in_place,
     test_the_expedition_cleanup_helper_retires_the_tree,
     test_directly_launched_engine_logs_survive_finalization,
+    test_an_unusable_evidence_directory_means_no_probe_runs,
     test_a_symlinked_probe_directory_cannot_reach_a_worktree,
     test_a_bad_keep_count_is_refused_not_defaulted,
     test_pruning_keeps_the_newest_n_and_only_what_it_owns,

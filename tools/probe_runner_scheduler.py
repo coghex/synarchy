@@ -57,9 +57,16 @@ def run_attempt(script, port, timeout, groups, *, key=None, hold_env=None,
         try:
             attempt = retention.begin(name)
         except (OSError, probe_evidence.RootRejected) as error:
-            print(f"warning: could not create a failure-evidence directory "
-                  f"for {name} under {retention.root} ({error}); this "
-                  f"attempt keeps no evidence", file=sys.stderr)
+            # The promise is that a failing probe keeps its evidence. A probe
+            # run without an attempt directory would clean up after itself
+            # exactly as it always did and silently break it, so it does not
+            # run: this is a failure of the attempt, named, with nothing
+            # launched.
+            message = (f"(not started: could not allocate a failure-evidence "
+                       f"directory for {name} under {retention.root}: "
+                       f"{error})\n")
+            print(f"error: {message.strip()}", file=sys.stderr)
+            return False, False, 0.0, message
     try:
         ok, timed_out, elapsed, out = lifecycle.run_one(
             script, port, timeout, groups, hold_env=hold_env,
