@@ -169,6 +169,7 @@ import stat
 import subprocess
 import time
 import uuid
+import weakref
 from pathlib import Path
 
 # The host-shared scratch directory, and the flat-file prefix inside it.
@@ -881,6 +882,30 @@ def _queued_busy(exclusive: frozenset, shared: frozenset, queued: dict,
 # --------------------------------------------------------------------------
 # The hold
 # --------------------------------------------------------------------------
+#: Every `ResourceHold` this process has not yet released, so a launch boundary
+#: can find the host-wide lock descriptors to hand its child (`host_descriptors`).
+_LIVE_HOLDS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def host_descriptors() -> list:
+    """Lock descriptors of the host-wide resources THIS process holds, for a child.
+
+    Each is marked as handed out (`ResourceHold.descriptor_for_child`), so the
+    process's own release will not unlock the shared open file description under
+    the child. Pass the result as `subprocess.Popen(pass_fds=...)`: the interest
+    then lasts until the child exits, even if this process is killed first.
+    """
+    found = []
+    for hold in list(_LIVE_HOLDS):
+        if hold.released:
+            continue
+        for name in sorted(HOST_SCOPED_RESOURCES):
+            fd = hold.descriptor_for_child(name)
+            if fd is not None:
+                found.append(fd)
+    return sorted(set(found))
+
+
 class ResourceHold:
     """Held cross-process interests. Releasing drops OUR descriptors only."""
 
@@ -897,6 +922,7 @@ class ResourceHold:
         # Resources whose descriptor a child process was handed (#2932).
         self._handed_to_children: set = set()
         self.released = False
+        _LIVE_HOLDS.add(self)
 
     def __enter__(self) -> "ResourceHold":
         return self

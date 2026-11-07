@@ -27,6 +27,7 @@ import time
 
 import probe_engine
 import probe_evidence
+import probe_gpu_hold
 import probe_protocol
 import probe_runner_resources as resources
 import save_compat_audit_codec
@@ -371,6 +372,16 @@ def run_one(script: str, port: int | None, timeout: float,
         child_env[save_compat_audit_codec.ENV_CODEC_EXE] = codec_exe
     if hold_env:
         child_env.update(hold_env)
+    # A probe launched under the host-wide `gpu-desktop` hold carries the lock
+    # DESCRIPTOR (#2932), not just a note that it is held: the exclusion then
+    # lasts as long as the probe and the engines it passes the descriptor to,
+    # even if this runner is terminated before it can reap them.
+    pass_fds = ()
+    if hold_env and hold_env.get(resources.ENV_HELD_HOST):
+        pass_fds = tuple(probe_gpu_hold.child_fds())
+        if pass_fds:
+            child_env[resources.ENV_HELD_HOST_FDS] = ",".join(
+                str(fd) for fd in pass_fds)
     if groups is not None and groups.stopping.is_set():
         # The runner is tearing down; a queued worker must not boot one
         # more engine on its way out.
@@ -390,6 +401,7 @@ def run_one(script: str, port: int | None, timeout: float,
                 cmd, cwd=probe_engine.REPO_ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, start_new_session=True, env=child_env,
+                pass_fds=pass_fds,
             )
             # `start_new_session=True` makes the child a session AND
             # process-group leader, so its pgid IS its pid. Capture it here

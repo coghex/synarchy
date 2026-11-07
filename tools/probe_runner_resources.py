@@ -36,6 +36,7 @@ that repoints it repoints it for all of them at once.
 from __future__ import annotations
 import contextlib
 import os
+import stat
 
 import ci_probes
 import probe_engine
@@ -320,6 +321,11 @@ ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
 #: or a quruntul trial finds `gpu-desktop` here and takes nothing, which is
 #: also what lets one probe boot several engines without meeting its own hold.
 ENV_HELD_HOST = "SYNARCHY_PROBE_HELD_HOST"
+#: The inherited lock descriptors behind `ENV_HELD_HOST` (#2932): comma-separated
+#: file descriptor numbers a launcher passed to this process with `pass_fds`. Every
+#: further launch (an engine, a nested runner) passes them on, so the host-wide
+#: exclusion lasts until the last process that carries it exits.
+ENV_HELD_HOST_FDS = "SYNARCHY_PROBE_HELD_HOST_FDS"
 
 #: Every variable THIS runner owns in a probe's environment, so
 #: `probe_runner_lifecycle.run_one` can strip the lot from what it
@@ -332,7 +338,8 @@ RUNNER_ENV_VARS: tuple[str, ...] = (probe_engine.ENV_ENGINE_EXE,
                                     ENV_HELD_EXCLUSIVE,
                                     ENV_HELD_SHARED,
                                     ENV_HELD_NAMESPACE,
-                                    ENV_HELD_HOST)
+                                    ENV_HELD_HOST,
+                                    ENV_HELD_HOST_FDS)
 
 
 def descendant_hold_env(key: str, namespace: str | None) -> dict[str, str]:
@@ -368,6 +375,28 @@ def inherited_host_resources(environ=None) -> set[str]:
     raw = env.get(ENV_HELD_HOST) or ""
     return {name.strip() for name in raw.split(",")
             if name.strip() in probe_resource_lock.HOST_SCOPED_RESOURCES}
+
+
+def inherited_host_fds(environ=None) -> list:
+    """Open lock descriptors an ancestor passed for the host-wide hold, else none.
+
+    Only believed while `ENV_HELD_HOST` says the hold is inherited, and each number
+    must be an open regular file in this process: a stale export names nothing.
+    """
+    env = os.environ if environ is None else environ
+    if not inherited_host_resources(env):
+        return []
+    found = []
+    for token in (env.get(ENV_HELD_HOST_FDS) or "").split(","):
+        token = token.strip()
+        if not token.isdigit():
+            continue
+        try:
+            if stat.S_ISREG(os.fstat(int(token)).st_mode):
+                found.append(int(token))
+        except OSError:
+            continue
+    return sorted(set(found))
 
 
 def host_hold_env(key: str, environ=None) -> dict[str, str]:

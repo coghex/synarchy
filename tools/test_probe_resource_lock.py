@@ -1570,6 +1570,136 @@ def _alive(pid: int) -> bool:
     return bool(state) and not state.startswith("Z")
 
 
+RUNNER_SRC = textwrap.dedent("""\
+    import os, sys, time
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    root, namespace, ready, tree = sys.argv[2:6]
+    import probe_resource_lock as lock
+    lock.LOCK_ROOT = Path(root)
+    import ci_probes
+    ci_probes.MANUAL_ONLY_REASONS = dict(ci_probes.MANUAL_ONLY_REASONS, gpusynth=(
+        ci_probes.Reason(ci_probes.NEEDS_GPU, "synthetic"),))
+    import probe_engine
+    probe_engine.REPO_ROOT = tree
+    import probe_runner_resources as r
+    r.RESOURCE_NAMESPACE = namespace
+    for name in r.RUNNER_ENV_VARS:
+        os.environ.pop(name, None)
+    import probe_runner_lifecycle as lc
+    with r.resource_hold("gpusynth", namespace):
+        Path(ready).write_text("held")
+        lc.run_one("gpusynth_probe.py", 9999, 300, None,
+                   hold_env=r.descendant_hold_env("gpusynth", namespace))
+""")
+
+SYNTH_PROBE_SRC = textwrap.dedent("""\
+    import os, sys, time
+    from pathlib import Path
+    sys.path.insert(0, {tools!r})
+    import probe_resource_lock as lock
+    lock.LOCK_ROOT = Path({root!r})
+    import probe_runner_resources as r
+    r.RESOURCE_NAMESPACE = {namespace!r}
+    import probe_engine, probelib
+    engine = Path({root!r}) / "synthetic-engine.sh"
+    engine.write_text("#!/bin/sh\\necho READY\\nexec sleep 120\\n")
+    engine.chmod(0o755)
+    probe_engine.prepare_command = lambda args, **kw: [str(engine), *args]
+    proc = probelib.boot(9999, log=str(Path({root!r}) / "synthetic-engine.log"),
+                         mode=("--offscreen",))
+    Path({root!r}, "pids").write_text(f"{{os.getpid()}} {{proc.pid}}")
+    time.sleep(120)
+""")
+
+
+def test_a_runner_launched_probe_and_engine_keep_the_hold_if_the_runner_is_killed() -> None:
+    print("\n-- terminating the runner does not release gpu-desktop while its probe's engine runs")
+    scratch = Scratch()
+    pids: list = []
+    try:
+        clone = _other_checkout(scratch)
+        tree = scratch.root / "tree"
+        (tree / "tools").mkdir(parents=True)
+        (tree / "tools" / "gpusynth_probe.py").write_text(SYNTH_PROBE_SRC.format(
+            tools=TOOLS_DIR, root=str(scratch.root), namespace=scratch.namespace))
+        ready = scratch.root / "runner-ready"
+        runner = subprocess.Popen([sys.executable, "-c", RUNNER_SRC, TOOLS_DIR, str(scratch.root),
+                                   scratch.namespace, str(ready), str(tree)])
+        deadline = time.monotonic() + 60
+        pidfile = scratch.root / "pids"
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        expect(ready.exists() and pidfile.exists(), "the runner holds the GPU and its probe booted an engine")
+        pids = [int(p) for p in pidfile.read_text().split()] if pidfile.exists() else []
+        hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None, "gpu-desktop is held while the runner lives")
+        runner.terminate()
+        runner.wait(timeout=30)
+        expect(runner.returncode is not None and all(_alive(p) for p in pids),
+               "the runner was killed with no chance to reap; its probe and engine are still running")
+        hold, busy, _error = taking(scratch, exclusive={GPU}, namespace=clone)
+        expect(hold is None and busy is not None,
+               "and gpu-desktop is STILL held: the descriptor travelled runner -> probe -> engine")
+        if hold is not None:
+            hold.release()
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 30
+        while any(_alive(p) for p in pids) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if pids:
+            hold, busy, error = taking(scratch, exclusive={GPU}, namespace=_other_checkout(scratch))
+            expect(hold is not None, f"released once the probe and engine are gone "
+                   f"(busy={busy}, error={error})")
+            if hold is not None:
+                hold.release()
+        scratch.cleanup()
+
+
+def test_a_trial_that_forwards_its_whole_hold_cannot_join_a_queue_cycle() -> None:
+    print("\n-- a wrapper holding the whole set asks for nothing again, so a queued runner "
+          "and a queued build cannot cycle through it")
+    import ci_probes  # type: ignore
+    gpu_key = sorted(ci_probes.gpu_probe_keys())[0]
+    scratch = Scratch()
+    saved = {name: os.environ.pop(name, None) for name in resources.RUNNER_ENV_VARS}
+    try:
+        exclusive, shared = (resources.exclusive_resources(gpu_key),
+                             resources.shared_resources(gpu_key))
+        wrapper = scratch.holder(exclusive=exclusive, shared=shared, purpose="the trial wrapper")
+        expect(wrapper.took_it(), "the wrapper took the GPU and the repository set together")
+        runner = scratch.waiter(exclusive=exclusive, shared=shared, purpose="a queued runner")
+        expect(runner.queued(), "a runner queues for the same set")
+        builder = scratch.waiter(exclusive={"cabal-build"}, purpose="a queued build")
+        expect(builder.queued(), "and a build queues behind that runner")
+        # What the wrapper forwards to the runner it launches.
+        os.environ.update(resources.descendant_hold_env(gpu_key, scratch.namespace))
+        nested_exclusive, nested_shared = resources.cross_process_interests(gpu_key, scratch.namespace)
+        expect(not nested_exclusive and not nested_shared,
+               f"the nested runner asks for nothing it was handed ({nested_exclusive}, {nested_shared})")
+        nested = lock.wait_acquire(exclusive=nested_exclusive, shared=nested_shared,
+                                   namespace=scratch.namespace, root=scratch.root, poll=0.02,
+                                   deadline=time.monotonic() + 5)
+        expect(nested is not None, "so it proceeds at once instead of queueing behind the build")
+        nested.release()
+        wrapper.stop()
+        expect(runner.took_it(), "the queued runner then takes its turn")
+        runner.stop()
+        expect(builder.took_it(), "and the build after it: no cycle")
+    finally:
+        for name in resources.RUNNER_ENV_VARS:
+            os.environ.pop(name, None)
+        for name, value in saved.items():
+            if value is not None:
+                os.environ[name] = value
+        scratch.cleanup()
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_two_shared_holders_coexist()
@@ -1615,6 +1745,8 @@ def main() -> int:
     test_an_exported_host_hold_marks_the_environment_only_while_it_lasts()
     test_a_second_engine_is_not_prepared_under_the_hold_beside_a_queued_runner()
     test_the_hold_lasts_as_long_as_the_engine_even_if_the_probe_is_killed()
+    test_a_runner_launched_probe_and_engine_keep_the_hold_if_the_runner_is_killed()
+    test_a_trial_that_forwards_its_whole_hold_cannot_join_a_queue_cycle()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

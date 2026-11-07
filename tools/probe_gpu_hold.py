@@ -93,18 +93,17 @@ def holding() -> bool:
 
 
 def child_fds() -> list:
-    """Descriptors to pass to an engine this process is about to launch.
+    """Lock descriptors to pass to a process this one is about to launch.
 
-    The hold this process took is handed to the engine as an inherited lock
-    descriptor (`Popen(pass_fds=...)`), so `gpu-desktop` stays held until the
-    ENGINE exits even if the probe is terminated first and never reaches its own
-    teardown. A hold inherited from an ancestor is the ancestor's to keep;
-    nothing is passed for it.
+    Everything that launches a probe or an engine passes these with `pass_fds`
+    (`probelib.boot`, `probe_runner_lifecycle.run_one`, the quruntul trial), so
+    `gpu-desktop` stays held until the last process carrying the descriptor has
+    exited, even if an outer holder is terminated before it can tear them down.
+    That is the host-wide hold this process took itself (any live `ResourceHold`)
+    plus the one it inherited from an ancestor (`ENV_HELD_HOST_FDS`).
     """
-    if _held is None or _held.released:
-        return []
-    fd = _held.descriptor_for_child(resources.GPU_RESOURCE)
-    return [fd] if fd is not None else []
+    own = probe_resource_lock.host_descriptors()
+    return sorted(set(own) | set(resources.inherited_host_fds()))
 
 
 def holds_own() -> bool:

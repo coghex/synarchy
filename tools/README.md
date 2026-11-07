@@ -2857,9 +2857,11 @@ lock is the host-wide resource `gpu-desktop`, held EXCLUSIVELY:
   is one per process, kept to its exit, so a probe that boots several engines
   (`offscreen_probe.py` runs two at once) never queues behind itself, and later
   boots reuse the engine prepared before the hold rather than preparing under it.
-  The hold's lock descriptor is also handed to each engine (`pass_fds`), so
-  `gpu-desktop` stays held until the ENGINE exits even if the probe is killed
-  first. A runner,
+  The hold's lock DESCRIPTOR travels with it: a runner, `/deflake`, the trial or a
+  probe passes it to everything it launches (`pass_fds`, numbers in
+  `SYNARCHY_PROBE_HELD_HOST_FDS`), so `gpu-desktop` stays held until the last
+  process carrying it, the engine included, has exited, even if an outer holder is
+  killed first. A runner,
   `/deflake` or trial that already holds it passes it down in
   `SYNARCHY_PROBE_HELD_HOST`, and the probe takes nothing.
 * **Host-wide.** Unlike `repo-config` and `cabal-build`, which stay scoped to one
@@ -2873,13 +2875,18 @@ lock is the host-wide resource `gpu-desktop`, held EXCLUSIVELY:
   and is never a FAIL or TIMEOUT. A dead holder is detected by the lock itself
   (the `flock` dies with the process). The exceptions are the callers that cannot
   wait: `/deflake` reports `resource-busy` as for any other resource, and the
-  quruntul trial (protocol and `exit` suites alike, through
-  `.quruntul/probe_trial.py`) gives up after `GPU_WAIT_SECONDS` as blocked (exit 3,
-  no probe result), with the same allowance added to its trial limit.
-* **Lock order.** `gpu-desktop` is taken before any repository resource and is
-  never waited for while one is held (a runner takes its whole set in one
-  all-or-nothing attempt; the direct guard runs after the engine is prepared), so
-  the two scopes cannot form a deadlock cycle.
+  quruntul trial gives up after `GPU_WAIT_SECONDS`, which the adapter adds to its
+  trial limit. The trial takes the probe's WHOLE set (repository interests plus
+  `gpu-desktop`) in one wait and forwards it, and a `needs-gpu` probe off the
+  protocol is a `command` suite (`run_probes` through `probe_trial.py
+  --run-probes`), so running out of the wait leaves no result document and the lab
+  records a blocked trial, never a failed probe.
+* **Lock order.** `gpu-desktop` is never waited for while a repository resource is
+  held, and a repository resource is never waited for while it is held (a runner or
+  trial takes its whole set, GPU included, in one all-or-nothing attempt and
+  forwards it so nothing beneath it asks again; the direct guard runs after the
+  engine is prepared and later boots reuse it), so the two scopes cannot form a
+  deadlock cycle through the fairness queue.
 
 `python3 tools/test_probe_resource_lock.py`, the `resources` family of
 `tools/test_run_probes.py`, `tools/test_probe_flake.py` and
