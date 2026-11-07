@@ -28,7 +28,7 @@ concrete precondition
 
 - [x] PRB-1. `expedition_loop` costs 1,119 s per run and is the lab's slowest probe — [#2934]
 - [x] PRB-2. `persistence_contract_sweep` re-runs nine probes it does not own and has hit its cap in all three runs — [#2936]
-- [x] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [#2937]
+- [x] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s — [#2937] [#2938]
 - [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
 - [ ] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time
 - [ ] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades
@@ -94,7 +94,7 @@ The sweep is a meta-probe: besides its own four-boot structural comparison it fa
 
 ### [#2937] PRB-3. `farm_ai` scans natural terrain over TCP and costs 782 s
 
-> **Note:** Measured (two `farm_ai` runs on `c42ea0a1f`, 2026-11-07: 693 s and 660 s) and re-decided by the owner as "bug first, then fixture". About 546 of 660 s is tile scanning (five up-front scans with setup 484 s, the sixth with the re-designation wait 62 s); the AI waits are short. This issue is the bug: a planted `tomato_plant` is missing when read (after save/load in both direct runs, at the re-designation check in lab run C); the probe is red until it is found. A second issue replaces the scans with a fixed tillable patch and follows this one.
+> **Note:** Measured (two `farm_ai` runs on `c42ea0a1f`, 2026-11-07: 693 s and 660 s) and re-decided by the owner as "bug first, then fixture". About 546 of 660 s is tile scanning (five up-front scans with setup 484 s, the sixth with the re-designation wait 62 s); the AI waits are short. This issue is the bug: a planted `tomato_plant` is missing when read (after save/load in both direct runs, at the re-designation check in lab run C); the probe is red until it is found. The fixture issue #2938 replaces the scans with a fixed tillable patch and follows this one.
 
 `farm_ai` is the slowest probe that is not a multi-boot scenario, and the registry itself attributes the time to a tile scan.
 
