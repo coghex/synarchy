@@ -27,6 +27,40 @@ experiment, not a CI probe. Run `python3 tools/test_chunk_memory_measure.py` for
 its focused checks. The [protocol and results](../docs/chunk_memory_measurement.md)
 define the matrix, limitations and owner disposition.
 
+## Bootstrap timing measurement (`bootstrap_timing.py`, #2948)
+
+`bootstrap_timing.py` is a measurement for one question, not a probe (it is not a
+`*_probe.py` and is not registered with the runner): how long does the per-file
+definition loading that about seventy probes repeat on every engine take
+compared with the startup loader's one-call `arena` profile? On a fresh
+`--headless --arena` engine, on an isolated resource root and a non-8008 port,
+it times path A, the eight-family loop of `cargo_capacity_probe.py`
+`bootstrap()` with one console round trip per YAML file (each call also returns the loader's
+count and parse outcome), and path B,
+`startup_loader.build('arena')` plus `runAll()` as a single console call that
+answers its own `isDone()`/`isFailed()`. Each path runs on three fresh engines
+(`--repeats`, at least three, interleaved A, B, A, B, ...). It reports engine
+boot (process launch to that process's own `READY` line), each wall time and its
+median, the round-trip count and median seconds per round trip, the engine-side
+time of the per-family loader verbs from the unreset `debug.getLuaCallStats`
+window, per-family file counts and returned totals for both paths (a family's
+total counts textures, declarations, systems or definitions, so it is only
+comparable within a family), and the registry sizes afterwards. Before each
+timing the engine is shown to be unloaded (no loader verb called, every
+queryable registry empty, no loader line in the log); a failed or incomplete
+load fails the run and writes no report. Both paths keep `probelib.send`'s
+default idle wait, which is part of what a probe pays per round trip. It builds
+nothing inside a timed interval, changes no probe, `probelib` or loader, and
+recommends no migration.
+
+```
+python3 tools/bootstrap_timing.py --output <report.json> [--port 9473] [--repeats 3]
+python3 tools/test_bootstrap_timing.py        # engine-free self-test
+```
+
+The output is a table on stdout and a `bootstrap-timing/v1` JSON document at
+`--output`. Headless boots take no `gpu-desktop` hold and need no slot grant.
+
 ## Manual map-page codec measurement (#2303)
 
 `python3 tools/map_page_codec_measure.py --corpus-only` generates and verifies
@@ -4301,6 +4335,8 @@ tools/
 ├── preview/                (family owners + shared harness behind preview_probe.py, #2089 — libraries, not probes)
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
+├── bootstrap_timing.py     (per-file vs one-call definition loading timing, #2948 — a measurement, not a probe; see above)
+├── test_bootstrap_timing.py    (its engine-free self-test)
 ├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
 ├── river_runtime/          (hydraulic harness runner + recovered baseline characterization, #2719 — manual, not a probe)
 ├── river_runtime_arena.py  (manual socket river laboratory, #2719 — not a probe)

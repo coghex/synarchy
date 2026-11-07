@@ -2251,9 +2251,9 @@ store. Gates: hspec `--match "Faction relation store"` (pure rules against exact
 overlays, the codec through real envelope bytes, the real save → load → stage →
 publish and teardown lifecycle on a private engine, and the live verbs),
 `--match "save components"`, `--match "save envelope"`, `--match "persistence
-contract"`, and `tools/persistence_contract_probe.py`'s `relation_cause_cycles`
-(a seeded save through three fresh processes, every generation non-empty and
-identical, the restored authority's answers exact).
+contract"`, and `tools/persistence_system_cycles_probe.py`'s `relation_cause_cycles`
+(manual-only, run on request: a seeded save through three fresh processes, every
+generation non-empty and identical, the restored authority's answers exact).
 
 **Capabilities.** `factionCatalogueRef` is a `content-registries` field,
 written only by `Engine.Scripting.Lua.API.Factions` through
@@ -2546,7 +2546,8 @@ every consumer relies on:
   `nil` through the physiology verbs. A Nominal stored volume is serialized but
   ignored and rebuilt silently at load. Gates: hspec `--match "physiology
   blood modes"`, `tools/bleeding_trail_probe.py`,
-  `tools/persistence_contract_probe.py` and the access audit.
+  `tools/persistence_system_cycles_probe.py` (manual-only fresh-process cycles)
+  and the access audit.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
   shared pure rule and never stored.
 * *Consciousness and mind (S11a, #2838; SD-23 defaults S11b, #2840).* Two
@@ -2643,8 +2644,8 @@ every consumer relies on:
   the integrated one under the key's retained modifiers. Lua reaches the
   blood fraction through the pure read verb `unit.readBloodView`;
   `unit.getBlood` is unchanged until S10. Gates: hspec `--match "physiology
-  cardio and circulation modes"`, `tools/persistence_contract_probe.py`
-  (fresh-process cycles), the `physiology` probe and the access audit.
+  cardio and circulation modes"`, `tools/persistence_system_cycles_probe.py`
+  (manual-only fresh-process cycles), the `physiology` probe and the access audit.
 * *Nutrition's effects*: digestion, catabolism, the lean-floor starvation
   death, surplus regrowth, the strength discount and the nutrition fat-floor
   organ-failure contribution inside stamina all belong to a Simulated
@@ -2755,8 +2756,8 @@ every consumer relies on:
     `sleep_pressure` scrubbed on load (logged once, idempotent), a pinned
     Simulated one keeps its pin and its exact partial pool.
   * Gates: hspec `--match "physiology exhaustion and sleep modes"`,
-    `tools/persistence_contract_probe.py` (fresh-process cycles) and the
-    `sleep`, `circadian`, `circadian_species` and `physiology` probes.
+    `tools/persistence_system_cycles_probe.py` (manual-only fresh-process cycles)
+    and the `sleep`, `circadian`, `circadian_species` and `physiology` probes.
 * *Persistence*: pools and meters of a Simulated system, overrides,
   `combat_engaged` and `tissue_recovering` are Persist exactly; `heart_rate` and `blood_oxygen` of a Simulated cardio are Persist exactly;
   `circulation` is derived and never stored (a legacy stored one is scrubbed
