@@ -36,7 +36,7 @@ concrete precondition
 - [x] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x — [#2943]
 - [x] PRB-9. Three pairs of companion probes pay two boots for one fixture — [no-issue]
 - [x] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain — [no-issue]
-- [ ] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run
+- [x] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run — [#2944]
 - [ ] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
 - [ ] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
 - [ ] PRB-14. The cost and value data needed to rank probes is not tracked
@@ -334,7 +334,9 @@ These probes prove state across a process boundary, which Hspec structurally can
 - **Scope and constraints:** Save-affecting changes still follow `src/World/Save/CLAUDE.md`; `persistence_contract` remains the gate.
 - **Remaining uncertainty:** `gameplay_tag_persistence` has a single measurement.
 
-### PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run
+### [#2944] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: keep all 23 probes (no saving found; the 20 green ones stay as they are), and give each red probe its own bug-style issue. `combat_anim` is red in 3 of 3 runs before any check (texture-handle responses are not integers) and is already tracked by open issue #2803; no tracker change. `physiology` (red 3 of 3, but on two different temperate checks, not one) is #2944; its fix stops for the owner's decision on any population, threshold, stimulus or check change (#2761, #2825). `follow_command_priority` (red 2 of 3) is the second issue, which follows: both of its failure modes are one `treat_ally` arbitration phenomenon, not a new variant of #1736.
 
 Twenty-three probes covering Lua gameplay logic that has no in-process equivalent beyond the formula tests.
 
