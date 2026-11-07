@@ -88,7 +88,7 @@ import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..), fnv1
                                  , defaultEnvelopeLimits)
 import World.Save.Component (componentKnownIds)
 import World.Save.Snapshot
-import World.Save.Physiology (withoutRebuiltCaches)
+import World.Save.Compare (divergentGenerations)
 import World.Save.Types
 import World.Page.Types (WorldPageId(..))
 import World.Edit.Types (WorldEdit(..), appendEdit)
@@ -742,9 +742,13 @@ runCompare args = do
             case compared of
                 [] → usageFailure ["compare"]
                 ((refPath, refValue) : rest) → do
-                    let snapDiffs = [ p | (p, v) ← rest
-                                        , comparedSnapshot v
-                                            ≢ comparedSnapshot refValue ]
+                    let -- The first fixture is the LIVE capture, the rest are
+                        -- re-saves taken across loads: see "World.Save.Compare"
+                        -- for what each is compared on (#2936).
+                        divergent = divergentGenerations
+                            (map (comparedSnapshot ∘ snd) compared)
+                        snapDiffs = [ p | (i, (p, _)) ← zip [0 ..] compared
+                                        , i ∈ divergent ]
                         luaDiffs  = [ p | (p, v) ← rest
                                         , comparedLua v ≢ comparedLua refValue ]
                         report outcome = Aeson.object
@@ -791,7 +795,7 @@ decodeOne path = do
                                                  luaComponentNames bytes of
             Left err → (path, Left (T.unpack err))
             Right (_, snap, comps, _) → (path, Right (ComparedSave
-                (withoutRebuiltCaches snap)
+                snap
                 (HM.fromList [ (lcsId c, lcsPayload c) | c ← comps ])))
 
 -- | Write the machine-readable comparison report.
