@@ -45,6 +45,7 @@ Usage: python3 tools/flora_condition_probe.py [--port 9211]
 """
 import argparse, copy, glob, os, sys, tempfile, time, uuid
 import yaml
+import probe_evidence
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       init_arena, load_fixture_yaml, quit_engine, send,
                       send_json, wait_load_published, wait_save_complete)
@@ -874,8 +875,11 @@ def main():
     finally:
         released = release_artifacts(art, args.keep_artifacts)
         if not passed and not args.keep_artifacts:
-            print("  (this run's engine log, fixtures and save slot went with "
-                  "its artifact directory — re-run with --keep-artifacts)")
+            print("  (this run's engine log, fixtures and save slot "
+                  + ("are kept in the runner's failure evidence)"
+                     if probe_evidence.evidence_dir() else
+                     "went with its artifact directory — re-run with "
+                     "--keep-artifacts)"))
     return 0 if passed and released else 1
 
 

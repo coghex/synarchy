@@ -111,13 +111,13 @@ OWNERS = {
 #: these numbers only refuse a run whose collection has drifted from
 #: what the gate is known to hold. Adding or removing a case is a
 #: deliberate edit here.
-EXPECTED_TESTS = {"diagnosis": 195, "outcome": 36, "issue": 34}
+EXPECTED_TESTS = {"diagnosis": 195, "outcome": 36, "issue": 35}
 
 #: Spelled independently of the allocation above rather than derived
 #: from it, so an edit that MOVES a case between owners — or that
 #: adjusts one owner's number to absorb a case another owner lost —
 #: still has to state the new total out loud.
-EXPECTED_TOTAL = 265
+EXPECTED_TOTAL = 266
 
 
 class CompositionError(Exception):

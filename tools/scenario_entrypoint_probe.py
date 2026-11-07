@@ -77,6 +77,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 import probe_engine
 from probelib import GUI_PORT, lua_string, quit_engine, send, send_json
 
@@ -616,7 +617,7 @@ def main() -> int:
         if FAILED:
             print(f"\nlogs retained at {ctx['logs']}")
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            probe_evidence.discard_scratch(base)
     print()
     if FAILED:
         print(f"FAIL: {len(FAILED)} check(s) failed")

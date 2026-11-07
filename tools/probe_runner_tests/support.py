@@ -62,6 +62,7 @@ if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
 import probe_engine  # noqa: E402
+import probe_evidence  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_runner_lifecycle  # noqa: E402
 import probe_runner_registry  # noqa: E402
@@ -360,6 +361,11 @@ class Tree:
         self.codec = self.root / "synthetic-synarchy-save-codec"
         self.codec.write_text("#!/bin/sh\nexit 0\n")
         self.codec.chmod(0o755)
+
+    @property
+    def evidence_root(self) -> Path:
+        """Where this tree's runs keep failing probes' evidence (#2931)."""
+        return self.root / "failure-evidence"
 
     def env_lines(self, name: str) -> list[tuple[str, str, str, str, str]]:
         """`(engine, codec, held-exclusive, held-shared, namespace)` per attempt."""
@@ -715,6 +721,14 @@ class patched:
         # decide what a case here observes; `main` re-derives all of them.
         self._saved_env = {name: os.environ.pop(name, None)
                            for name in probe_runner_resources.RUNNER_ENV_VARS}
+        # Failure evidence (#2931) belongs to the throwaway tree, never to
+        # the operator's real durable root: every failing synthetic probe
+        # here would otherwise leave a directory in ~/.local/state.
+        self._saved_env.update(
+            {name: os.environ.pop(name, None)
+             for name in (probe_evidence.ENV_ROOT, probe_evidence.ENV_KEEP,
+                          probe_evidence.ENV_EVIDENCE_DIR)})
+        os.environ[probe_evidence.ENV_ROOT] = str(self.tree.evidence_root)
         probe_engine.REPO_ROOT = str(self.tree.root)
         probe_runner_registry.PROBES = list(self.tree.probes)
         probe_runner_lifecycle.GROUP_GRACE = self.grace
@@ -736,6 +750,7 @@ class patched:
          probe_runner_resources.ENGINE_EXECUTABLE,
          probe_runner_resources.CODEC_EXECUTABLE,
          probe_runner_resources.ENGINE_PREFLIGHT_RUNNER) = self._saved
+        os.environ.pop(probe_evidence.ENV_ROOT, None)
         for name, value in self._saved_env.items():
             if value is None:
                 os.environ.pop(name, None)

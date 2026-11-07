@@ -61,6 +61,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import probe_evidence
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
@@ -166,7 +167,7 @@ def remove_isolated_root(base: str) -> str | None:
     to fail with.
     """
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         return (f"could not remove this run's temporary resource root "
                 f"{base}: {exc}")

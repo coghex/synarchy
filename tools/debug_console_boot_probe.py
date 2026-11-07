@@ -95,6 +95,7 @@ import sys
 import tempfile
 import time
 
+import probe_evidence
 import probe_engine
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -741,7 +742,7 @@ def check_widget_module_load(port: int) -> bool:
                  f"modules loaded, no Lua failure logged",
                  not problems, "; ".join(problems))
 
-    with tempfile.TemporaryDirectory(prefix="widget_load_probe_") as parent:
+    with probe_evidence.temporary_directory(prefix="widget_load_probe_") as parent:
         try:
             partial_root = make_alt_resource_root(parent, break_focus_indicator)
             drift_root = make_alt_resource_root(parent, drop_from_boot("quality_tier"))

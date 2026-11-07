@@ -70,6 +70,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import probe_evidence
 from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 LOG = "/tmp/construction_probe_engine.log"
@@ -1311,7 +1312,7 @@ def main() -> int:
         proc = boot(args.port, log=LOG, args=["--resource-root", root])
         return _run(args, proc)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _run(args, proc) -> int:

@@ -132,8 +132,9 @@ def hand_to_third_party(path: Path) -> int:
 # time out, a malformed line, a forbidden stdout marker — is one
 # SYNTHETIC_SCRIPT mode, so no real probe is ever run.
 SYNTHETIC_PROBE = textwrap.dedent('''\
-    import argparse, json, os, sys, time
+    import argparse, json, os, sys, tempfile, time
     sys.path.insert(0, {tools!r})
+    import probe_evidence
     import probe_protocol
 
     CHECKS = [("alpha", "the first check"),
@@ -224,6 +225,22 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         rep.check("beta", True, "the second check")
         time.sleep(600)
         raise SystemExit(0)
+
+    if mode in ("scratch_fail", "scratch_pass"):
+        # A probe that owns a scratch tree and an engine log at a FIXED
+        # path, then does what a real probe's `finally` does: discard the
+        # tree. Under the harness that must leave it for the harness (#2931).
+        scratch = tempfile.mkdtemp(prefix="scratch_")
+        open(os.path.join(scratch, "evidence.txt"), "w").write("the save slot\\n")
+        fixed_log = os.environ["SYNTHETIC_FIXED_LOG"]
+        open(fixed_log, "w").write("engine output\\n")
+        probe_evidence.record_engine_log(fixed_log)
+        passed = mode == "scratch_pass"
+        rep.check("alpha", True, "the first check")
+        rep.check("beta", passed, "the second check")
+        rep.check("gamma", True, "the third check")
+        probe_evidence.discard_scratch(scratch)
+        raise SystemExit(0 if passed else 1)
 
     if mode == "bad_describe_key":
         raise SystemExit(0)

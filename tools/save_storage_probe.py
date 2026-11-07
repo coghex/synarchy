@@ -56,6 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import boot, quit_engine, send, wait_load_published
 
 REPO = Path(__file__).resolve().parent.parent
@@ -493,7 +494,7 @@ def main() -> int:
                 proc.kill()
 
     finally:
-        shutil.rmtree(tmp_base, ignore_errors=True)
+        probe_evidence.discard_scratch(tmp_base)
 
     print("\nPASS: atomic save storage publishes/retains generations "
           "correctly, load-source selection always picks a complete "

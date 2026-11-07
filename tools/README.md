@@ -1777,6 +1777,31 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
+### Failing-probe evidence (`probe_evidence.py`, #2931)
+
+A failing probe keeps its evidence by default, on both runners. A probe
+execution gets its own attempt directory under the durable root
+`~/.local/state/synarchy/probe-failures/<probe>/<UTC timestamp>-<short sha>-<nonce>/`
+(`$SYNARCHY_PROBE_FAILURE_ROOT` overrides the root; `probe_flake
+--artifact-root` overrides both and is used as given, never pruned). Its path
+is printed with the failure and again in the summary, whatever `--tail` says.
+The runner hands the probe that directory as `SYNARCHY_PROBE_EVIDENCE_DIR` and
+points the child's `TMPDIR` into it, so every scratch tree a probe makes lives
+there; a probe's own end-of-run cleanup RETIRES such a tree into the attempt's
+`retired/` directory instead of deleting it (`probe_evidence.discard_scratch`,
+`temporary_directory`, `retire`, `release_tree`), and the engine logs it booted
+at fixed paths are copied into `engine-logs/`. On PASS the whole attempt is
+deleted; on FAIL, TIMEOUT or a runner error it is kept and marked
+`.probe-evidence.json`. Only marked directories are pruned, to the newest
+`$SYNARCHY_PROBE_FAILURE_KEEP` (default 5) per probe; an unmarked (active)
+directory and a symlink are never touched. A root inside a worktree is refused
+before any probe runs (exit 2 from `run_probes.py`). Every `--retries` attempt
+keeps its own directory, so a failed attempt survives a retry that passes. The
+four `--keep-artifacts` probes (`flora_growth`, `flora_condition`,
+`location_embark`, `location_content`) release their tree through the same
+`probe_evidence.release_tree`; the flag still keeps everything on PASS too.
+`python3 tools/test_probe_evidence.py` is the self-test.
+
 ### `probe_flake.py` — repeat-run flakiness measurement (#1425)
 
 Nine manual-only probes are classified `flaky` and several more have known
@@ -1878,11 +1903,13 @@ than in a subdirectory: a directory's OWNER may unlink entries in it however
 the sticky bit is set, so a harness-created subdirectory would let whoever made
 it replace another user's held lease. `/tmp` is root-owned and sticky, which
 the harness verifies rather than assumes, and every lease file is opened
-`O_NOFOLLOW` and checked to be a plain unlinked-to file. Artifacts,
-by contrast, DO follow the platform temp dir —
-`<platform temp dir>/synarchy-probe-flake` — and never land inside a worktree;
-successful runs are deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their
-stdout, protocol events and every engine log.
+`O_NOFOLLOW` and checked to be a plain unlinked-to file. Artifacts, by
+contrast, go to the durable failure-evidence root (#2931) — not the lease
+namespace and not `TMPDIR` either, so a reboot or a per-session macOS `TMPDIR`
+cannot clear them — and never land inside a worktree; successful runs are
+deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their stdout, protocol
+events and every engine log. See "Failing-probe evidence" under
+`run_probes.py` for the root, its override and the pruning.
 
 A valid measurement exits 0 whatever rate it observed. Nonzero is reserved for
 pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
@@ -3062,7 +3089,7 @@ exactly by the self-test rather than spot-checked, and stated there rather
 than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
 `probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
-`probe_select`, `probe_engine`,
+`probe_select`, `probe_engine`, `probe_evidence`,
 `probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`,
 and `deflake_diagnosis` with the `deflake_contract` document rules it was
 split from, each of which owns probe selection, launch, port
@@ -3227,8 +3254,8 @@ f"run-{index:03d}"` — three recorded values determine the whole layout, so a
 failed run's directory cannot be swapped for an unrelated path, and the run
 directories are unique by construction. The containment sweep over the paths a
 result NAMES stays for the case `--artifact-root` is omitted, which is
-legitimate: `default_artifact_root` supplies a temporary directory, and nothing
-else then constrains the root the document reports.
+legitimate: `default_artifact_root` supplies the durable failure-evidence root
+(#2931), and nothing else then constrains the root the document reports.
 
 Two labels are not two worktrees, either: the declared paths are canonicalised,
 neither may contain the other, and each invocation must have run inside the

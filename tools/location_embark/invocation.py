@@ -27,6 +27,7 @@ import shutil
 import stat
 from typing import NamedTuple
 
+import probe_evidence
 from probelib import capture_request_id, send, wait_save_complete
 
 #: The repository root. This module sits two directories deeper than the
@@ -219,13 +220,12 @@ def release_artifacts(art: RunArtifacts, keep: bool) -> None:
     rather than recursing into them, so the real `scripts/`, `assets/`
     and `data/` are never followed.
     """
-    if keep:
+    def describe(say):
         # Each line names what this run ACTUALLY produced. A run that
         # failed at phase 0 holds no save slot and no screenshot, and
         # saying otherwise would send the reader looking for files the
         # failure is the reason they do not have.
         saves = os.path.join(art.root, "saves")
-        print(f"\nretained this run's artifacts (--keep-artifacts): {art.base}")
         for label, path in (("engine logs", art.logs),
                             ("screenshots", art.shots),
                             ("saves", saves)):
@@ -233,19 +233,17 @@ def release_artifacts(art: RunArtifacts, keep: bool) -> None:
                 held = sorted(os.listdir(path))
             except OSError:
                 held = []
-            print(f"  {label:14} {path}"
-                  + (f" ({', '.join(held)})" if held else " (empty)"))
-        print(f"  {'resource root':14} {art.root}")
-        return
-    try:
-        shutil.rmtree(art.base)
-    except OSError as exc:
-        failures.append(f"could not remove this run's artifact directory "
-                        f"{art.base}: {exc}")
-        return
-    if os.path.exists(art.base):
-        failures.append(f"this run's artifact directory survived removal: "
-                        f"{art.base}")
+            say(f"  {label:14} {path}"
+                + (f" ({', '.join(held)})" if held else " (empty)"))
+        say(f"  {'resource root':14} {art.root}")
+
+    # The retention and removal rule is shared (`tools/probe_evidence.py`,
+    # #2931): under a runner the tree is retired into the attempt's
+    # evidence instead of deleted, and the runner keeps it on a failure.
+    message = probe_evidence.release_tree(art.base, keep=keep,
+                                          describe=describe)
+    if message:
+        failures.append(message)
 
 
 # --------------------------------------------------------------------------

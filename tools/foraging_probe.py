@@ -37,6 +37,7 @@ Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
 """
 import argparse, glob, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
+import probe_evidence
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
                       wait_load_published, wait_save_complete)
@@ -130,7 +131,7 @@ def remove_run_root(base: str) -> bool:
     prevent, so it must not be reported as a pass.
     """
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         print(f"  [FAIL] could not remove this run's resource root "
               f"{base}: {exc}")

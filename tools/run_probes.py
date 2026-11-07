@@ -97,6 +97,10 @@ lives in five owners beside it, each of which is importable on its own:
   `probe_runner_scheduler`    sequential and `--jobs` orchestration,
                               retries, presentation and the summary
 
+Alongside them, `probe_evidence` (#2931) owns the failing-probe evidence rule
+both this runner and `probe_flake` apply: an attempt directory per execution
+under a durable root, kept on a failing outcome and deleted on PASS.
+
 Dependencies run one way — registry and diagnostics are leaves, resources
 and lifecycle build on them, the scheduler builds on all four, and this
 file builds on the scheduler. A facility has exactly ONE owner and this
@@ -113,6 +117,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_engine  # noqa: E402
+import probe_evidence  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_runner_diagnostics as diagnostics  # noqa: E402
 import probe_runner_lifecycle as lifecycle  # noqa: E402
@@ -229,6 +234,19 @@ def main() -> int:
         print(registry.describe_gui_conflicts(conflicts), file=sys.stderr)
         return 2
 
+    # The failure-evidence root (#2931), validated HERE for the same reason
+    # as the port plan above: a root inside a worktree, or an unwritable one,
+    # is a refusal in the first second and never a failing probe whose
+    # evidence had nowhere to go. After `--list` and selection, so neither
+    # of them needs a usable root.
+    try:
+        retention = probe_evidence.Retention.from_environment()
+    except probe_evidence.RootRejected as error:
+        print(f"cannot keep failing probes' evidence: {error}; set "
+              f"{probe_evidence.ENV_ROOT} to a directory outside every "
+              f"worktree", file=sys.stderr)
+        return 2
+
     # Resolved ONCE, here: after --list has had its chance to return without
     # needing a repository, and before any probe runs, so an unusable
     # namespace is a loud refusal in the first second rather than a sweep
@@ -303,7 +321,7 @@ def main() -> int:
         parallel_ports=parallel_ports, explicit_timeout=args.timeout,
         retries=args.retries, tail=args.tail, namespace=namespace,
         groups=groups, progress=progress, wall_start=wall_start,
-        waiting=waiting)
+        waiting=waiting, retention=retention)
 
 
 if __name__ == "__main__":

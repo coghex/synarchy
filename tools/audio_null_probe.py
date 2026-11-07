@@ -15,6 +15,7 @@ import tempfile
 import time
 
 import yaml
+import probe_evidence
 import probe_protocol
 from probelib import boot, send, send_json, init_arena
 
@@ -95,9 +96,9 @@ def run(port: int, rep: probe_protocol.Reporter) -> int:
     def lua(command):
         return send_json(port, command, idle=0.03)
 
-    temporary = tempfile.TemporaryDirectory(prefix='synarchy-audio-null-')
+    temporary = tempfile.mkdtemp(prefix='synarchy-audio-null-')
     try:
-        root = Path(temporary.name)
+        root = Path(temporary)
         fixture_root(root)
         proc = boot(port, log=rep.engine_log_path('audio_null_engine.log',
                     f'/tmp/synarchy-audio-null-{port}.log'),
@@ -194,7 +195,7 @@ def run(port: int, rep: probe_protocol.Reporter) -> int:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait(timeout=5)
-        temporary.cleanup()
+        probe_evidence.discard_scratch(temporary)
 
 
 def main() -> int:

@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+"""Self-test for the failing-probe evidence rule (#2931).
+
+`python3 tools/test_probe_evidence.py` covers `tools/probe_evidence.py` and
+its two consumers without booting an engine, a world or a real probe:
+
+  * the helper itself -- allocation, the PASS/FAIL rule, pruning to the
+    newest N, marker-gated and symlink-safe deletion, the worktree refusal,
+    the environment overrides, archival and removal failures, and the
+    probe-side `retire`/`discard_scratch`/`release_tree` that defer to a
+    runner;
+  * the legacy `tools/run_probes.py` path through synthetic probes -- a
+    failing run keeps its directory at the durable root and prints the
+    path, a passing one leaves nothing, a TIMEOUT is kept, a failed attempt
+    survives a retry that passes, parallel attempts never collide, the path
+    is printed whatever `--tail` says, and the engine log a probe booted at
+    a fixed path is kept;
+  * the four probes that carry `--keep-artifacts` -- they release through
+    the one shared rule rather than their own copies of it.
+
+The `probe_flake` half (default root, precedence, per-invocation pruning,
+harness-error runs, the fixed-path engine log) lives with that harness's own
+suite, `tools/probe_flake_tests/harness_artifacts.py`.
+"""
+from __future__ import annotations
+
+import inspect
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import textwrap
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence  # noqa: E402
+import probe_runner_lifecycle  # noqa: E402
+import selftestlib  # noqa: E402
+from probe_runner_tests.support import (  # noqa: E402
+    Tree, main_with, main_with_open, patched)
+from selftestlib import FAILURES, expect  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+
+# A synthetic registered probe that does what a real one's `finally` does:
+# make a scratch tree holding a "save", boot an "engine" whose log has a
+# fixed path, record that log the way `probelib.boot` does, then clean the
+# tree up. `behave` is a file next to the probe: the first line is the exit
+# code for attempt one, an optional second line the code for later attempts.
+SCRATCH_PROBE = textwrap.dedent('''\
+    import argparse, os, sys, tempfile, time
+    sys.path.insert(0, {tools!r})
+    import probe_evidence
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--port', type=int, default=0)
+    ap.parse_args()
+    counter = {counter!r}
+    attempt = 1
+    if os.path.exists(counter):
+        attempt = int(open(counter).read()) + 1
+    open(counter, 'w').write(str(attempt))
+    codes = open({behave!r}).read().split()
+    code = codes[min(attempt, len(codes)) - 1]
+    scratch = tempfile.mkdtemp(prefix='scratch_')
+    open(os.path.join(scratch, 'evidence.txt'), 'w').write('save %d\\n' % attempt)
+    fixed = {fixed!r}
+    open(fixed, 'w').write('engine output %d\\n' % attempt)
+    probe_evidence.record_engine_log(fixed)
+    print('FAIL: a check failed' if code != '0' else 'all good')
+    if code == 'hang':
+        time.sleep(600)
+    probe_evidence.discard_scratch(scratch)
+    sys.exit(0 if code == '0' else 1)
+''')
+
+
+def add_scratch_probe(tree: Tree, name: str, behave: str) -> Path:
+    """Register a synthetic probe; return the fixed engine-log path it uses."""
+    fixed = tree.root / f"{name}.fixed-engine.log"
+    behave_file = tree.root / f"{name}.behave"
+    behave_file.write_text(behave, encoding="utf-8")
+    script = f"{name}_probe.py"
+    (tree.root / "tools" / script).write_text(SCRATCH_PROBE.format(
+        tools=str(Path(__file__).resolve().parent),
+        counter=str(tree.root / f"{name}.counter"),
+        behave=str(behave_file), fixed=str(fixed)), encoding="utf-8")
+    tree.probes.append((name, script, f"synthetic {name}"))
+    return fixed
+
+
+def attempts(tree: Tree, name: str) -> list[Path]:
+    probe_dir = tree.evidence_root / name
+    return sorted(p for p in probe_dir.iterdir()) if probe_dir.is_dir() else []
+
+
+def test_a_failing_run_keeps_its_directory_and_prints_the_path() -> None:
+    print("\n-- a failing run keeps its evidence and names it")
+    tree = Tree()
+    try:
+        fixed = add_scratch_probe(tree, "bad", "1")
+        rc, out = main_with(tree, ["--only", "bad", "--exact"])
+        kept = attempts(tree, "bad")
+        expect(rc == 1 and len(kept) == 1, f"one failed attempt is kept ({kept})")
+        if not kept:
+            return
+        where = kept[0]
+        expect(str(where.resolve()) in out and "evidence kept:" in out,
+               "its path is printed with the failure")
+        expect(f"bad_probe.py: {where.resolve()}" in out and "FAILURE EVIDENCE" in out,
+               "and again in the final summary")
+        expect(where.parent == tree.evidence_root.resolve() / "bad"
+               or where.parent == tree.evidence_root / "bad",
+               "under <durable root>/<probe>/")
+        expect((where / probe_evidence.MARKER).is_file(),
+               "marked finalized")
+        scratch = sorted((where / probe_evidence.RETIRED_DIR).glob("scratch_*"))
+        expect(len(scratch) == 1
+               and (scratch[0] / "evidence.txt").read_text() == "save 1\n",
+               "the probe's own scratch tree survived its own cleanup")
+        logs = sorted((where / probe_evidence.ENGINE_LOG_DIR).glob("*"))
+        expect(len(logs) == 1 and logs[0].read_text() == "engine output 1\n",
+               "the engine log at a fixed path was copied in")
+        fixed.unlink()
+        expect(logs[0].exists(), "and survives the original being removed")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_a_passing_run_leaves_nothing_behind() -> None:
+    print("\n-- a passing run leaves nothing behind")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "good", "0")
+        rc, out = main_with(tree, ["--only", "good", "--exact"])
+        expect(rc == 0 and attempts(tree, "good") == [],
+               f"no attempt directory remains ({attempts(tree, 'good')})")
+        expect("evidence kept" not in out and "FAILURE EVIDENCE" not in out,
+               "and nothing is announced")
+        leftovers = list(tree.evidence_root.rglob("scratch_*"))
+        expect(leftovers == [], "the probe's scratch went with the attempt")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_a_timeout_keeps_what_the_killed_probe_left() -> None:
+    print("\n-- a TIMEOUT keeps the tree the killed probe never cleaned")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "slow", "hang")
+        rc, out = main_with(tree, ["--only", "slow", "--exact",
+                                   "--timeout", "3"])
+        kept = attempts(tree, "slow")
+        expect(rc == 1 and "TIMEOUT" in out and len(kept) == 1,
+               f"the timed-out attempt is kept ({kept}, rc {rc})")
+        if kept:
+            scratch = sorted((kept[0] / "tmp").glob("scratch_*"))
+            expect(len(scratch) == 1
+                   and (scratch[0] / "evidence.txt").exists(),
+                   "the scratch tree sits in the attempt's TMPDIR, because "
+                   "the probe was killed before it could clean up")
+            expect(kept[0].resolve().name in out, "and the path is printed")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_a_failed_attempt_outlives_a_retry_that_passes() -> None:
+    print("\n-- each attempt is its own evidence, retry or not")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "flaky", "1 0")
+        rc, out = main_with(tree, ["--only", "flaky", "--exact",
+                                   "--retries", "1"])
+        kept = attempts(tree, "flaky")
+        expect(rc == 0 and "passed on retry" in out,
+               f"the retry passed (rc {rc})")
+        expect(len(kept) == 1, f"the FAILED first attempt is kept ({kept})")
+        if kept:
+            expect(str(kept[0].resolve()) in out, "its path is printed")
+            expect(list((kept[0] / probe_evidence.RETIRED_DIR)
+                        .glob("scratch_*/evidence.txt"))[0].read_text()
+                   == "save 1\n",
+                   "and holds the FIRST attempt's data, not the retry's")
+        expect("FAILURE EVIDENCE" in out,
+               "the summary lists it although the probe passed")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_the_path_is_printed_whatever_tail_says() -> None:
+    print("\n-- --tail 0 does not hide where the evidence is")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "bad", "1")
+        rc, out = main_with(tree, ["--only", "bad", "--exact", "--tail", "0"])
+        kept = attempts(tree, "bad")
+        expect(rc == 1 and kept and str(kept[0].resolve()) in out
+               and "FAIL: a check failed" not in out,
+               "the tail is suppressed and the path is not")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_parallel_attempts_never_collide() -> None:
+    print("\n-- --jobs keeps one directory per failing attempt")
+    tree = Tree()
+    try:
+        for name in ("pa", "pb", "pc"):
+            add_scratch_probe(tree, name, "1")
+        add_scratch_probe(tree, "ok", "0")
+        rc, out = main_with(tree, ["--jobs", "3"])
+        for name in ("pa", "pb", "pc"):
+            kept = attempts(tree, name)
+            expect(len(kept) == 1 and str(kept[0].resolve()) in out,
+                   f"{name} kept and printed its own attempt ({kept})")
+        expect(attempts(tree, "ok") == [], "the passing probe kept nothing")
+        expect(rc == 1, "and the run still fails")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_a_root_inside_a_worktree_is_refused() -> None:
+    print("\n-- a root inside a worktree is refused before any probe runs")
+    inside = REPO / "probe-evidence-selftest-root"
+    try:
+        probe_evidence.Retention.from_environment(
+            {probe_evidence.ENV_ROOT: str(inside)})
+        expect(False, "the helper refused a root inside this worktree")
+    except probe_evidence.RootRejected as error:
+        expect("inside the working tree" in str(error),
+               f"the helper names the worktree ({error})")
+    expect(not inside.exists(), "and created nothing there")
+    tree = Tree()
+    try:
+        add_scratch_probe(tree, "bad", "1")
+        with patched(tree):
+            os.environ[probe_evidence.ENV_ROOT] = str(inside)
+            rc, out = main_with_open(tree, ["--only", "bad", "--exact"])
+        expect(rc == 2 and "inside the working tree" in out
+               and probe_evidence.ENV_ROOT in out,
+               f"run_probes refuses with the documented usage code ({rc})")
+        expect(not (tree.root / "bad.counter").exists() and not inside.exists(),
+               "before any probe started")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+        shutil.rmtree(inside, ignore_errors=True)
+
+
+def test_a_bad_keep_count_is_refused_not_defaulted() -> None:
+    print("\n-- SYNARCHY_PROBE_FAILURE_KEEP is validated")
+    for raw in ("0", "-2", "many"):
+        try:
+            probe_evidence.keep_count({probe_evidence.ENV_KEEP: raw})
+            expect(False, f"{raw!r} should be refused")
+        except probe_evidence.RootRejected as error:
+            expect(probe_evidence.ENV_KEEP in str(error),
+                   f"{raw!r} is refused by name")
+    expect(probe_evidence.keep_count({}) == probe_evidence.DEFAULT_KEEP == 5,
+           "the default is the newest five")
+    expect(probe_evidence.keep_count({probe_evidence.ENV_KEEP: "2"}) == 2,
+           "and a good override applies")
+    expect(probe_evidence.configured_root({}) == Path.home() / ".local"
+           / "state" / "synarchy" / "probe-failures",
+           "the default root is ~/.local/state/synarchy/probe-failures")
+    expect(probe_evidence.configured_root(
+        {probe_evidence.ENV_ROOT: "/elsewhere"}) == Path("/elsewhere"),
+        "and the variable overrides it")
+
+
+def test_pruning_keeps_the_newest_n_and_only_what_it_owns() -> None:
+    print("\n-- pruning keeps the newest N, and only marked real directories")
+    with tempfile.TemporaryDirectory(prefix="evidence-prune-") as temp:
+        retention = probe_evidence.Retention(Path(temp).resolve() / "root", 3)
+        retention.root.mkdir()
+        names = []
+        for index in range(6):
+            attempt = retention.begin("p")
+            (attempt.path / "log").write_text(str(index))
+            expect(attempt.finish("FAIL") == attempt.path,
+                   "a failure is kept")
+            names.append(attempt.path.name)
+        left = sorted(c.name for c in (retention.root / "p").iterdir())
+        expect(left == sorted(names[-3:]),
+               f"exactly the newest 3 remain ({left} vs {names[-3:]})")
+
+        active = retention.begin("p")                  # not finalized
+        outside = Path(temp) / "outside"
+        outside.mkdir()
+        (outside / probe_evidence.MARKER).write_text(
+            '{"schema": "probe-evidence/v1", "finalized_at": "0"}\n')
+        (outside / "precious").write_text("do not delete")
+        link = retention.root / "p" / "a-link"
+        link.symlink_to(outside)
+        for _ in range(4):
+            attempt = retention.begin("p")
+            attempt.finish("FAIL")
+        expect(active.path.is_dir(),
+               "an active (unmarked) attempt is never pruned")
+        expect((outside / "precious").exists() and link.is_symlink(),
+               "a symlink is skipped, its target untouched")
+        other = retention.begin("q")
+        other.finish("FAIL")
+        expect(len(list((retention.root / "q").iterdir())) == 1,
+               "another probe's evidence is its own budget")
+
+
+def test_concurrent_allocation_and_pruning() -> None:
+    print("\n-- concurrent attempts get distinct directories; pruning is safe")
+    with tempfile.TemporaryDirectory(prefix="evidence-race-") as temp:
+        retention = probe_evidence.Retention(Path(temp).resolve() / "root", 4)
+        retention.root.mkdir()
+        errors, made = [], []
+
+        def worker():
+            try:
+                for _ in range(6):
+                    attempt = retention.begin("race")
+                    made.append(attempt.path)
+                    attempt.finish("FAIL")
+            except Exception as error:  # noqa: BLE001 - reported below
+                errors.append(repr(error))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        expect(errors == [], f"no worker raised ({errors})")
+        expect(len(set(made)) == 48, "every one of 48 attempts is distinct")
+        expect(len(list((retention.root / "race").iterdir())) == 4,
+               "and the probe ends with exactly the newest 4")
+
+
+def test_archival_and_removal_failures_are_reported_not_swallowed() -> None:
+    print("\n-- failures to archive or remove keep the evidence and say where")
+    with tempfile.TemporaryDirectory(prefix="evidence-fail-") as temp:
+        retention = probe_evidence.Retention(Path(temp).resolve() / "root", 5)
+        retention.root.mkdir()
+        log = Path(temp) / "engine.log"
+        log.write_text("original")
+        attempt = retention.begin("a")
+        (attempt.path / probe_evidence.ENGINE_LOG_MANIFEST).write_text(
+            str(log) + "\n")
+        (attempt.path / probe_evidence.ENGINE_LOG_DIR).write_text("in the way")
+        said = []
+        kept = attempt.finish("FAIL", announce=said.append)
+        expect(kept == attempt.path and attempt.path.is_dir(),
+               "a failed archive still keeps the attempt")
+        expect(any(str(log) in line and "still at" in line for line in said),
+               f"and names where the original still is ({said})")
+        expect(log.read_text() == "original", "the original is untouched")
+        expect((attempt.path / probe_evidence.MARKER).exists(),
+               "and the attempt is still marked finalized")
+
+        attempt = retention.begin("b")
+        real = shutil.rmtree
+        said = []
+
+        def refuse(path, *args, **kwargs):
+            raise OSError("synthetic: directory busy")
+
+        shutil.rmtree = refuse
+        try:
+            left = attempt.finish("PASS", announce=said.append)
+        finally:
+            shutil.rmtree = real
+        expect(left == attempt.path and attempt.path.exists(),
+               "a passing run whose removal fails returns the leftover path")
+        expect(any(str(attempt.path) in line and "busy" in line
+                   for line in said),
+               f"and reports the path and the error ({said})")
+
+
+def test_probe_side_helpers_defer_to_a_runner() -> None:
+    print("\n-- retire / discard_scratch / release_tree")
+    names = (probe_evidence.ENV_EVIDENCE_DIR,)
+    saved = {name: os.environ.pop(name, None) for name in names}
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-probe-") as temp:
+            temp = Path(temp).resolve()
+            lone = temp / "lone"
+            lone.mkdir()
+            (lone / "f").write_text("x")
+            probe_evidence.discard_scratch(lone)
+            expect(not lone.exists(), "outside a runner it is rmtree")
+
+            attempt = temp / "attempt"
+            (attempt / "tmp").mkdir(parents=True)
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+            owned = attempt / "tmp" / "owned"
+            owned.mkdir()
+            (owned / "save").write_text("data")
+            elsewhere = temp / "elsewhere"
+            elsewhere.mkdir()
+            probe_evidence.discard_scratch(owned)
+            retired = list((attempt / probe_evidence.RETIRED_DIR).iterdir())
+            expect(not owned.exists() and len(retired) == 1
+                   and (retired[0] / "save").read_text() == "data",
+                   "under a runner a tree inside the attempt is retired, "
+                   "so the path is gone to the probe but the data is kept")
+            probe_evidence.discard_scratch(elsewhere)
+            expect(not elsewhere.exists(),
+                   "a tree OUTSIDE the attempt (a stale export) is still the "
+                   "probe's own to remove")
+            expect(not probe_evidence.is_runner_owned(temp / "other"),
+                   "ownership is containment, not the variable alone")
+            try:
+                probe_evidence.retire(attempt)
+                expect(False, "the attempt itself must not be retired")
+            except OSError:
+                expect(attempt.is_dir(), "the evidence directory itself is "
+                       "never retired")
+            with probe_evidence.temporary_directory(prefix="td_") as made:
+                inside = made
+                (Path(made) / "x").write_text("y")
+            expect(not os.path.exists(inside), "temporary_directory retires")
+
+            # release_tree: the shared core of the four probes' copies.
+            base = attempt / "tmp" / "run"
+            (base / "logs").mkdir(parents=True)
+            said = []
+            message = probe_evidence.release_tree(
+                str(base), keep=True, describe=lambda say: say("  engine log"))
+            expect(message is None and base.is_dir(),
+                   "--keep-artifacts retains the tree on any outcome")
+            os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR)
+            message = probe_evidence.release_tree(str(base))
+            expect(message is None and not base.exists(),
+                   "without the flag the tree is removed")
+            base.mkdir()
+            real = shutil.rmtree
+            shutil.rmtree = lambda *a, **k: (_ for _ in ()).throw(
+                OSError("busy"))
+            try:
+                message = probe_evidence.release_tree(str(base))
+            finally:
+                shutil.rmtree = real
+            expect(message is not None and "could not remove" in message
+                   and "busy" in message,
+                   "a removal that fails is a reported failure")
+            shutil.rmtree = lambda *a, **k: None
+            try:
+                message = probe_evidence.release_tree(
+                    str(base), survived="still {base}")
+            finally:
+                shutil.rmtree = real
+            expect(message == f"still {base}",
+                   "and a tree that survives is another, in the probe's words")
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_the_child_environment_is_the_runners_alone() -> None:
+    print("\n-- run_one hands the evidence directory over, and only then")
+    tree = Tree()
+    try:
+        script = tree.root / "tools" / "env_probe.py"
+        script.write_text(textwrap.dedent('''\
+            import os, sys
+            print("EVIDENCE=" + os.environ.get("SYNARCHY_PROBE_EVIDENCE_DIR", ""))
+            print("TMPDIR=" + os.environ.get("TMPDIR", ""))
+            '''), encoding="utf-8")
+        os.environ[probe_evidence.ENV_EVIDENCE_DIR] = "/stale/export"
+        try:
+            with patched(tree):
+                _ok, _t, _e, out = probe_runner_lifecycle.run_one(
+                    "env_probe.py", None, 30)
+                held = tree.root / "held"
+                _ok, _t, _e, with_dir = probe_runner_lifecycle.run_one(
+                    "env_probe.py", None, 30, evidence_dir=str(held))
+        finally:
+            os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        expect("EVIDENCE=\n" in out,
+               "a stale inherited export never decides where evidence goes")
+        expect(f"EVIDENCE={held}\n" in with_dir
+               and f"TMPDIR={held}/tmp\n" in with_dir
+               and (held / "tmp").is_dir(),
+               "an evidence directory sets both the variable and TMPDIR")
+        expect(f"TMPDIR={held}" not in out,
+               "and without one TMPDIR is left alone")
+    finally:
+        tree.cleanup()
+        shutil.rmtree(tree.root, ignore_errors=True)
+
+
+def test_record_engine_log_only_acts_under_a_runner() -> None:
+    print("\n-- record_engine_log")
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-log-") as temp:
+            probe_evidence.record_engine_log("/tmp/a.log")
+            expect(list(Path(temp).iterdir()) == [],
+                   "outside a runner it writes nothing")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = temp
+            probe_evidence.record_engine_log("/tmp/a.log")
+            probe_evidence.record_engine_log("/tmp/b.log")
+            listed = (Path(temp) / probe_evidence.ENGINE_LOG_MANIFEST
+                      ).read_text().split()
+            expect(listed == ["/tmp/a.log", "/tmp/b.log"],
+                   f"each boot appends its log ({listed})")
+    finally:
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_the_four_keep_artifacts_probes_share_one_rule() -> None:
+    print("\n-- flora_growth, flora_condition, location_embark and "
+          "location_content release through the shared rule")
+    import flora_condition_probe  # noqa: E402
+    import flora_growth_probe  # noqa: E402
+    from location_content import invocation as content  # noqa: E402
+    from location_embark import invocation as embark  # noqa: E402
+    expect(flora_condition_probe.release_artifacts
+           is flora_growth_probe.release_artifacts,
+           "flora_condition still imports flora_growth's function, not a copy")
+    for label, function in (("flora_growth", flora_growth_probe.release_artifacts),
+                            ("location_embark", embark.release_artifacts),
+                            ("location_content", content.release_artifacts)):
+        source = inspect.getsource(function)
+        expect("probe_evidence.release_tree" in source
+               and "shutil.rmtree" not in source,
+               f"{label}.release_artifacts delegates to release_tree and "
+               f"keeps no removal logic of its own")
+        expect(list(inspect.signature(function).parameters) == ["art", "keep"],
+               f"{label}.release_artifacts keeps its signature")
+    expect("probe_evidence.retire" in inspect.getsource(
+        content.remove_isolated_root),
+        "and the isolated-root remover the other location probes borrow "
+        "retires too")
+
+
+TESTS = (
+    test_a_failing_run_keeps_its_directory_and_prints_the_path,
+    test_a_passing_run_leaves_nothing_behind,
+    test_a_timeout_keeps_what_the_killed_probe_left,
+    test_a_failed_attempt_outlives_a_retry_that_passes,
+    test_the_path_is_printed_whatever_tail_says,
+    test_parallel_attempts_never_collide,
+    test_a_root_inside_a_worktree_is_refused,
+    test_a_bad_keep_count_is_refused_not_defaulted,
+    test_pruning_keeps_the_newest_n_and_only_what_it_owns,
+    test_concurrent_allocation_and_pruning,
+    test_archival_and_removal_failures_are_reported_not_swallowed,
+    test_probe_side_helpers_defer_to_a_runner,
+    test_the_child_environment_is_the_runners_alone,
+    test_record_engine_log_only_acts_under_a_runner,
+    test_the_four_keep_artifacts_probes_share_one_rule,
+)
+
+
+def main() -> int:
+    selftestlib.parse_verbose()
+    for test in TESTS:
+        test()
+    if FAILURES:
+        print(f"\n{len(FAILURES)} check(s) failed:")
+        for failure in FAILURES:
+            print(f"  {failure}")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
+        0, f"\nAll {len(TESTS)} failure-evidence test groups passed")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

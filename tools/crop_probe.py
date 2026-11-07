@@ -40,6 +40,7 @@ Usage: python3 tools/crop_probe.py [--port 9195] [--seed 42]
 import argparse, copy, glob, os, shutil, socket, subprocess, sys, tempfile, time
 import yaml
 from pathlib import Path
+import probe_evidence
 import probe_protocol
 from probelib import (FixtureNotRegistered, quit_engine, boot,
                       load_fixture_yaml, send, send_json, wait_load_published)
@@ -259,7 +260,7 @@ def _run(args, rep):
                     args=["--resource-root", root] + rep.engine_args())
         return _exercise(port, proc, args, passed, rep)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _exercise(port, proc, args, passed, rep):

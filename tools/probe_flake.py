@@ -64,6 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_engine  # noqa: E402
+import probe_evidence  # noqa: E402
 import probe_runner_lifecycle  # noqa: E402
 import probe_runner_registry  # noqa: E402
 
@@ -682,31 +683,20 @@ class LiveRegistry:
 # Artifacts
 # --------------------------------------------------------------------------
 def default_artifact_root() -> Path:
-    """`<platform temp dir>/synarchy-probe-flake`.
+    """The durable failure-evidence root (#2931).
 
-    Resolved through `tempfile.gettempdir()` rather than a bare
-    `${TMPDIR}`, which expands to nothing — and so to an unwritable
-    `/synarchy-probe-flake` — under the many shells that do not set it.
+    `$SYNARCHY_PROBE_FAILURE_ROOT` when set, else
+    `~/.local/state/synarchy/probe-failures`. Unlike the platform temp
+    directory it replaced, it survives a reboot and is not per session.
+    The measurement keeps each probe's invocations in `<root>/<probe>/`;
+    only `--artifact-root` (taken as given, never suffixed) skips that.
     """
-    return Path(tempfile.gettempdir()) / ARTIFACT_DIR_NAME
+    return probe_evidence.configured_root()
 
 
 def _worktree_paths() -> list[Path]:
     """Every git worktree registered to this checkout, plus the checkout."""
-    paths = [Path(probe_engine.REPO_ROOT).resolve()]
-    try:
-        done = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=probe_engine.REPO_ROOT, text=True, capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return paths
-    if done.returncode != 0:
-        return paths
-    for line in done.stdout.splitlines():
-        if line.startswith("worktree "):
-            with contextlib.suppress(OSError):
-                paths.append(Path(line[len("worktree "):]).resolve())
-    return paths
+    return probe_evidence.worktree_paths(Path(probe_engine.REPO_ROOT))
 
 
 def check_artifact_root(root: Path) -> Path:
@@ -722,24 +712,9 @@ def check_artifact_root(root: Path) -> Path:
     lease exists.
     """
     try:
-        resolved = Path(root).expanduser().resolve()
-    except OSError as error:
-        raise Rejection(
-            f"artifact root {root} cannot be resolved ({error})") from None
-    for tree in _worktree_paths():
-        if resolved == tree or tree in resolved.parents:
-            raise Rejection(
-                f"artifact root {resolved} is inside the working tree {tree}; "
-                f"raw probe artifacts must never be written into a repository "
-                f"worktree")
-    try:
-        resolved.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        raise Rejection(
-            f"artifact root {resolved} cannot be created ({error})") from None
-    if not os.access(resolved, os.W_OK | os.X_OK):
-        raise Rejection(f"artifact root {resolved} is not writable")
-    return resolved
+        return probe_evidence.check_root(root, _worktree_paths())
+    except probe_evidence.RootRejected as error:
+        raise Rejection(str(error)) from None
 
 
 def new_invocation_dir(root: Path, probe: str) -> Path:
@@ -956,9 +931,41 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
             f"--rts-caps must be a positive capability count, got {rts_caps}")
     script = resolve_probe(probe)
     descriptor = fetch_descriptor(probe, script)
-    root = check_artifact_root(artifact_root or default_artifact_root())
+    # Precedence (#2931): an explicit `artifact_root` (`--artifact-root`) is
+    # taken as given, every invocation a direct child of it and nothing ever
+    # pruned; otherwise `$SYNARCHY_PROBE_FAILURE_ROOT`, else the durable
+    # default, with this probe's invocations in `<root>/<probe>/` and the
+    # probe's older failures pruned to the newest few.
+    if artifact_root is not None:
+        root = check_artifact_root(artifact_root)
+        prune_keep = None
+    else:
+        try:
+            prune_keep = probe_evidence.keep_count()
+        except probe_evidence.RootRejected as error:
+            raise Rejection(str(error)) from None
+        root = check_artifact_root(default_artifact_root() / probe)
     invocation = new_invocation_dir(root, probe)
     measurement = Measurement(probe, descriptor, runs, rts_caps, root, invocation)
+    try:
+        return _measure_runs(measurement, probe, script, descriptor, runs,
+                             invocation, rts_caps, timeout, start_port,
+                             announce)
+    finally:
+        # On EVERY exit, including a port-exhaustion or an interrupt
+        # partway through: an invocation whose passing runs removed
+        # themselves is removed, and one holding evidence is marked
+        # finalized so it can be pruned later and never before.
+        held = any(invocation.iterdir()) if invocation.is_dir() else False
+        probe_evidence.finalize_invocation(
+            invocation, probe=probe, retained=held, keep=prune_keep)
+
+
+def _measure_runs(measurement: Measurement, probe: str, script: str,
+                  descriptor: probe_protocol.Descriptor, runs: int,
+                  invocation: Path, rts_caps: int, timeout: float,
+                  start_port: int, announce) -> Measurement:
+    """The run loop of `measure`, which owns what happens around it."""
 
     cursor = start_port
     with LiveRegistry() as registry:
@@ -991,7 +998,8 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
                     event_path=str(events_path),
                     artifact_dir=str(run_dir),
                     engine_log_dir=str(engine_dir),
-                    rts_caps=rts_caps)
+                    rts_caps=rts_caps,
+                    evidence_dir=str(run_dir))
             finally:
                 # Held until run_one has returned, which is after it has
                 # reaped the probe's whole process group — so every engine
@@ -1011,6 +1019,7 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
                 cleanly, so the result never reads as "nothing went
                 wrong, nothing retained".
                 """
+                probe_evidence.archive_engine_logs(run_dir)
                 measurement.status = "harness-error"
                 measurement.error = f"run {index}: {detail}"
                 measurement.error_run = RunRecord(
@@ -1040,7 +1049,10 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
                 return stop_with_harness_error(str(error))
 
             keep = outcome in (RUN_FAIL, RUN_TIMEOUT)
-            if not keep:
+            if keep:
+                for problem in probe_evidence.archive_engine_logs(run_dir):
+                    print(problem, file=sys.stderr)
+            else:
                 _remove_tree(run_dir)
             measurement.runs.append(RunRecord(
                 index, base_port, outcome, elapsed, outcomes,

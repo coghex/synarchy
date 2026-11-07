@@ -13,6 +13,7 @@ world thread or wedging the barrier open forever."""
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
+import probe_evidence
 import probe_protocol
 from probelib import boot, quit_engine, send, wait_load_published
 
@@ -106,7 +107,7 @@ def _run(a, rep):
         root = make_isolated_root(tmpdir)
         return _exercise(a, root, rep)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 def _exercise(a, root, rep):
     path = os.path.join(root, "saves", SAVE); resave_path = os.path.join(root, "saves", RESAVE); path2 = os.path.join(root, "saves", SAVE2); p = boot(

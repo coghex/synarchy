@@ -68,6 +68,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, quit_engine, send, send_json, capture_request_id,
                       wait_load_published, wait_save_complete)
 
@@ -644,7 +645,7 @@ def main() -> int:
     port = args.port
 
     chk = Checks()
-    with tempfile.TemporaryDirectory(prefix="fluid_reaction_probe_") as base:
+    with probe_evidence.temporary_directory(prefix="fluid_reaction_probe_") as base:
         root = make_isolated_root(base)
         log_a = os.path.join(base, "engine_a.log")
         log_b = os.path.join(base, "engine_b.log")

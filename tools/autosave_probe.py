@@ -79,6 +79,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence
 from probelib import boot, send, send_json, quit_engine, poll_until  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -851,7 +852,7 @@ def main() -> int:
         if args.keep_root:
             print(f"  (resource root kept at {root})")
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            probe_evidence.discard_scratch(base)
 
 
 if __name__ == "__main__":

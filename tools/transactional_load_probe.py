@@ -88,6 +88,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+import probe_evidence
 from probelib import boot, quit_engine, send, send_json, wait_load_published
 
 SAVE_PREFIX = "tload_probe_"
@@ -336,7 +337,7 @@ def main() -> int:
         root = make_isolated_root(tmpdir)
         return _run(args, root)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _run(args, root: str) -> int:

@@ -289,7 +289,14 @@ def collect_evidence(handoff) -> list:
     alone.
     """
     blocks = []
-    for run in failing_runs(handoff)[:MAX_EVIDENCE_RUNS]:
+    # Every failing run is tried, in order, until MAX_EVIDENCE_RUNS of them
+    # have readable evidence. The durable root prunes a probe's oldest
+    # failures (#2931), so the first runs listed may be gone while later
+    # ones are not: stopping at the first three would refuse an issue that
+    # newer, available evidence could have carried.
+    for run in failing_runs(handoff):
+        if len(blocks) >= MAX_EVIDENCE_RUNS:
+            break
         excerpts = run_excerpts(run["artifact_root"], run["artifact_dir"])
         if excerpts:
             blocks.append({**run, "excerpts": excerpts})
