@@ -414,6 +414,14 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                        "periodic thoughts (#351) are neutralised for the probe's "
                                        "own engine so a random 0-30s thought can't land inside its "
                                        "mood-drift sampling windows (#793)"),),
+    "persistence_system_cycles": (Reason(TARGETED, "the focused fresh-process save/load cycles of "
+                                      "combat engagement (#2834), exhaustion/sleep (#2835), "
+                                      "cardio/circulation (#2836), blood (#2837) and live "
+                                      "relation causes (#2548), split out of "
+                                      "persistence_contract (#2943); run it when changing those "
+                                      "subsystems' persistence or their save components. No CI "
+                                      "gate runs it; path-targeted selection is a follow-up "
+                                      "decision"),),
     # (no probes currently classified base-failing — the category stays
     # defined below for any future genuinely-broken-on-master case.)
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
@@ -533,7 +541,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                      "four real engine boots (three fresh-process save->load-"
                                      "save cycles) for the broader representative-scenario "
                                      "comparison, plus every cross-referenced probe it runs "
-                                     "(#767); the compact persistence_contract probe is "
+                                     "(#767); the persistence_contract probe (the generic "
+                                     "engines A-D plus the mind-episode engines) is "
                                      "CI-eligible instead"),),
     # #1440: the "two independent counts" #1247 already recorded in prose,
     # now one reason record each. Neither is a `flaky` claim: no recorded
