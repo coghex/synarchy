@@ -34,7 +34,7 @@ concrete precondition
 - [x] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades — [#2941]
 - [x] PRB-7. `tutorial_hud` failed three runs of three with no retained reason — [#2942]
 - [x] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x — [#2943]
-- [ ] PRB-9. Three pairs of companion probes pay two boots for one fixture
+- [x] PRB-9. Three pairs of companion probes pay two boots for one fixture — [no-issue]
 - [ ] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain
 - [ ] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run
 - [ ] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run
@@ -272,7 +272,9 @@ The 14 CI-eligible probes are the only ones that cost pull-request time, about 8
 - **Scope and constraints:** CI-eligible set changes require `python3 tools/ci_probes.py --self-test` and `python3 .quruntul/checks.py`.
 - **Remaining uncertainty:** Whether run C's 686 s was machine contention or a change in the probe; how much of `cargo_capacity`'s 85 s is the loop; whether a small def still exercises #189 (the bug is overfilling by base weight, so it should).
 
-### PRB-9. Three pairs of companion probes pay two boots for one fixture
+### [no-issue] PRB-9. Three pairs of companion probes pay two boots for one fixture
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification. The "saves up to 120 s" figure is each smaller probe's whole run time, but a merge removes only its boot and bootstrap: a complete arena probe, boot and checks included, runs in 15 s (`blood_decal`), so the realistic saving across all three pairs is about 15-45 s, unmeasured. Two pairs do not share a fixture: `save_barrier` is two engine boots and `save_storage` about ten, each in its own isolated root, and only the former is on the flake protocol; `save_pause` and `pause_speed` guard different issues (#42, #1599) and would merge into an 800-line probe. Only `collapse_crawl` and `concussion_revive` are a true companion pair, saving at most one boot (about 10-15 s). Any merge enlarges the scripts, lets one half's failure fail the other, and renames check ids and census/flake rows (five of the six are protocol probes). PRB-14's per-phase timing can reopen it.
 
 Three pairs share a fixture family, an issue, or a stated dependency, and each could be one probe with two sections.
 
