@@ -83,6 +83,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files, prepare_decoder
@@ -883,7 +884,7 @@ def main() -> int:
             # Preserve the uninstrumented lifecycle exactly.
             if proc is not None:
                 quit_engine(port, proc)
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            probe_evidence.discard_scratch(tmpdir)
         else:
             try:
                 if proc is not None:
@@ -896,7 +897,7 @@ def main() -> int:
                         chk.ok(False, f"generation evidence capture failed at "
                                       f"{destination}: {error}")
                 finally:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    probe_evidence.discard_scratch(tmpdir)
 
     if args.skip_cross_probes:
         keys: list[str] = []

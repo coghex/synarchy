@@ -27,6 +27,7 @@ import os
 import shutil
 from dataclasses import dataclass, field
 
+import probe_evidence
 from probelib import boot, send
 
 from .constants import MAX_STEP_TILES, REPO, STAGES
@@ -432,4 +433,4 @@ def remove_root(base: str, keep_root: bool) -> None:
     if keep_root:
         print(f"kept resource root: {base}", flush=True)
     else:
-        shutil.rmtree(base, ignore_errors=True)
+        probe_evidence.discard_scratch(base)

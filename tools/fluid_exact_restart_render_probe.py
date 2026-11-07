@@ -54,6 +54,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import boot, poll_until, quit_engine, send
 from offscreen_probe import find_widget, png_region_changed_pixels, screenshot
 from fluid_exact_restart_probe import (
@@ -162,7 +163,7 @@ def main() -> int:
     print(f"evidence directory: {out}")
 
     chk = Checks()
-    with tempfile.TemporaryDirectory(prefix="fluid_exact_restart_render_root_") as base:
+    with probe_evidence.temporary_directory(prefix="fluid_exact_restart_render_root_") as base:
         root = make_isolated_root(base)
 
         print("== engine A (headless): generate, flow a partial cell, save ==")

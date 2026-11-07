@@ -139,6 +139,7 @@ import os
 import tempfile
 import time
 
+import probe_evidence
 from probelib import FixtureNotRegistered, load_ai_stack, quit_engine, send
 from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
@@ -252,9 +253,11 @@ def main() -> int:
             # abort message quotes the path verbatim. It has just been
             # deleted with the rest of the tree, so say so here rather
             # than leave the operator chasing a path that is gone.
-            print("  (this run's engine log and fixture YAMLs went with its "
-                  "artifact directory — re-run with --keep-artifacts to keep "
-                  "them)")
+            print("  (this run's engine log and fixture YAMLs "
+                  + ("are kept in the runner's failure evidence)"
+                     if probe_evidence.evidence_dir() else
+                     "went with its artifact directory — re-run with "
+                     "--keep-artifacts to keep them)"))
     return 1 if leftover else rc
 
 

@@ -79,6 +79,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (FixtureNotRegistered, boot, clear_find_water,
                       init_arena, init_world, load_fixture_yaml, poll_until,
                       quit_engine, send, send_json, wait_load_published,
@@ -1135,7 +1136,7 @@ def main() -> int:
     finally:
         if proc is not None:
             quit_engine(args.port, proc)
-        shutil.rmtree(tmp, ignore_errors=True)
+        probe_evidence.discard_scratch(tmp)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
 """
 import argparse, glob, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
+import probe_evidence
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
                       wait_load_published, wait_save_complete)
@@ -241,30 +242,25 @@ def release_artifacts(art: RunArtifacts, keep: bool) -> bool:
     them, so the real `scripts/`, `assets/` and `data/` are never
     followed.
     """
-    if keep:
+    def describe(say):
         # Each line names what this run ACTUALLY produced. A run that
         # died before READY holds no fixtures and no save slot, and
         # saying otherwise would send the reader looking for files the
         # failure is the reason they do not have.
-        print(f"\nretained this run's artifacts (--keep-artifacts): "
-              f"{art.base}")
         for label, path in (("engine log", art.logs),
                             ("fixtures", art.fixtures),
                             ("saves", os.path.join(art.root, "saves"))):
-            print(f"  {label:14} {path}{_describe_held(path)}")
-        print(f"  {'resource root':14} {art.root}"
-              + ("" if os.path.isdir(art.root)
-                 else " (never created)"))
-        return True
-    try:
-        shutil.rmtree(art.base)
-    except OSError as exc:
-        print(f"  [FAIL] could not remove this run's artifact directory "
-              f"{art.base}: {exc}")
-        return False
-    if os.path.exists(art.base):
-        print(f"  [FAIL] this run's artifact directory survived removal: "
-              f"{art.base}")
+            say(f"  {label:14} {path}{_describe_held(path)}")
+        say(f"  {'resource root':14} {art.root}"
+            + ("" if os.path.isdir(art.root) else " (never created)"))
+
+    # The retention and removal rule is shared (`tools/probe_evidence.py`,
+    # #2931): under a runner the tree is retired into the attempt's
+    # evidence instead of deleted, and the runner keeps it on a failure.
+    message = probe_evidence.release_tree(art.base, keep=keep,
+                                          describe=describe)
+    if message:
+        print(f"  [FAIL] {message}")
         return False
     return True
 
@@ -861,13 +857,15 @@ def main():
         if not passed and not args.keep_artifacts:
             # A failure's primary evidence is the engine log, and some
             # paths above have already named it — `probelib.boot`'s
-            # abort message quotes the path verbatim. It has just been
-            # deleted with the rest of the tree, so say so here rather
-            # than leave the operator chasing a path that is no longer
-            # there.
+            # abort message quotes the path verbatim. Run directly it has
+            # just been deleted with the rest of the tree, so say so here
+            # rather than leave the operator chasing a path that is no
+            # longer there; under a runner it is kept with the attempt.
             print("  (this run's engine log, fixture YAMLs and save slot "
-                  "went with its artifact directory — re-run with "
-                  "--keep-artifacts to keep them)")
+                  + ("are kept in the runner's failure evidence)"
+                     if probe_evidence.evidence_dir() else
+                     "went with its artifact directory — re-run with "
+                     "--keep-artifacts to keep them)"))
     return 0 if passed and released else 1
 
 

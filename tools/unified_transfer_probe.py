@@ -187,6 +187,7 @@ import tempfile
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence
 from probelib import quit_engine
 from unified_transfer_probe_support import (Checks, SetupError, boot_offscreen,
                                             check_boundary_log,
@@ -304,7 +305,7 @@ def main() -> int:
         if args.keep_root:
             print(f"kept resource root: {base}", flush=True)
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            probe_evidence.discard_scratch(base)
         fp["stages"] = chk.outcomes()
         print(f"\nFINGERPRINT {json.dumps(fp, sort_keys=True)}", flush=True)
         chk.report()

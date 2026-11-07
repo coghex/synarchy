@@ -26,6 +26,7 @@ Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
 """
 import argparse, glob, math, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
+import probe_evidence
 import probe_protocol
 from probelib import (boot, capture_request_id, quit_engine, send,
                       wait_load_published, wait_save_complete)
@@ -141,7 +142,7 @@ def remove_run_root(base: str, rep=None) -> bool:
     # when emitting a later check would jump over unreached assertions.
     emit = rep.abort if rep is not None else print
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         emit(f"  [FAIL] could not remove this run's resource root "
               f"{base}: {exc}")

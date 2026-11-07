@@ -64,6 +64,7 @@ exist yet).
 Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
 """
+import probe_evidence
 import probe_protocol
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -344,7 +345,7 @@ def _run(args, rep):
                     args=["--resource-root", root] + rep.engine_args())
         return _exercise(port, proc, args, passed, rep)
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
 
 def _exercise(port, proc, args, passed, rep):

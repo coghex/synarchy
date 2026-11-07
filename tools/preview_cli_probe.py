@@ -111,6 +111,7 @@ Exit 0 = all checks passed.
 """
 from __future__ import annotations
 
+import probe_evidence
 import argparse
 import hashlib
 import json
@@ -805,7 +806,7 @@ def check_help() -> bool:
     base_env = {k: v for k, v in os.environ.items()
                 if k not in ("DISPLAY", "WAYLAND_DISPLAY", "SYNARCHY_ROOT")}
     results = []
-    with tempfile.TemporaryDirectory(prefix="synarchy-help-2863-") as work:
+    with probe_evidence.temporary_directory(prefix="synarchy-help-2863-") as work:
         root = os.path.join(work, "root")
         bare = os.path.join(work, "bare")
         os.mkdir(bare)

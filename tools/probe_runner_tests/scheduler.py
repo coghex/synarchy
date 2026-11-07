@@ -53,6 +53,7 @@ from .support import (
     wait_pid_gone,
 )
 
+import probe_evidence  # noqa: E402
 import probe_runner_diagnostics  # noqa: E402
 import probe_runner_resources  # noqa: E402
 from selftestlib import expect  # noqa: E402
@@ -452,7 +453,11 @@ def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
     proc = subprocess.Popen(
         [sys.executable, str(driver)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        start_new_session=True)
+        start_new_session=True,
+        # The driver runs outside `patched`, so it must be told where its
+        # failure evidence goes (#2931) or an interrupted synthetic probe
+        # would leave a directory in the operator's real durable root.
+        env={**os.environ, probe_evidence.ENV_ROOT: str(tree.evidence_root)})
     # Only interrupt once the probes we mean to catch have really booted
     # their engines -- otherwise the test proves nothing.
     ready = all(wait_file(tree.root / f"{name}.enginepid") for name in wait_for)

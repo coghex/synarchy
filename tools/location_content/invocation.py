@@ -23,6 +23,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, capture_request_id, send, wait_load_published,
                       wait_save_complete)
 
@@ -133,7 +134,7 @@ def remove_isolated_root(base: str) -> str | None:
     to fail with.
     """
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         return (f"could not remove this run's temporary resource root "
                 f"{base}: {exc}")
@@ -280,21 +281,28 @@ def release_artifacts(art: RunArtifacts, keep: bool) -> str | None:
     removal is mandatory and #1620 requirement 6's reporting is exactly
     as it was, because this delegates to `remove_isolated_root`.
     """
-    if keep:
+    def describe(say):
         # Each line names what this run ACTUALLY produced. A run that
         # died before READY holds no fixtures and no save slot, and
         # saying otherwise would send the reader looking for files the
         # failure is the reason they do not have.
-        print(f"\nretained this run's artifacts (--keep-artifacts): "
-              f"{art.base}")
         for label, path in (("engine log", art.logs),
                             ("fixtures", art.fixtures),
                             ("saves", os.path.join(art.root, "saves"))):
-            print(f"  {label:14} {path}{_describe_held(path)}")
-        print(f"  {'resource root':14} {art.root}"
-              + ("" if os.path.isdir(art.root) else " (never created)"))
-        return None
-    return remove_isolated_root(art.base)
+            say(f"  {label:14} {path}{_describe_held(path)}")
+        say(f"  {'resource root':14} {art.root}"
+            + ("" if os.path.isdir(art.root) else " (never created)"))
+
+    # `remove_isolated_root`'s wording is #1620 requirement 6's reporting,
+    # and the shared rule (`tools/probe_evidence.py`, #2931) keeps it
+    # verbatim: under a runner the tree is retired into the attempt's
+    # evidence instead of deleted, and the runner keeps it on a failure.
+    return probe_evidence.release_tree(
+        art.base, keep=keep, describe=describe,
+        removal_failed=("could not remove this run's temporary resource root "
+                        "{base}: {error}"),
+        survived=("this run's temporary resource root {base} still exists "
+                  "after removal"))
 
 
 def boot_isolated(port: int, art: RunArtifacts, **kwargs):

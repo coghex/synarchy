@@ -26,6 +26,7 @@ import threading
 import time
 
 import probe_engine
+import probe_evidence
 import probe_protocol
 import probe_runner_resources as resources
 import save_compat_audit_codec
@@ -305,7 +306,8 @@ def run_one(script: str, port: int | None, timeout: float,
             artifact_dir: str | None = None,
             engine_log_dir: str | None = None,
             rts_caps: int | None = None,
-            hold_env: dict[str, str] | None = None):
+            hold_env: dict[str, str] | None = None,
+            evidence_dir: str | None = None):
     """Launch one probe, capture it, and reap its whole process group.
 
     The four `probe-result/v1` keyword parameters are that protocol's
@@ -316,6 +318,13 @@ def run_one(script: str, port: int | None, timeout: float,
     another runner. Every one defaults to None, which passes no
     environment override at all — so every pre-existing positional
     caller behaves exactly as it did.
+
+    `evidence_dir` (#2931) is the runner-owned directory this execution's
+    scratch lives in: the child's `TMPDIR` points into it and
+    `SYNARCHY_PROBE_EVIDENCE_DIR` names it, so the probe's own cleanup
+    defers to the runner, which keeps it on a failing outcome. Like the
+    protocol variables, the inherited `SYNARCHY_PROBE_EVIDENCE_DIR` is
+    dropped first, so a stale export never decides where evidence goes.
     """
     cmd = ["python3", os.path.join("tools", script)]
     if port is not None:
@@ -330,8 +339,11 @@ def run_one(script: str, port: int | None, timeout: float,
                                       engine_log_dir, rts_caps)
     child_env = {k: v for k, v in os.environ.items()
                  if k not in probe_protocol.PROTOCOL_ENV_VARS
+                 and k != probe_evidence.ENV_EVIDENCE_DIR
                  and k not in resources.RUNNER_ENV_VARS}
     child_env.update(protocol_env)
+    if evidence_dir is not None:
+        child_env.update(probe_evidence.child_environment(evidence_dir))
     # The engine every probe launches (#1570), resolved once by
     # `tools/run_probes.py`'s preflight, and read from the resource owner's
     # single cell. Stripped-then-set for the same reason the protocol

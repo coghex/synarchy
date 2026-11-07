@@ -97,6 +97,7 @@ Exit 0 = every saved entity survived on its correct page.
 """
 from __future__ import annotations
 
+import probe_evidence
 import probe_protocol
 import argparse
 import glob
@@ -753,6 +754,7 @@ def _run(args, rep):
     # data (false pass) and the cleanup delete a dir this run didn't create.
     save_name = f"{SAVE_PREFIX}{uuid.uuid4().hex[:12]}"
     save_dir = os.path.join("saves", save_name)
+    probe_evidence.register_owned_path(save_dir)  # archived if we are killed
     save_file = os.path.join(save_dir, "world.synworld")
     # Belt-and-suspenders on top of the random name: never reuse/clobber an
     # existing directory, so file existence below is proof THIS run wrote it.
@@ -1014,7 +1016,7 @@ def _run(args, rep):
             quit_engine(args.port, procB)
         # Scoped cleanup: only ever remove a dir this probe created.
         if os.path.basename(save_dir).startswith(SAVE_PREFIX) and os.path.isdir(save_dir):
-            shutil.rmtree(save_dir, ignore_errors=True)
+            probe_evidence.retire_saves(save_dir)
 
 
 if __name__ == "__main__":

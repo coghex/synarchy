@@ -41,6 +41,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 import probe_engine
 import probe_protocol
 from probelib import GUI_PORT, send, quit_engine
@@ -253,6 +254,7 @@ def _run(args, rep):
     env["SYNARCHY_ROOT"] = str(REPO)
     log_path = rep.engine_log_path("resource_root_engine.log", LOG)
     logf = open(log_path, "w")
+    probe_evidence.record_engine_log(log_path)  # not via probelib.boot (#2931)
     proc = subprocess.Popen([binary, "--headless", "--port", str(args.port)] + rep.engine_args(),
                             cwd=tmp, env=env,
                             stdout=logf, stderr=subprocess.STDOUT)

@@ -77,6 +77,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 import probe_engine
 from probelib import GUI_PORT, lua_string, quit_engine, send, send_json
 
@@ -215,6 +216,7 @@ class Engine:
         self.log = os.path.join(logdir, f"{label}.log")
         cmd = [engine_exe(logdir), mode, "--port", str(port), "--resource-root", root, *args]
         self.logf = open(self.log, "w")
+        probe_evidence.record_engine_log(self.log)  # not via probelib.boot (#2931)
         self.proc = subprocess.Popen(cmd, cwd=launch, stdout=self.logf,
                                      stderr=subprocess.STDOUT)
 
@@ -616,7 +618,7 @@ def main() -> int:
         if FAILED:
             print(f"\nlogs retained at {ctx['logs']}")
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            probe_evidence.discard_scratch(base)
     print()
     if FAILED:
         print(f"FAIL: {len(FAILED)} check(s) failed")

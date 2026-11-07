@@ -59,6 +59,7 @@ import subprocess
 import sys
 import time
 import uuid
+import probe_evidence
 import probe_protocol
 from probelib import (quit_engine, boot, send, capture_request_id,
                       wait_load_published)
@@ -245,6 +246,7 @@ def _run(args, rep):
     # Never reuse or clobber an existing save directory (belt-and-suspenders
     # on top of the random SAVE_NAME).
     save_dir = os.path.join("saves", SAVE_NAME)
+    probe_evidence.register_owned_path(save_dir)  # archived if we are killed
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
 
@@ -486,7 +488,7 @@ def _run(args, rep):
         # name is unique to this run and main() refused to start if it already
         # existed, so nothing here predates us.
         if os.path.isdir(save_dir):
-            shutil.rmtree(save_dir, ignore_errors=True)
+            probe_evidence.retire_saves(save_dir)
 
     if failures:
         rep.warn("save/load pause checks failed", {"failures": failures})

@@ -57,6 +57,7 @@ Exit 0 = every check above passed.
 """
 from __future__ import annotations
 
+import probe_evidence
 import probe_protocol
 import argparse
 import glob
@@ -539,7 +540,7 @@ def _run(args, rep):
             quit_engine(args.port, proc_b)
         if proc_c is not None:
             quit_engine(args.port, proc_c)
-        shutil.rmtree(tmp, ignore_errors=True)
+        probe_evidence.discard_scratch(tmp)
 
 
 if __name__ == "__main__":

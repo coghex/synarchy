@@ -121,6 +121,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import (boot, pause_ai, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files, prepare_decoder
@@ -1789,7 +1790,7 @@ def main() -> int:
     finally:
         if proc is not None:
             quit_engine(port, proc)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        probe_evidence.discard_scratch(tmpdir)
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: {chk.failed} check(s) failed")
     return 0 if chk.failed == 0 else 1

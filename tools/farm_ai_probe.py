@@ -69,6 +69,7 @@ Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
 """
 import argparse, glob, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
+import probe_evidence
 from probelib import (boot, capture_request_id, clear_find_water, quit_engine,
                       send, send_json, wait_load_published, wait_save_complete)
 
@@ -154,7 +155,7 @@ def remove_run_root(base: str) -> bool:
     exists to prevent, so it must not be reported as a pass.
     """
     try:
-        shutil.rmtree(base)
+        probe_evidence.retire(base)
     except OSError as exc:
         print(f"  [FAIL] could not remove this run's resource root "
               f"{base}: {exc}")

@@ -1830,6 +1830,7 @@ jobs:
           python3 tools/test_probe_census.py
           python3 tools/test_probe_claim.py
           python3 tools/test_probe_resource_lock.py
+          python3 tools/test_probe_evidence.py
           python3 tools/test_deflake.py
           python3 tools/test_location_embark_probe.py
           python3 tools/test_location_probe_config_isolation.py

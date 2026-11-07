@@ -168,6 +168,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_evidence
 from probelib import boot, quit_engine
 import tutorial_probe_ordinary as ordinary
 import tutorial_probe_sticky as sticky
@@ -191,11 +192,12 @@ def remove_probe_slot(slot: str = SLOT) -> None:
         raise ProbeError(f"refusing to remove a slot this probe does not own: {slot!r}")
     saves = os.path.join(REPO_ROOT, "saves")
     target = os.path.join(saves, slot)
+    probe_evidence.register_owned_path(target)  # archived if we are killed
     if (os.path.basename(target) == slot
             and os.path.dirname(target) == saves
             and os.path.isdir(target)
             and not os.path.islink(target)):
-        shutil.rmtree(target)
+        probe_evidence.retire_saves(target, strict=True)
 
 
 def remove_probe_slots() -> None:

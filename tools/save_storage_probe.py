@@ -56,6 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_evidence
 from probelib import boot, quit_engine, send, wait_load_published
 
 REPO = Path(__file__).resolve().parent.parent
@@ -345,7 +346,7 @@ def main() -> int:
         restore_generations(root, baseline)
         fail_dir = slot_dir(root, FAIL_SLOT)
         if os.path.isdir(fail_dir):
-            shutil.rmtree(fail_dir)
+            probe_evidence.retire(fail_dir)
         elif os.path.exists(fail_dir):
             os.remove(fail_dir)
         os.makedirs(os.path.dirname(fail_dir), exist_ok=True)
@@ -399,7 +400,7 @@ def main() -> int:
         flat = legacy_flat_path(root)
         write_bytes(flat, legacy_bytes)
         if os.path.isdir(slot_dir(root, LEGACY_SLOT)):
-            shutil.rmtree(slot_dir(root, LEGACY_SLOT))
+            probe_evidence.retire(slot_dir(root, LEGACY_SLOT))
         proc = boot_probe(root, args.port, log)
         try:
             send(args.port, f'world.init("probe3",{args.seed},64,3)',
@@ -493,7 +494,7 @@ def main() -> int:
                 proc.kill()
 
     finally:
-        shutil.rmtree(tmp_base, ignore_errors=True)
+        probe_evidence.discard_scratch(tmp_base)
 
     print("\nPASS: atomic save storage publishes/retains generations "
           "correctly, load-source selection always picks a complete "

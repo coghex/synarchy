@@ -564,6 +564,7 @@ HARNESS_MODULES = (
     "tools/probe_resource_lock.py",
     "tools/probe_select.py",
     "tools/probe_engine.py",
+    "tools/probe_evidence.py",
     "tools/probelib.py",
     "tools/run_probes.py",
     "tools/probe_runner_registry.py",
