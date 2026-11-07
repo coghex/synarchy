@@ -607,14 +607,29 @@ The routine current-save gates are:
 - `python3 tools/current_save_schema_audit.py --base-ref origin/master`
 - `python3 tools/test_save_compat_audit.py`
 - `cabal test synarchy-test-headless --test-options='--match "current save schema"'`
-- `persistence_contract` probe, which exercises three fresh-process save/load
-  cycles through the real engine and compiled codec
+- `persistence_contract` probe, the CI core: three fresh-process save/load
+  cycles through the real engine and compiled codec (engines A-D), plus the
+  S11a mind-episode engines (an old-default save, its changed-default load
+  repair and a second generation that repairs nothing)
+- `persistence_system_cycles` probe, **manual-only and in no CI gate** (#2943):
+  run it when changing combat engagement, exhaustion/sleep, cardio, blood or
+  relation-cause persistence, or their save components
+  (`python3 tools/run_probes.py --only persistence_system_cycles --exact`)
 
 CI runs the compiled-schema audit on every code revision, using the actual
 committed base revision. The local `tools/ci-local.sh` gate includes the same
 check against `origin/master`, plus tracked edits. The selected Hspec group and
-the current audit self-tests do not require a live-probe slot; the
-`persistence_contract` engine probe uses the project's coordinated slot.
+the current audit self-tests do not require a live-probe slot, and neither
+persistence probe does: they are headless, so they take no probe-slot grant, and
+the runner's host-wide resource locks cover concurrency (CLAUDE.md §Testing
+tiers).
+
+After #2943 a save-affecting pull request's CI runs the `persistence_contract`
+core only (engines A-D plus the mind-episode engines; 265 s in one focused run
+on 2026-11-07, against about 686 s for the old combined probe, whose system
+cycles now take 642 s in `persistence_system_cycles`). The engagement,
+exhaustion/sleep, cardio, blood and relation-cause cycles are no longer in any
+CI gate; they live in `persistence_system_cycles` and run on request.
 
 ### Public-release checklist
 
@@ -646,11 +661,17 @@ The focused headless suites are:
 - `Lua persistence components` — production Lua module registry and payload
   behavior.
 
-The compact `persistence_contract` probe remains the required engine-level
-save/load gate for persistence changes. It saves and loads through three fresh
+The `persistence_contract` probe remains the required engine-level save/load
+gate for persistence changes. Its core saves and loads through three fresh
 processes, checks structural equality and Lua payload bytes, and covers reset
-policy and paused-session stability. The broader `persistence_contract_sweep`
-and feature-specific probes retain their own selection and ownership rules.
+policy and paused-session stability; three further engines carry the S11a
+mind-episode checks (the pre-S11b registry's old-default save, the load that
+normalizes its changed defaults, and a second generation). The focused system
+cycles (combat engagement, exhaustion/sleep, cardio, blood, live relation
+causes) are the separate manual-only `persistence_system_cycles` probe: no CI
+gate runs it, so anyone changing those subsystems' persistence or their save
+components runs it. The broader `persistence_contract_sweep` and
+feature-specific probes retain their own selection and ownership rules.
 
 No historical fixture corpus, migration replay probe, or historical
 audit/reproducibility gate is maintained before public release. Existing
