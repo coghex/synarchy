@@ -32,7 +32,7 @@ concrete precondition
 - [x] PRB-4. `unified_transfer` re-proves what three stage probes and Hspec already gate — [#2935]
 - [x] PRB-5. `repair_ai` is flaky and shadowed by an Hspec group; `construction` costs 3-4x its recorded time — [#2939] [#2940]
 - [x] PRB-6. `bleeding_trail` spends its time in real-time dwells that Hspec already grades — [#2941]
-- [ ] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
+- [x] PRB-7. `tutorial_hud` failed three runs of three with no retained reason — [#2942]
 - [ ] PRB-8. The CI probe set: `cargo_capacity` loops to overfill a 200 kg store; `persistence_contract` varied 4.5x
 - [ ] PRB-9. Three pairs of companion probes pay two boots for one fixture
 - [ ] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain
@@ -209,7 +209,9 @@ The blood family is covered in-process by six Hspec files; the real-engine probe
 - **Scope and constraints:** The probe reports `probe-result/v1` checks; the lab and census key tests by check name, so removed checks need the census row reconciled (`python3 .quruntul/checks.py`).
 - **Remaining uncertainty:** Which individual checks Hspec fully duplicates was matched by group name, not assertion.
 
-### PRB-7. `tutorial_hud` failed three runs of three with no retained reason
+### [#2942] PRB-7. `tutorial_hud` failed three runs of three with no retained reason
+
+> **Note:** Re-verified 2026-11-07 and decided by the owner: fix it, do not retire it. Correction to the finding: the reason is retained. The lab logs name the same failed checks in all three runs: the frame beneath the HUD is not still between screenshots of an unchanged state (transparency fraction 1.000, "frame held still" failing for the caption and every shipped row), which is a probe-or-render fault, not a wrong HUD value. No green run is on record.
 
 `tutorial_hud` is the GPU-backed gate for the tutorial checklist HUD. It failed in runs A, B and C (299, 300, 269 s) and the runner tail names no failed check.
 
