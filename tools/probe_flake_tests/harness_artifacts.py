@@ -272,10 +272,16 @@ def test_failure_evidence_pruning_counts_failed_runs() -> None:
                f"a four-failure batch keeps only its newest two runs ({left})")
         m2 = run_synthetic(tree, "fail", runs=1, artifact_root=None)
         probe_dir = durable.resolve() / "synthetic"
-        runs = sorted(str(p.relative_to(probe_dir))
-                      for p in probe_dir.glob("*/run-*"))
-        expect(len(runs) == 2 and runs[-1].startswith(m2.invocation_dir.name),
-               f"the limit holds across batches too ({runs})")
+        runs = {str(p.relative_to(probe_dir))
+                for p in probe_dir.glob("*/run-*")}
+        # Invocation NAMES carry a second-resolution timestamp and a random
+        # suffix, so their sort order says nothing about which is newer:
+        # the expected set is spelled out instead.
+        expected = {f"{m.invocation_dir.name}/run-004",
+                    f"{m2.invocation_dir.name}/run-001"}
+        expect(runs == expected,
+               f"the limit holds across batches too, keeping the two newest "
+               f"failed runs ({sorted(runs)} vs {sorted(expected)})")
         expect(m.invocation_dir.exists() and (m.invocation_dir /
                probe_evidence.MARKER).exists(),
                "an invocation that still holds a run keeps its marker")

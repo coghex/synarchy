@@ -67,7 +67,7 @@ SCRATCH_PROBE = textwrap.dedent('''\
     fixed = {fixed!r}
     open(fixed, 'w').write('engine output %d\\n' % attempt)
     probe_evidence.record_engine_log(fixed)
-    print('FAIL: a check failed' if code != '0' else 'all good')
+    print('all good' if code in ('0', 'strict') else 'FAIL: a check failed')
     if code == 'hang':
         time.sleep(600)
     if code == 'strict':
@@ -296,6 +296,17 @@ def test_a_failed_removal_after_strict_cleanup_fails_the_run() -> None:
         expect(len(attempts(tree, "strict")) == 1
                and str(attempts(tree, "strict")[0].resolve()) in out_strict,
                "and the leftover is kept and named")
+        strict_dir = attempts(tree, "strict")[0]
+        expect((strict_dir / probe_evidence.MARKER).is_file(),
+               "finalized like any failure, so it can be pruned later")
+        expect("retired scratch could not be removed" in
+               (strict_dir / probe_evidence.CAPTURE_FILE).read_text()
+               and "all good" in
+               (strict_dir / probe_evidence.CAPTURE_FILE).read_text(),
+               "with the probe's captured output and the cleanup diagnostic")
+        expect(len(list((strict_dir / probe_evidence.ENGINE_LOG_DIR)
+                        .glob("*"))) == 1,
+               "and the engine log it booted at a fixed path")
         expect(rc_lenient == 0,
                "a lenient discard_scratch leftover does not fail a pass, as "
                "before")
@@ -349,6 +360,128 @@ def test_saves_outside_the_attempt_are_copied_before_removal() -> None:
         os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
         if saved is not None:
             os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_a_failed_save_copy_leaves_the_original_in_place() -> None:
+    print("\n-- retire_saves never destroys the only copy of a save")
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    real = shutil.copytree
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-copyfail-") as temp:
+            temp = Path(temp).resolve()
+            attempt = temp / "attempt"
+            attempt.mkdir()
+            slot = temp / "saves" / "slot"
+            slot.mkdir(parents=True)
+            (slot / "world.synworld").write_text("the save")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+
+            def refuse(*args, **kwargs):
+                raise OSError("synthetic: no space left")
+
+            shutil.copytree = refuse
+            import contextlib
+            import io
+            seen = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(seen):
+                    probe_evidence.retire_saves(slot)
+                lenient_raised = False
+            except OSError:
+                lenient_raised = True
+            expect(not lenient_raised and (slot / "world.synworld").exists(),
+                   "a lenient remover keeps the original when it cannot copy")
+            expect(str(slot) in seen.getvalue()
+                   and "left in place" in seen.getvalue()
+                   and "no space left" in seen.getvalue(),
+                   f"and names where it is and why ({seen.getvalue()!r})")
+            try:
+                probe_evidence.retire_saves(slot, strict=True)
+                strict_raised = False
+            except OSError as error:
+                strict_raised = "left in place" in str(error)
+            expect(strict_raised and (slot / "world.synworld").exists(),
+                   "a strict remover fails, since its cleanup did not happen")
+    finally:
+        shutil.copytree = real
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_the_expedition_cleanup_helper_retires_the_tree() -> None:
+    print("\n-- expedition_loop's nested remove_root keeps the tree under a runner")
+    from expedition_loop import harness  # noqa: E402
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-expedition-") as temp:
+            temp = Path(temp).resolve()
+            attempt = temp / "attempt"
+            (attempt / "tmp").mkdir(parents=True)
+            base = attempt / "tmp" / "synarchy_expedition_loop_x"
+            (base / "saves").mkdir(parents=True)
+            (base / "saves" / "world.synworld").write_text("the save")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt)
+            harness.remove_root(str(base), False)
+            kept = list((attempt / probe_evidence.RETIRED_DIR).glob(
+                "synarchy_expedition_loop_x-*/saves/world.synworld"))
+            expect(not base.exists() and len(kept) == 1
+                   and kept[0].read_text() == "the save",
+                   "the real helper leaves the save in the attempt")
+    finally:
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+
+
+def test_directly_launched_engine_logs_survive_finalization() -> None:
+    print("\n-- engines launched without probelib.boot are still kept")
+    import debug_console_boot_probe as dcb  # noqa: E402
+    saved = os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+    real = dcb.probe_engine.engine_command
+    try:
+        with tempfile.TemporaryDirectory(prefix="evidence-launch-") as temp:
+            temp = Path(temp).resolve()
+            retention = probe_evidence.Retention(temp / "root", 5, trees=[])
+            retention.root.mkdir()
+            attempt = retention.begin("debug_console_boot")
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = str(attempt.path)
+            port = 9941
+            dcb.probe_engine.engine_command = lambda args: [
+                sys.executable, "-c",
+                "import sys; print('launch stdout line'); "
+                "sys.stderr.write('launch stderr line\\n')"]
+            outputs = []
+            for call in (lambda: dcb.check_successful_bind(port),
+                         lambda: dcb.observe_widget_modules(port, "", "stub")):
+                import contextlib
+                import io
+                with contextlib.redirect_stdout(io.StringIO()):
+                    call()
+            listed = (attempt.path / probe_evidence.ENGINE_LOG_MANIFEST
+                      ).read_text().split()
+            expect(len(listed) == 4 and all(p.startswith("/tmp/") for p in listed),
+                   f"both launchers listed both of their streams ({listed})")
+            attempt.finish("FAIL")
+            kept = sorted((attempt.path / probe_evidence.ENGINE_LOG_DIR
+                           ).glob("*"))
+            texts = [p.read_text() for p in kept]
+            expect(len(kept) == 4
+                   and sum("launch stdout line" in t for t in texts) == 2
+                   and sum("launch stderr line" in t for t in texts) == 2,
+                   "and a failure keeps all four with their contents")
+            for path in listed:
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+    finally:
+        dcb.probe_engine.engine_command = real
+        os.environ.pop(probe_evidence.ENV_EVIDENCE_DIR, None)
+        if saved is not None:
+            os.environ[probe_evidence.ENV_EVIDENCE_DIR] = saved
+    for name in ("resource_root", "scenario_entrypoint"):
+        text = (Path(__file__).parent / f"{name}_probe.py").read_text()
+        expect("probe_evidence.record_engine_log(" in text,
+               f"{name}_probe.py lists the log of the engine it launches itself")
 
 
 def test_a_symlinked_probe_directory_cannot_reach_a_worktree() -> None:
@@ -517,7 +650,8 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                 "fluid_exact_restart_render", "fluid_reaction",
                 "fluid_reaction_visual", "debug_console_boot", "audio_null",
                 "save_pause", "multiworld_save", "lua_orphan_prune",
-                "pause_speed", "tutorial", "tutorial_hud")
+                "pause_speed", "tutorial", "tutorial_hud",
+                "expedition_loop")
     call = re.compile(r"^[^#\n]*\bshutil\.rmtree\(", re.M)
     for name in migrated:
         text = (Path(__file__).parent / f"{name}_probe.py").read_text()
@@ -767,6 +901,9 @@ TESTS = (
     test_a_root_inside_a_worktree_is_refused,
     test_a_failed_removal_after_strict_cleanup_fails_the_run,
     test_saves_outside_the_attempt_are_copied_before_removal,
+    test_a_failed_save_copy_leaves_the_original_in_place,
+    test_the_expedition_cleanup_helper_retires_the_tree,
+    test_directly_launched_engine_logs_survive_finalization,
     test_a_symlinked_probe_directory_cannot_reach_a_worktree,
     test_a_bad_keep_count_is_refused_not_defaulted,
     test_pruning_keeps_the_newest_n_and_only_what_it_owns,

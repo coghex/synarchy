@@ -437,6 +437,10 @@ def check_successful_bind(port: int) -> bool:
     log_out = f"/tmp/debug_console_boot_probe_{port}.out"
     log_err = f"/tmp/debug_console_boot_probe_{port}.err"
     with open(log_out, "w") as fo, open(log_err, "w") as fe:
+        # Not launched through `probelib.boot`, so listed for the runner
+        # here (#2931): a failing run keeps both streams.
+        probe_evidence.record_engine_log(log_out)
+        probe_evidence.record_engine_log(log_err)
         proc = subprocess.Popen(
             probe_engine.engine_command(["--headless", "--port", str(port)]),
             stdout=fo, stderr=fe, cwd=REPO_ROOT,
@@ -678,6 +682,8 @@ def observe_widget_modules(port: int, resource_root: str = "",
     if resource_root:
         args += ["--resource-root", resource_root]
     with open(log_out, "w") as fo, open(log_err, "w") as fe:
+        probe_evidence.record_engine_log(log_out)
+        probe_evidence.record_engine_log(log_err)
         proc = subprocess.Popen(
             probe_engine.engine_command(args),
             stdout=fo, stderr=fe, cwd=REPO_ROOT, start_new_session=True)

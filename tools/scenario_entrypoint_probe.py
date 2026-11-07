@@ -216,6 +216,7 @@ class Engine:
         self.log = os.path.join(logdir, f"{label}.log")
         cmd = [engine_exe(logdir), mode, "--port", str(port), "--resource-root", root, *args]
         self.logf = open(self.log, "w")
+        probe_evidence.record_engine_log(self.log)  # not via probelib.boot (#2931)
         self.proc = subprocess.Popen(cmd, cwd=launch, stdout=self.logf,
                                      stderr=subprocess.STDOUT)
 

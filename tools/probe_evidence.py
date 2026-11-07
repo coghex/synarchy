@@ -375,6 +375,13 @@ class Attempt:
         self.finished = True
         if outcome == PASS:
             strict = (self.path / STRICT_MARK).exists()  # before the delete
+            manifest = None
+            if strict:
+                # A delete that fails part-way has already taken files, the
+                # engine-log list among them; keep it to rebuild below.
+                with contextlib.suppress(OSError):
+                    manifest = (self.path / ENGINE_LOG_MANIFEST).read_text(
+                        encoding="utf-8")
             try:
                 shutil.rmtree(self.path)
             except FileNotFoundError:
@@ -382,12 +389,23 @@ class Attempt:
             except OSError as error:
                 say(f"could not remove the passing run's scratch directory "
                     f"{self.path}: {error}")
-                if strict:
-                    self.removal_error = (
-                        f"the probe's retired scratch could not be removed "
-                        f"({self.path}): {error}")
-                return self.path
-            return None
+                if not strict:
+                    return self.path
+                # A cleanup contract the runner could not finish: the run is
+                # now a FAILURE, and goes through exactly the retention a
+                # failure gets -- output, engine logs, marker, pruning.
+                self.removal_error = (
+                    f"the probe's retired scratch could not be removed "
+                    f"({self.path}): {error}")
+                outcome = "FAIL"
+                if manifest is not None and not (
+                        self.path / ENGINE_LOG_MANIFEST).exists():
+                    with contextlib.suppress(OSError):
+                        (self.path / ENGINE_LOG_MANIFEST).write_text(
+                            manifest, encoding="utf-8")
+                capture = (capture or "") + f"\n  [FAIL] {self.removal_error}\n"
+            else:
+                return None
         if capture is not None:
             try:
                 (self.path / CAPTURE_FILE).write_text(
@@ -603,8 +621,8 @@ def retire_saves(path, *, strict: bool = False) -> None:
     did. Under a runner the slot is first copied into the attempt's
     `retired/` directory, then removed, so a failing run keeps the save it
     needs for diagnosis while the shared `saves/` still ends up clean. A
-    copy that fails is reported and the removal still happens: a leftover
-    slot in the shared directory would be the worse outcome. `strict`
+    copy that fails leaves the original where it is and says so -- losing
+    the only copy of the evidence is the worse outcome. `strict`
     mirrors `shutil.rmtree(path)` (errors raise) instead of
     `ignore_errors=True`.
     """
@@ -617,8 +635,16 @@ def retire_saves(path, *, strict: bool = False) -> None:
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copytree(path, destination, symlinks=True)
         except OSError as error:
-            print(f"could not keep a copy of {path} as failure evidence: "
-                  f"{error}", file=sys.stderr)
+            # No copy exists, so the original IS the evidence: it stays
+            # where it is, and the failure names it. A strict caller fails
+            # (its cleanup did not happen); a lenient one is told on stderr.
+            shutil.rmtree(destination, ignore_errors=True)
+            message = (f"could not keep a copy of {path} as failure evidence "
+                       f"({error}); the original is left in place at {path}")
+            if strict:
+                raise OSError(message) from error
+            print(message, file=sys.stderr)
+            return
     if strict:
         shutil.rmtree(path)
     else:
