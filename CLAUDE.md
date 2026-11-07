@@ -117,6 +117,16 @@ another owner's processes. User cancellation still ends the wait immediately.
   Probe eligibility and path selection live in `tools/ci_probes.py`
   (`--status`; run `--self-test` when changing it). Tool documentation:
   [tools/README.md](tools/README.md).
+- **One GPU/desktop probe at a time, machine-wide, is enforced by a lock: no
+  manual probe-slot grant is needed (#2932).** A probe that opens a window or a
+  Vulkan device (`--offscreen`, `--preview`, a graphical boot; every probe
+  classified `needs-gpu` in `tools/ci_probes.py --status`) holds the host-wide
+  `gpu-desktop` resource exclusively, across worktrees and clones. It waits,
+  printing who holds it and since when, and never fails or times out because
+  another checkout's GPU probe is running; a dead holder is released by the
+  lock itself. `run_probes.py`, `probe_flake.py` and probes run by hand all take
+  it, and headless and `--dump` probes never do. Do not ask the manager for a
+  slot to run a probe. Details: `tools/README.md` §The `gpu-desktop` hold.
 - **A failing probe keeps its evidence.** `run_probes.py` and `probe_flake.py`
   keep a failed, errored or timed-out attempt's directory (scratch trees, save
   slots, engine logs) under `~/.local/state/synarchy/probe-failures/<probe>/`
