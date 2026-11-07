@@ -38,7 +38,7 @@ concrete precondition
 - [x] PRB-10. Save/load and fluid fresh-process probes: keep, with one cost to explain — [no-issue]
 - [x] PRB-11. Physiology, mind, combat and AI probes: keep, with three red in the latest run — [#2944] [#2945]
 - [x] PRB-12. Location, rendering and GPU probes: keep, with two red in the latest run — [no-issue]
-- [ ] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
+- [x] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep — [no-issue]
 - [ ] PRB-14. The cost and value data needed to rank probes is not tracked
 - [ ] PRB-15. Every probe boot loads the game definitions one console round trip per YAML file
 
@@ -422,7 +422,9 @@ Nineteen probes whose value is in pixels, windows, GPU resources or generated-wo
 - **Scope and constraints:** Sprite and render signoff rules in CLAUDE.md still apply.
 - **Remaining uncertainty:** Which of `location_content`'s phases accounts for its 436-714 s spread.
 
-### PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
+### [no-issue] PRB-13. Boot, config and encoding contract probes are cheap and earn their keep
+
+> **Disposition:** No issue — owner decision 2026-11-07, after re-verification: keep all five probes as they are. All five passed in all three runs (run C 41 s in total) and each guards a real-process contract Hspec cannot state: the executable run from outside the repo (#636), the gitignored runtime config boundary against `git status` (#638, #1937), the per-file DEBUG and single INFO asset-logging ownership (#1930), and `decodeUtf8` not throwing on malformed bytes through the real Lua API (#618). `config_migration` (10 s, the pre-#661 legacy config upgrade path) is the same kind of legacy-compatibility protection that #2912 made opt-in for saves; the owner chose to keep it routine, as making it opt-in would save only 10 s. The 3 s `text_encoding` boot is recorded as evidence under PRB-15.
 
 Five probes of 3-12 s each guard contracts only a real boot can show.
 
@@ -479,6 +481,7 @@ Added 2026-11-07 while processing PRB-10 (owner decision: append as a new unproc
 
 - `tools/cargo_capacity_probe.py:30-47` — `bootstrap()` loops over eight `data/<family>/*.yaml` globs and calls `send(PORT, f"{fn}('{path}'); return 'ok'")` once per file; the probe then makes about 180 more round trips in its overfill loop and takes 85-86 s in all three shakedown runs, which puts a console round trip at roughly 0.2-0.3 s and the 75-file bootstrap at roughly 15-25 s. This is an inference from one probe's total, not a measurement.
 - `tools/persistence_contract_probe.py:230-243` and `tools/gameplay_tag_persistence_probe.py:143` define the same `bootstrap_defs`; the former boots about 20 fresh engines and the latter about 11, each calling it (`persistence_contract` 686 s in run C, `gameplay_tag_persistence` 395 s, both about 34 s per engine).
+- `tools/text_encoding_probe.py` (PRB-13) boots a real engine, runs its checks and quits in 3 s in all three shakedown runs, so the bare cost of an engine boot is about 3 s; the 15-34 s per engine seen in the arena and persistence probes is therefore mostly bootstrap (the per-YAML console loading) and the engine's world setup, not the engine itself. Also an inference until the first-step measurement is taken.
 - `git grep -l "engine.loadItemYaml" -- tools` returns 71 files, many with a private copy of the loop (`bootstrap_defs` in `bleeding_trail`, `blood_impact`, `circadian`, `combat_anim`, `item_instance`, `lua_orphan_prune` and others, `load_defs` in `location_content` and `location_stamp_idempotent`). I found no bulk loader verb in `src/Engine/Scripting` or `tools/probelib.py`.
 
 **Handoff context:**
