@@ -151,6 +151,22 @@ def test_key_specific_timeout_and_explicit_override_reach_execution() -> None:
         tree.cleanup()
 
 
+def test_the_shipped_sweep_budget_is_declared_and_nested_probes_keep_theirs() -> None:
+    print("\n-- the persistence sweep's shipped 1500s budget (#2940)")
+    import probe_runner_registry as registry
+    sweep = [p for p in registry.PROBES if p[0] == "persistence_contract_sweep"]
+    nested = [p for p in registry.PROBES if p[0] == "construction"]
+    expect(len(sweep) == 1 and len(nested) == 1, "both keys are registered")
+    expect(registry.timeout_override_problems() == [],
+           f"the shipped table validates ({registry.timeout_override_problems()})")
+    expect(registry.timeout_plan(sweep) == "timeout 1500s each",
+           f"the sweep plan reports its budget ({registry.timeout_plan(sweep)!r})")
+    expect(registry.timeout_plan(sweep, 120.0) == "timeout 120s each",
+           "an explicit --timeout still takes precedence")
+    expect(registry.timeout_plan(nested) == "timeout 900s each",
+           "the nested construction probe keeps the default budget")
+
+
 def test_parallel_retry_reuses_the_key_specific_timeout() -> None:
     print("\n-- a parallel attempt and its solo retry share the key budget")
     tree = Tree()
@@ -930,6 +946,7 @@ TESTS_AGGREGATE_EXIT = (
 #: Key-specific timeouts, from the registry through to a retry.
 TESTS_KEY_TIMEOUTS = (
     test_key_specific_timeout_and_explicit_override_reach_execution,
+    test_the_shipped_sweep_budget_is_declared_and_nested_probes_keep_theirs,
     test_parallel_retry_reuses_the_key_specific_timeout,
 )
 
