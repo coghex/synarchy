@@ -884,7 +884,7 @@ restLane = do
     -- inventory and page APIs.
     aroundAll withHeadlessEngine LuaUnitAiRepairGround.spec
     -- Own engine for the same reason (#2939): the claim-order, sourcing
-    -- and claim-lifecycle groups that replaced tools/repair_ai_probe.py
+    -- and claim-lifecycle groups that replaced the retired repair-AI live probe (#302)
     -- install their own two-page world manager and unit table per
     -- example and drive the production repair modules over the engine's
     -- real ground, inventory, equipment and transfer verbs.

@@ -2,7 +2,7 @@
 -- | The repair AI's claim order, sourcing and claim lifecycle (#2939).
 --
 --   These groups are the deterministic replacement for what
---   @tools/repair_ai_probe.py@ (#302) used to grade against the LIVE
+--   the retired repair-AI live probe (#302) used to grade against the LIVE
 --   @unit_ai@ tick, where claim, fetch and work timing raced the grade
 --   and no two failing runs agreed (#724). They drive the production
 --   @scripts/unit_ai_repair.lua@ + @unit_ai_repair_target.lua@ through
