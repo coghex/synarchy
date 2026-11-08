@@ -43,7 +43,11 @@ checks is downstream of that:
      timeout still completes — the closest-approach reset is what
      distinguishes a stall timer from a trip budget (#920).
   9. An order in flight survives a real save -> quit -> fresh restart ->
-     load, and the carrier resumes and completes it.
+     load with its EXACT durable identity (order id, endpoint identities,
+     instance ids in entry order), and the carrier resumes and completes
+     it exactly once. Each save is awaited by its own request id to its
+     terminal phase, and each engine's log is read only once its process
+     is gone (#1487, #2935).
  10. The player cancels a haul mid-walk: nothing moves and the carrier
      is released.
  11. The carrier DIES mid-walk: its order is retired rather than left
@@ -77,6 +81,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 import probe_evidence
@@ -84,7 +89,7 @@ from transfer_probe_checks import Checks, check_boundary_log
 from probelib import (FixtureNotRegistered, boot, clear_find_water,
                       init_arena, init_world, load_fixture_yaml, poll_until,
                       quit_engine, send, send_json, wait_load_published,
-                      load_ai_stack)
+                      load_ai_stack, capture_request_id, wait_save_complete)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_transfer_order_slot"
@@ -966,6 +971,17 @@ def find_hold_site(port: int) -> tuple[int, int, int] | None:
     return None
 
 
+def save_completed(port: int, what: str) -> bool:
+    """Await the terminal phase of the save just requested, by request id."""
+    rid = capture_request_id(port, "return engine.getSaveStatus()")
+    done, status = (wait_save_complete(port, rid, seconds=180.0)
+                    if rid is not None else (False, None))
+    if not done:
+        print(f"  ({what}: request {rid!r} never completed: {status!r})",
+              flush=True)
+    return bool(done)
+
+
 def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
                     seed: int, size: int) -> None:
     print("\n--- 9. an order in flight survives save -> restart -> load ---")
@@ -1026,9 +1042,12 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
 
         saved = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
         chk.ok(saved.strip() == "true", "engine.saveWorld accepted", saved)
-        save_file = os.path.join(root, "saves", SLOT, "world.synworld")
-        chk.ok(poll_until(30.0, lambda: os.path.exists(save_file) or None)
-               is not None, "the save file appeared")
+        # `engine.saveWorld` only ACCEPTS the request; the save is durable
+        # when ITS request id reaches a terminal phase (and a failed or
+        # unfinished save need not log an integrity diagnostic at all).
+        chk.ok(save_completed(port, "engine B's save"),
+               "the save completes and is durable (its own request id "
+               "reaches SaveCaptureComplete)")
     finally:
         quit_engine(port, proc)
         # The SAVE reported no integrity diagnostic - the destroyed
@@ -1085,9 +1104,12 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
         # cleanly with no diagnostic is what says so at the boundary
         # rather than only in the store.
         saved2 = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
-        chk.ok(saved2.strip() == "true", "a post-completion save succeeds",
+        chk.ok(saved2.strip() == "true", "a post-completion save is accepted",
                saved2)
-        time.sleep(2.0)
+        chk.ok(save_completed(port, "the post-completion save"),
+               "…and completes durably: its own request id reaches "
+               "SaveCaptureComplete, so the final boundary's clean log is "
+               "about a save that actually finished")
     finally:
         quit_engine(port, proc)
         # The LOAD reported no dangling transfer-order reference
@@ -1130,34 +1152,53 @@ def main() -> int:
                  [f"phase{n}" for n in sorted(wanted & all_phases)])
     proc = None
     try:
-        if wanted & (set(range(1, 9)) | {10, 11}):
-            print(f"== arena engine (port {args.port}) ==")
-            proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
-            bootstrap_defs(args.port, tmp)
-            load_ai_stack(args.port)
-            init_arena(args.port, name="move_test")
-            phases = [
-                (1, phase_walk_and_commit),
-                (2, phase_command_time_refusal),
-                (3, phase_partial_batch),
-                (4, phase_arrival_refusal),
-                (5, phase_stale_instance),
-                (6, phase_vanished_counterpart),
-                (7, phase_blocked_approach),
-                (8, phase_long_trip),
-                (10, phase_cancel),
-                (11, phase_carrier_dies),
-            ]
-            for n, fn in phases:
-                if n in wanted:
-                    chk.enter(f"phase{n}")
-                    fn(args.port, chk)
-            quit_engine(args.port, proc)
-            proc = None
-        if 9 in wanted:
-            root = make_isolated_root(tmp)
-            chk.enter("phase9")
-            phase_save_load(chk, root, tmp, args.port, args.seed, args.size)
+        try:
+            if wanted & (set(range(1, 9)) | {10, 11}):
+                print(f"== arena engine (port {args.port}) ==")
+                proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
+                bootstrap_defs(args.port, tmp)
+                load_ai_stack(args.port)
+                init_arena(args.port, name="move_test")
+                phases = [
+                    (1, phase_walk_and_commit),
+                    (2, phase_command_time_refusal),
+                    (3, phase_partial_batch),
+                    (4, phase_arrival_refusal),
+                    (5, phase_stale_instance),
+                    (6, phase_vanished_counterpart),
+                    (7, phase_blocked_approach),
+                    (8, phase_long_trip),
+                    (10, phase_cancel),
+                    (11, phase_carrier_dies),
+                ]
+                for n, fn in phases:
+                    if n in wanted:
+                        chk.enter(f"phase{n}")
+                        fn(args.port, chk)
+                quit_engine(args.port, proc)
+                proc = None
+            if 9 in wanted:
+                root = make_isolated_root(tmp)
+                chk.enter("phase9")
+                phase_save_load(chk, root, tmp, args.port, args.seed, args.size)
+        except FixtureNotRegistered:
+            raise
+        except SystemExit as exc:
+            # `probelib.boot` reports an engine that died before READY, or
+            # never printed it, by calling sys.exit() - and SystemExit
+            # derives from BaseException, so the clause below would not see
+            # it. Left uncaught it would unwind past the stage summary.
+            chk.ok(False, f"the engine could not be started, or died, during "
+                          f"stage '{chk.stage}' (SystemExit: {exc.code})")
+        except Exception as exc:  # noqa: BLE001
+            # An operational failure - a dead engine, a socket timeout, a
+            # malformed console response - is a real probe failure and must
+            # name its stage like any other. Left to propagate it would exit
+            # non-zero with a traceback but NO recorded failing check.
+            # KeyboardInterrupt is deliberately still allowed to propagate.
+            chk.ok(False, f"unexpected {type(exc).__name__} while running "
+                          f"stage '{chk.stage}': {exc}")
+            traceback.print_exc()
 
         chk.report("the transfer-order unit job")
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "

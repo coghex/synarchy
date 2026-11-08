@@ -90,6 +90,13 @@ damage until it dies (measured) -- except for the few ticks each Mode A
 session's real unit AI needs to open the pair, whose escort is spawned
 beside its endpoint so it never walks.
 
+Isolation (#2935): the engine boots on an invocation-owned resource root -
+`scripts`, `assets` and `data` symlinked, `config/` COPIED without
+`*.local.yaml`, and its own empty `saves/` - because the gesture stages
+read logged `unit_event` text (a local notification override could
+otherwise decide whether they pass) and the engine writes runtime
+configuration on startup.
+
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py`
 per CLAUDE.md; the CI-blocking gate for this feature is
 `cabal test synarchy-test-headless --test-options='--match "Transfer
@@ -114,7 +121,9 @@ from probelib import (boot, camera_state, centred_within,
                       focus_and_locate, locate_building_pixel, poll_until,
                       quit_engine, send, send_json, set_paused,
                       targeting_report, viewport, win_to_fb)
+from transfer_gesture_lib import make_isolated_root
 from transfer_gesture_stages import run_stages
+import probe_evidence
 
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "transfer_context_menu_probe_buildings.yaml")
@@ -541,16 +550,27 @@ def main() -> int:
     args = ap.parse_args()
     port = args.port
 
-    print(f"== offscreen boot (port {port}, {args.size}) ==")
-    proc = boot(port, mode=("--offscreen",), args=["--size", args.size],
-                label="offscreen engine")
-    # Registered for teardown before ANY fallible work below (#1323): an
-    # unexpected socket/parsing/widget exception used to skip every
-    # quit_engine call and strand this engine holding its port.
+    # The whole run lives on an invocation-owned resource root (symlinked
+    # read-only content, COPIED default config without `*.local.yaml`, its
+    # own empty saves/), so no developer override decides a gesture's
+    # outcome and the engine's runtime writes never reach the checkout.
+    base = tempfile.mkdtemp(prefix="synarchy_transfer_context_menu_")
+    proc = None
     try:
+        root = make_isolated_root(base)
+        print(f"== offscreen boot (port {port}, {args.size}, resource root "
+              f"{root}) ==")
+        proc = boot(port, mode=("--offscreen",),
+                    args=["--size", args.size, "--resource-root", root],
+                    label="offscreen engine")
+        # Registered for teardown before ANY fallible work below (#1323): an
+        # unexpected socket/parsing/widget exception used to skip every
+        # quit_engine call and strand this engine holding its port.
         return _run(port, args)
     finally:
-        quit_engine(port, proc)
+        if proc is not None:
+            quit_engine(port, proc)
+        probe_evidence.discard_scratch(base)
 
 
 def _run(port: int, args) -> int:

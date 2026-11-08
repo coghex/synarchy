@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -36,6 +37,8 @@ from probelib import (camera_state, centred_within, clear_find_water,
                       send, send_json, set_paused, targeting_report,
                       win_to_fb)
 from transfer_probe_checks import Checks
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CHUNK_TILES = 16
 SEARCH_RADIUS = 60
@@ -86,6 +89,33 @@ def pane_list_id(pane_key: str) -> str:
     return ("(function() local c = require('scripts.cargo_inventory_panel');"
             f" local p = c.getPane(c.getLevel(1), '{pane_key}');"
             " return p and p.listId end)()")
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: the read-only content families symlinked,
+    `config/` COPIED (the real UI flow writes settings and must never touch
+    the developer's own, #1266), and its OWN empty saves/.
+
+    The copy deliberately EXCLUDES `*.local.yaml`, so the run starts from the
+    tracked defaults a fresh checkout has rather than from whatever this
+    developer's settings happen to be. That is not tidiness: the Mode A
+    assertions read the `unit_event` / `unit_warning` text in the EVENT LOG,
+    and a category reaches the log only when its notifications YAML says
+    `log: true` - so a personal override could otherwise decide whether
+    these gestures pass. It also makes the run reproducible between two
+    checkouts of the same commit."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 
 def load_item_defs(chk: Checks, port: int, base: str) -> bool:

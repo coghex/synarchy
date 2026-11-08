@@ -915,6 +915,36 @@ def test_the_real_gesture_stage_catch_all_is_retained() -> None:
         tree.cleanup()
 
 
+def test_the_transfer_order_probe_records_operational_failures() -> None:
+    print("\n-- the transfer-order probe's own `main` records an operational "
+          "failure inside its persistence phase under that phase, and still "
+          "prints its stage summary")
+    tree = Tree()
+    try:
+        for name, raiser, want in (
+                ("reset", "raise ConnectionResetError('boom')",
+                 "FAIL: [phase9] unexpected ConnectionResetError while "
+                 "running stage 'phase9': boom"),
+                ("exit", "raise SystemExit(3)",
+                 "FAIL: [phase9] the engine could not be started, or died, "
+                 "during stage 'phase9' (SystemExit: 3)")):
+            add_driver(tree, name, (
+                "import transfer_order_probe as probe\n"
+                "def die(*args, **kwargs):\n"
+                f"    {raiser}\n"
+                "probe.phase_save_load = die\n"
+                "sys.argv = ['transfer_order_probe.py', '--only', '9']\n"
+                "sys.exit(probe.main())\n"))
+            rc, out = main_with(tree, [])
+            expect(rc == 1, f"{name}: the run fails (exit {rc})")
+            expect(want in out, f"{name}: retained under its phase:\n{out}")
+            expect("--- FAIL: the transfer-order unit job broke at stage "
+                   "'phase9'" in out,
+                   f"{name}: and the stage summary still prints:\n{out}")
+    finally:
+        tree.cleanup()
+
+
 def test_a_passing_run_of_either_producer_gains_no_records() -> None:
     print("\n-- a passing run acquires no failure records, and the exit "
           "status stays 0")
@@ -1031,6 +1061,7 @@ TESTS = (
     test_transfer_failed_checks_survive_the_default_tail,
     test_the_new_producers_survive_the_parallel_presentation,
     test_the_real_gesture_stage_catch_all_is_retained,
+    test_the_transfer_order_probe_records_operational_failures,
     test_a_passing_run_of_either_producer_gains_no_records,
     test_the_readme_names_every_failure_record_producer,
 )
