@@ -60,7 +60,6 @@ from __future__ import annotations
 import probe_evidence
 import probe_protocol
 import argparse
-import glob
 import os
 import re
 import shutil
@@ -70,7 +69,8 @@ import time
 from pathlib import Path
 
 from probelib import (boot, clear_find_water, load_ai_stack, poll_until,
-                      quit_engine, send, send_json, wait_load_published)
+                      quit_engine, send, send_json, wait_load_published,
+                      DefFamily, load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_integrity_slot"
@@ -120,24 +120,15 @@ def boot_probe(root: str, port: int, log: str, rep):
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        # Just the one def the #1484 scenario stakes -- a shipped
-        # `build_work: 240.0` building, so a `building.spawn`ed instance
-        # reports "constructing" with real build work outstanding and stays
-        # there (no construction tick runs in this probe), which is
-        # exactly what `findNearestUnbuilt` looks for.
-        (BUILD_SITE_YAML,          "engine.loadBuildingYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    # The last row is just the one def the #1484 scenario stakes -- a
+    # shipped `build_work: 240.0` building, so a `building.spawn`ed
+    # instance reports "constructing" with real build work outstanding and
+    # stays there (no construction tick runs in this probe), which is
+    # exactly what `findNearestUnbuilt` looks for.
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction",
+        "physiology", "unit",
+        DefFamily("building", BUILD_SITE_YAML, "engine.loadBuildingYaml")))
 
 
 def find_flat_strip(port: int) -> tuple[int, int, int] | None:

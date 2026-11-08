@@ -72,7 +72,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import shutil
@@ -85,7 +84,8 @@ from pathlib import Path
 
 import probe_evidence
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
-                       wait_save_complete, capture_request_id)
+                      wait_save_complete, capture_request_id,
+                      load_definitions)
 from persistence_snapshot import compare_session_files, prepare_decoder
 from probe_runner_diagnostics import FailureEmitter, ProgressEmitter
 from probe_runner_registry import PROBES as REGISTERED_PROBES
@@ -272,20 +272,9 @@ def make_isolated_root(base: str) -> str:
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit", "building", "recipe"))
 
 
 def load_ai_stack(port: int) -> None:
