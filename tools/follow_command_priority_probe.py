@@ -74,7 +74,7 @@ Run from the repo/worktree root (scripts/ resolve relative to CWD):
 Exit code 0 = all checks passed; 1 = a graded check failed; 2 = a fixture
 never established itself, so nothing downstream of it was graded; 3 = check
 E's SETUP failed (the staged attacker never landed a qualifying hit on E's
-subject, or E's non-player move was no longer pending just before that hit,
+subject, or E's non-player move was no longer pending in the observation carrying that hit,
 so E's arbitration was never exercised) and no other graded check
 failed. 3 is a failure, never a pass, and is distinct from a graded
 arbitration failure (exit 1: a hit landed and the subject still did not
@@ -563,20 +563,18 @@ def main() -> int:
         # never landed a qualifying hit, so E's arbitration was never
         # exercised) from an ARBITRATION failure (a hit landed and the
         # subject still did not reach or hold combat). Neither is a pass.
-        # The non-player move must still have been pending in the sample
-        # just BEFORE the first qualifying hit (pre_e, taken at the order, is
-        # the sample before the poll's first): a move that finished before
-        # any hit landed leaves nothing for combat to out-rank, and both E
-        # assertions would pass vacuously.
-        seq = [pre_e] + sampe
-        first_hit = next((i for i, o in enumerate(seq)
-                          if o.get("hitByStaged")), None)
+        # The non-player move must be pending IN the qualifying combat
+        # observation itself (the first sample carrying a hit by the staged
+        # attacker): a move that arrived or was cleaned up before combat is
+        # observed leaves nothing for combat to out-rank, and both E
+        # assertions would pass vacuously. (pre_e, taken at the order, only
+        # proves the move existed then.)
+        first_hit = next((o for o in sampe if o.get("hitByStaged")), None)
         landed = first_hit is not None
-        before_hit = seq[first_hit - 1] if landed and first_hit else pre_e
-        e_move_ok = bool(before_hit.get("movePending")) \
-            and not before_hit.get("movePlayer")
+        e_move_ok = landed and bool(first_hit.get("movePending")) \
+            and not first_hit.get("movePlayer")
         print(f"  [E staged attacker landed a qualifying hit: {landed}; "
-              f"non-player move pending just before it: {e_move_ok}]")
+              f"non-player move pending in that observation: {e_move_ok}]")
         e_checks = [("combat reached over a pending non-player move", hite),
                     ("combat does NOT hand back to the stale move",
                      not reverted)]
@@ -586,8 +584,8 @@ def main() -> int:
             e_setup_failed = True
             why = ("the staged attacker never landed a qualifying hit on the "
                    f"subject within {HIT_WINDOW_SEC:g} s" if not landed else
-                   "the subject's non-player move was already gone before "
-                   "the first qualifying hit landed")
+                   "the subject's non-player move was no longer pending in "
+                   "the first observation carrying a qualifying hit")
             print(f"  [E SETUP FAILURE] {why}; check E's arbitration was not "
                   "exercised, so its two assertions are NOT graded and NOT "
                   "passed", file=sys.stderr)
