@@ -34,8 +34,8 @@ define the matrix, limitations and owner disposition.
 definition loading that about seventy probes repeat on every engine take
 compared with the startup loader's one-call `arena` profile? On a fresh
 `--headless --arena` engine, on an isolated resource root and a non-8008 port,
-it times path A, the eight-family loop of `cargo_capacity_probe.py`
-`bootstrap()` with one console round trip per YAML file (each call also returns the loader's
+it times path A, the eight-family loop `cargo_capacity_probe.py`
+`bootstrap()` ran until #2952 (kept in the tool as the frozen baseline) with one console round trip per YAML file (each call also returns the loader's
 count and parse outcome), and path B,
 `startup_loader.build('arena')` plus `runAll()` as a single console call that
 answers its own `isDone()`/`isFailed()`. Each path runs on three fresh engines
@@ -60,6 +60,38 @@ python3 tools/test_bootstrap_timing.py        # engine-free self-test
 
 The output is a table on stdout and a `bootstrap-timing/v1` JSON document at
 `--output`. Headless boots take no `gpu-desktop` hold and need no slot grant.
+
+## One-call definition loading (`probelib.load_definitions`, #2952)
+
+A probe that boots an engine loads the game's definitions first. One console
+round trip per YAML file cost a median 25 s per engine boot (#2948), almost all
+of it `probelib.send`'s idle wait. `probelib.load_definitions(port, families)`
+sends the file list in ONE console call and has Lua iterate it, so the load
+costs one round trip.
+
+- **Same loads, same order.** `families` are names from
+  `probelib.DEFINITION_FAMILIES` (or `DefFamily` rows) and load in the order
+  given, each as the sorted `data/<dir>/*.yaml` glob, with the per-file verbs the
+  probes always used. The default, `STANDARD_FAMILIES`, is `cargo_capacity`'s
+  eight; `ARENA_GAMEPLAY_FAMILIES` is the ten of the arena gameplay probes.
+  It is not the startup loader's `arena` profile, which also registers
+  vegetation, infections, recipes, loot and locations. A probe loading another
+  set names it; any extra setup (AI stubs, arena modules) goes after the call.
+- **Paths stay engine-relative.** The helper enumerates files from the working
+  directory (or `root_dir=`) but sends relative paths, so an alternate
+  `--resource-root` (the persistence probes' legacy root) still supplies its own
+  content.
+- **A partial load is never a success.** Every file opts in to the loader's
+  parse outcome. A parse failure, a semantic refusal, a Lua error, a missing
+  outcome, a short or malformed reply, a family with no files, and port 8008 all
+  raise `DefinitionLoadError` naming the family and path; a successful zero count
+  is a success. It returns per-family counts (`load_definitions_report` also
+  returns each file's count). A probe that needs a positive count from every file
+  adds `require_positive_files(report, families)`.
+
+`python3 tools/test_probelib.py` covers the plan, the one-line Lua (run under a
+stub `engine` when a `lua` is on `PATH`), the reply parser and a real-socket
+one-call exchange, with no engine.
 
 ## Manual map-page codec measurement (#2303)
 
