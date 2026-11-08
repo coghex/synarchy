@@ -144,7 +144,9 @@ def read_trials(ledger: Path) -> list[dict]:
     if not ledger.is_file():
         raise LedgerError(f"no lab ledger at {ledger}")
     try:
-        db = sqlite3.connect(f"file:{ledger}?mode=ro", uri=True)
+        # as_uri() percent-encodes `#`, `?`, `%` and spaces, so the path can never
+        # alter the URI's filename or its mode=ro option.
+        db = sqlite3.connect(f"{ledger.resolve().as_uri()}?mode=ro", uri=True)
     except sqlite3.Error as error:
         raise LedgerError(f"cannot open the ledger {ledger}: {error}") from error
     try:

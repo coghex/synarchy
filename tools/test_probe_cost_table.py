@@ -295,6 +295,23 @@ def test_ledger_is_only_read(tmp: Path) -> None:
     expect(after == sorted(names + ["ro-out.json"]), f"no file is created beside the ledger: {after}")
 
 
+def test_awkward_ledger_paths(tmp: Path) -> None:
+    for name in ("lab#copy.sqlite3", "what?.sqlite3", "100%.sqlite3", "with space.sqlite3", "a&mode=rw.sqlite3"):
+        folder = tmp / name.replace("/", "_").replace(".sqlite3", "") / "dir#x?y"
+        folder.mkdir(parents=True)
+        ledger = make_ledger(folder / name, [("r", "probe:wire", "a" * 40)],
+                             [("r", 1, "passed", trial(3.0, "2026-03-01T10:00:00+00:00"))])
+        before_names, before_hash = sorted(p.name for p in folder.iterdir()), digest(ledger)
+        out = tmp / (name + ".out.json")
+        status, _stdout, err = run_main("--ledger", str(ledger), "--output", str(out))
+        expect(status == 0, f"{name}: a ledger whose path has URI characters reads fine: {err!r}")
+        expect(rows_for(ledger, ["wire"])["wire"]["count"] == 1, f"{name}: the right file was read")
+        expect(sorted(p.name for p in folder.iterdir()) == before_names and digest(ledger) == before_hash,
+               f"{name}: nothing is created or modified beside the ledger")
+        stray = [p.name for p in tmp.rglob("*") if p.is_file() and p.suffix == "" and p.name == "lab"]
+        expect(not stray, f"{name}: no truncated-name database is created: {stray}")
+
+
 def test_registry_consistency() -> None:
     path = pct.DEFAULT_OUTPUT
     if not expect(path.is_file(), f"{path} is tracked"):
@@ -322,7 +339,7 @@ def main() -> int:
                 test_selection_and_statistics, test_tiebreak_is_deterministic, test_unrun_probe_has_explicit_nulls,
                 test_underscored_key_maps_to_hyphenated_suite, test_states, test_exclusions,
                 test_output_shape_and_order, test_regeneration_is_byte_identical,
-                test_failure_paths_leave_the_table_alone, test_ledger_is_only_read)):
+                test_failure_paths_leave_the_table_alone, test_ledger_is_only_read, test_awkward_ledger_paths)):
             folder = Path(root) / f"case-{index}"
             folder.mkdir()
             case(folder)
