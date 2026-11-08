@@ -53,7 +53,16 @@ touched.
 
 ## Result
 
-Two focused `python3 tools/tutorial_hud_probe.py` runs on the fix, both
-"ALL CHECKS PASSED" with no retries: 216 checks in 180.9 s, then 217 checks
-(with the new gate) in 147.3 s, against 269 to 300 s for the red shakedown
-runs.
+Focused `python3 tools/tutorial_hud_probe.py` runs on the fix, all
+"ALL CHECKS PASSED" with no retries: 216 checks in 180.9 s (fix only), 217 in
+147.3 s (with the gate), and 218 in 150.4 s on the final head, against 269 to
+300 s for the red shakedown runs.
+
+## Trap found in review
+
+The first version of the identity gate compared RGBA frames with
+`ImageChops.difference(...).getbbox()`. Pillow's `getbbox()` looks at the alpha
+channel only for RGBA images, and the engine forces every screenshot's alpha to
+255, so the difference is all-zero alpha and the gate reported "identical" for
+any colour change. The gate now compares RGB, and a negative control inside the
+probe proves a one-level RGB difference on opaque frames is detected.

@@ -67,6 +67,7 @@ import World.Save.Types
     ( MissingFloraRef(..), WorldPageSave(..), SaveData(..)
     , missingFloraReferences, renderMissingFloraRef )
 import World.State.Types
+import World.Time.Types (WorldDate(..))
 import World.Tile.Types (WorldTileData(..))
 import Structure.Types (emptyChunkStructures)
 import World.Thread.Command.Save.WriteWorld (capturePageSnapshot)
@@ -666,6 +667,56 @@ engineSpec = describe "flora condition persistence" $ do
         pgsFloraConditions (snapPages snap HM.! arenaPage)
             `shouldBe` pgsFloraConditions
                 (snapPages back HM.! arenaPage)
+
+    -- #2937: a planted row crop's age baseline is NEGATIVE (minus its
+    -- planting day), and admission used to read that baseline at day 0,
+    -- where it is in the previous generation's dead window. Every load
+    -- therefore killed (and, past its retention, removed) every row crop
+    -- planted after the first generation's day 0.
+    it "admits a planted annual row crop on its later calendar day alive, \
+       \and kills it only once its lifespan has passed" $ \env → do
+        let annualId = FloraId 4
+            annual = (newFloraSpecies "probe_annual" (TextureHandle 0))
+                { fsLifecycle = Annual }
+            catalog = probeCatalog
+                { fcSpecies = HM.insert 4 annual (fcSpecies probeCatalog)
+                , fcNextId = 5 }
+            iid = plantedFloraInstanceId 7
+            plantedDay = 200 ∷ Int
+            (_, (lx, ly)) = uncurry globalToChunk homeTile
+            crop = FloraInstance
+                { fiSpecies = annualId
+                , fiTileX = fromIntegral lx, fiTileY = fromIntegral ly
+                , fiOffU = 0, fiOffV = 0, fiZ = 4
+                , fiAge = negate (fromIntegral plantedDay), fiHealth = 1
+                , fiVariant = 0, fiBaseWidth = 6
+                , fiInstanceId = iid, fiChopDesignated = False
+                , fiContext = ContextCultivated }
+            -- 12 months of 30 days: day-of-year 200 is month 7, day 21.
+            admitOn year month day = do
+                ws ← emptyWorldState
+                writeIORef (wsGenParamsRef ws) (Just arenaParams)
+                writeIORef (wsDateRef ws) (WorldDate year month day)
+                writeIORef (floraCatalogRef env) catalog
+                writeIORef (wsTilesRef ws) (chunkStore [crop])
+                _ ← reconcileAdmittedFlora (toWorldSimCapability env)
+                        arenaPage ws [chunkOf homeTile]
+                conditions ← readIORef (wsFloraConditionsRef ws)
+                edits ← readIORef (wsEditsRef ws)
+                resident ← residentIds ws
+                pure ( resident
+                     , fcrCondition <$> lookupFloraCondition iid conditions
+                     , [ () | es ← HM.elems edits, WeRemoveFlora _ _ i ← es
+                            , i ≡ iid ] )
+        -- The planting day itself, and well inside its lifespan.
+        admitOn 1 7 21 `shouldReturn` ([iid], Nothing, [])
+        admitOn 1 12 30 `shouldReturn` ([iid], Nothing, [])
+        -- 360 days after planting plus the 60-day dead window: dead, with
+        -- its corpse still retained.
+        (resident, condition, removals) ← admitOn 2 7 21
+        resident `shouldBe` [iid]
+        condition `shouldBe` Just ConditionDead
+        removals `shouldBe` []
 
     it "keeps one of three co-tenants dead across eviction, regeneration, \
        \capture, encode, decode and staging — siblings untouched" $ \env → do
