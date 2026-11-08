@@ -53,9 +53,9 @@ other, the attacker has no last attacker, and the production fixture inputs
 authorize nothing), so on a plain ``commandAttack`` the staged attacker
 never landed a hit (#2945 before-batch: 0 of 20 trials). The victim is still
 graded on its OWN arbitration: it reacts through self-defense once hits land.
-Each combat pair is destroyed when its check is done, so no wounded unit is
-left in reach of a later phase's acolytes (treat_ally would otherwise be a
-legitimate choice there, not an arbitration fault).
+No phase destroys any unit, so a combat pair's wounded survivors stay on the
+arena for later phases; the printed ``wounded`` list is what shows whether
+that ever mattered (#2945 makes no isolation change without such evidence).
 
 Each check prints an ``observe`` snapshot (goal, pending move, treatment
 state, last attacker, wounded units, combat eligibility) read in the same
@@ -67,8 +67,8 @@ Run from the repo/worktree root (scripts/ resolve relative to CWD):
 Exit code 0 = all checks passed; 1 = a graded check failed; 2 = a fixture
 never established itself, so nothing downstream of it was graded; 3 = check
 E's SETUP failed (the staged attacker never landed a qualifying hit on E's
-subject, or E's non-player move was no longer pending when the attack was
-ordered, so E's arbitration was never exercised) and no other graded check
+subject, or E's non-player move was no longer pending just before that hit,
+so E's arbitration was never exercised) and no other graded check
 failed. 3 is a failure, never a pass, and is distinct from a graded
 arbitration failure (exit 1: a hit landed and the subject still did not
 reach or hold combat).
@@ -204,8 +204,8 @@ def observe(port: int, uid: int, attacker=None) -> dict:
         "o.attackGoalScores=((s.activeGoal=='attack') and s.attackTargetUid~=nil) and true or false;",
         "local w={}; for _,u in ipairs(unit.getAllIds() or {}) do local ws=unit.getWounds(u) or {};",
         "if #ws>0 then local i=unit.getInfo(u); local k={};",
-        "for _,x in ipairs(ws) do k[#k+1]=tostring(x.kind) end;",
-        "w[#w+1]={uid=u, phase=L[u] or '?', wounds=#ws, kinds=table.concat(k,'/'),",
+        "for _,x in ipairs(ws) do k[#k+1]={kind=x.kind, bandage=x.bandage, clot=x.clot, infection=x.infection} end;",
+        "w[#w+1]={uid=u, phase=L[u] or '?', wounds=#ws, records=k,",
         "page=i and i.page, x=i and i.gridX, y=i and i.gridY,",
         "dist=(i and me) and math.sqrt((i.gridX-me.gridX)^2+(i.gridY-me.gridY)^2) or nil} end end;",
         "o.wounded=w; return o",
@@ -260,13 +260,6 @@ def stage_committed_attack(port: int, attacker: int, victim: int,
          f"unit.setPos({int(attacker)}, v.gridX+{beside}, v.gridY); "
          f"require('scripts.unit_ai').commandAttack({int(attacker)},"
          f"{int(victim)},true); return 'fight'")
-
-
-def destroy_units(port: int, *uids: int) -> None:
-    """Remove a finished phase's units so nothing they wounded is left on
-    the arena for a later phase's acolytes to treat."""
-    for u in uids:
-        send(port, f"unit.destroy({int(u)}); return 'ok'")
 
 
 def print_obs(tag: str, snaps: list, last: dict) -> None:
@@ -487,7 +480,6 @@ def main() -> int:
         print_obs("D", snapd, lastd)
         print(f"  [D staged attacker landed a qualifying hit: "
               f"{any(o.get('hitByStaged') for o in sampd)}]")
-        destroy_units(args.port, ud, atk)
         checks.append(("a struck goal-bound unit reacts with combat, not search",
                        hitd))
 
@@ -513,8 +505,6 @@ def main() -> int:
         # The move must still be pending, and non-player, at the moment the
         # attack is ordered; otherwise there is nothing for combat to beat.
         pre_e = observe(args.port, ue, atk2)
-        e_move_ok = bool(pre_e.get("movePending")) \
-            and not pre_e.get("movePlayer")
         print(f"  [E pre-attack] movePending={pre_e.get('movePending')} "
               f"movePlayer={pre_e.get('movePlayer')} "
               f"action={pre_e.get('action')}")
@@ -536,18 +526,33 @@ def main() -> int:
         print(f"\n[E combat-commits-over-move] timeline: {' -> '.join(seene)}"
               f"  | tail: {' '.join(tail)}")
         print_obs("E", snape, laste)
-        # The tail snapshot that decided the hand-back verdict: the first
-        # follow_command sample if there was one, else the last sample.
-        decisive = next((o for o in tail_obs
-                         if o.get("action") == "follow_command"), tail_obs[-1])
-        print(f"  [E obs tail {'follow_command' if reverted else 'last'}] "
-              f"{json.dumps(decisive, sort_keys=True, separators=(',', ':'))}")
+        # Every tail action transition (a treat_ally episode included), then
+        # the final sample: each carries its own same-transaction patient,
+        # claim and combat-eligibility evidence.
+        prev = seene[-1] if seene else None
+        for i, o in enumerate(tail_obs):
+            if o.get("action") != prev or i == len(tail_obs) - 1:
+                print(f"  [E obs tail {i + 1} -> {o.get('action')}] "
+                      f"{json.dumps(o, sort_keys=True, separators=(',', ':'))}")
+            prev = o.get("action")
         # Requirement 3 (#2945): tell a SETUP failure (the staged attacker
         # never landed a qualifying hit, so E's arbitration was never
         # exercised) from an ARBITRATION failure (a hit landed and the
         # subject still did not reach or hold combat). Neither is a pass.
-        landed = any(o.get("hitByStaged") for o in sampe)
-        print(f"  [E staged attacker landed a qualifying hit: {landed}]")
+        # The non-player move must still have been pending in the sample
+        # just BEFORE the first qualifying hit (pre_e, taken at the order, is
+        # the sample before the poll's first): a move that finished before
+        # any hit landed leaves nothing for combat to out-rank, and both E
+        # assertions would pass vacuously.
+        seq = [pre_e] + sampe
+        first_hit = next((i for i, o in enumerate(seq)
+                          if o.get("hitByStaged")), None)
+        landed = first_hit is not None
+        before_hit = seq[first_hit - 1] if landed and first_hit else pre_e
+        e_move_ok = bool(before_hit.get("movePending")) \
+            and not before_hit.get("movePlayer")
+        print(f"  [E staged attacker landed a qualifying hit: {landed}; "
+              f"non-player move pending just before it: {e_move_ok}]")
         e_checks = [("combat reached over a pending non-player move", hite),
                     ("combat does NOT hand back to the stale move",
                      not reverted)]
@@ -557,12 +562,11 @@ def main() -> int:
             e_setup_failed = True
             why = ("the staged attacker never landed a qualifying hit on the "
                    f"subject within {HIT_WINDOW_SEC:g} s" if not landed else
-                   "the subject's non-player move was already gone when the "
-                   "attack was ordered")
+                   "the subject's non-player move was already gone before "
+                   "the first qualifying hit landed")
             print(f"  [E SETUP FAILURE] {why}; check E's arbitration was not "
                   "exercised, so its two assertions are NOT graded and NOT "
                   "passed", file=sys.stderr)
-        destroy_units(args.port, ue, atk2)
 
         # --- Check F: the command-time capacity refusal, asserted rather
         # than observed. A's mirror image (#1736): commandPickup gates
