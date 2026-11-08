@@ -856,7 +856,7 @@ def test_invocation_owned_trees_are_never_deleted_directly() -> None:
                 "persistence_contract", "persistence_integrity", "plant",
                 "power", "save_barrier", "save_storage", "scenario_entrypoint",
                 "till", "transactional_load", "transfer_order",
-                "unified_transfer", "fluid_exact_restart",
+                "fluid_exact_restart",
                 "fluid_exact_restart_render", "fluid_reaction",
                 "fluid_reaction_visual", "debug_console_boot", "audio_null",
                 "save_pause", "multiworld_save", "lua_orphan_prune",

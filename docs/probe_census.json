@@ -2848,23 +2848,6 @@
         "outcomes": []
       },
       "classification": "manual-only",
-      "key": "unified_transfer",
-      "protocol": "legacy",
-      "script": "unified_transfer_probe.py"
-    },
-    {
-      "census": {
-        "acceptable_failures": 0,
-        "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
-        "deferred": null,
-        "estimated_worst_case_seconds": null,
-        "history": [],
-        "outcomes": []
-      },
-      "classification": "manual-only",
       "key": "transfer_context_menu",
       "protocol": "legacy",
       "script": "transfer_context_menu_probe.py"

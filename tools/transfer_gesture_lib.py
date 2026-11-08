@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Rendered-widget and world-entity targeting, the transfer contract's
-own readers, terrain and anchor allocation, unit control and fixture
-staging for `tools/unified_transfer_probe.py` (#2048).
+"""Widget, targeting, contract-reader and fixture helpers for the transfer
+GESTURE stages (`tools/transfer_gesture_stages.py`), which
+`tools/transfer_context_menu_probe.py` runs.
 
-Everything here answers a question ABOUT the running session rather than
-driving one of the eight stages, and every scenario module reaches the
-engine through it. Four concerns, in the order they appear below:
+Library code, not a probe: no CLI, no engine boot, and not registered. It
+is what remained of the retired end-to-end transfer probe's helper layer
+(#1255, #2048) once that probe was replaced by focused coverage - see
+`docs/archive/transfer_end_to_end_probe_coverage_map.md` for which checks moved
+and why. Four concerns:
 
   * the WIDGET oracle - `ui.dumpWidgets()` and the item-list widget's own
     `dump()`, plus the real `input.*` gestures aimed at what they locate.
@@ -13,22 +15,19 @@ engine through it. Four concerns, in the order they appear below:
   * WORLD-ENTITY targeting - `building.hitTestAt` for a building and
     `unit.hitTestInRect` bisection confirmed by `unit.hitTestAt` for a
     unit, and the z-slice-aware camera placement (#1286) that has to
-    precede either. The bisection and `focus_entity` are one unit: a
-    lookup that skipped the camera pinning would still satisfy the rect
-    check while asking it of a slice the target is not on;
+    precede either;
   * CONTRACT readers - the endpoint projection, `checkTransfer`'s
-    structured result, durable orders, the event log, container
-    knowledge and the live Mode A session, each read as the shipped
-    contract reports it;
-  * FIXTURE support - the real create-world screen, the throwaway defs,
-    the level-shelf site search, spawning, staging, row location, window
-    opening and the unit control (`calm`, `send_home`, `park_beside`)
-    the walks depend on.
+    structured result, durable orders, the event log and the live Mode A
+    session, each read as the shipped contract reports it;
+  * FIXTURE support - the throwaway item defs, the level-shelf site
+    search, spawning, staging, row location, window opening, and the unit
+    control (`calm`) the gestures depend on.
 """
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -37,10 +36,100 @@ from probelib import (camera_state, centred_within, clear_find_water,
                       focus_and_locate, locate_building_pixel, poll_until,
                       send, send_json, set_paused, targeting_report,
                       win_to_fb)
-from unified_transfer_probe_support import (ALL_ITEM_DEFS, BUILDINGS_YAML,
-                                            CHUNK_TILES, Checks,
-                                            ITEMS_YAML, SEARCH_RADIUS,
-                                            WINDOW)
+from transfer_probe_checks import Checks
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+CHUNK_TILES = 16
+SEARCH_RADIUS = 60
+
+# --------------------------------------------------------------------------
+# Throwaway content
+# --------------------------------------------------------------------------
+# ONE item def per directed LEG. A merged row's singular gesture names the
+# row's representative, which is its FIRST member - so a source holding two
+# instances of the same def would let "Store 1" move an instance this probe
+# did not choose, and the leg would still pass. With one def per leg the
+# source holds exactly one instance of it, the row is single-membered, and
+# the entry the gesture creates can be compared against an EXACT instance
+# id. (It also exercises #1249's rule that a single-instance row shows the
+# singular entry alone.)
+#
+# 0.25 kg is deliberately a BINARY fraction: capacity is a 32-bit Float and
+# the gate is `load + weight <= capacity` summed one accepted item at a
+# time, so a decimal-friendly fixture lands a few ulps over. `bulk` is
+# REQUIRED by `Engine.Asset.YamlItems` and one bad definition rejects the
+# whole FILE.
+LEG_DEFS_B = [f"probe_ut_b{i}" for i in range(1, 7)]
+LEG_DEFS_A = [f"probe_ut_a{i}" for i in range(1, 7)]
+ALL_ITEM_DEFS = LEG_DEFS_B + LEG_DEFS_A
+
+ITEMS_YAML = "items:\n" + "".join(f"""\
+  - name: "{d}"
+    display_name: "Probe UT {d}"
+    sprite: "assets/textures/items/material/bar_steel.png"
+    weight: 0.25
+    bulk: 0.25
+    category: Materials
+""" for d in ALL_ITEM_DEFS)
+
+# Debug-console expressions naming the live widget instances this reads.
+# The container window owns a STACK of levels (#1238), so every read goes
+# through the manager's own accessor because a level may not exist.
+WINDOW = "require('scripts.cargo_inventory_panel')"
+BASE_LEVEL = f"({WINDOW}.getLevel(1) or {{src={{}}}})"
+CARGO_LIST_ID = f"{BASE_LEVEL}.listId"
+UNIT_INV_LIST_ID = "require('scripts.unit_info_v2').invListId"
+
+
+def pane_list_id(pane_key: str) -> str:
+    """A debug-console expression naming one escort pane's list instance,
+    addressed through the manager's own pane accessor rather than by
+    indexing `panes` positionally."""
+    return ("(function() local c = require('scripts.cargo_inventory_panel');"
+            f" local p = c.getPane(c.getLevel(1), '{pane_key}');"
+            " return p and p.listId end)()")
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root: the read-only content families symlinked,
+    `config/` COPIED (the real UI flow writes settings and must never touch
+    the developer's own, #1266), and its OWN empty saves/.
+
+    The copy deliberately EXCLUDES `*.local.yaml`, so the run starts from the
+    tracked defaults a fresh checkout has rather than from whatever this
+    developer's settings happen to be. That is not tidiness: the Mode A
+    assertions read the `unit_event` / `unit_warning` text in the EVENT LOG,
+    and a category reaches the log only when its notifications YAML says
+    `log: true` - so a personal override could otherwise decide whether
+    these gestures pass. It also makes the run reproducible between two
+    checkouts of the same commit."""
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def load_item_defs(chk: Checks, port: int, base: str) -> bool:
+    """Register the leg item defs. Written OUTSIDE the checkout (into this
+    run's temp dir) so nothing under `data/` is ever touched, and loaded by
+    absolute path. A rejected file is reported as a plain 0, so an exact
+    count is what tells "registered" from "silently registered nothing"."""
+    items = os.path.join(base, "transfer_gesture_items.yaml")
+    with open(items, "w", encoding="utf-8") as f:
+        f.write(ITEMS_YAML)
+    ni = send(port, f"return engine.loadItemYaml('{items}')").strip()
+    return chk.ok(_num(ni) == float(len(ALL_ITEM_DEFS)),
+                  f"the {len(ALL_ITEM_DEFS)} throwaway leg item defs "
+                  f"registered", f"engine.loadItemYaml returned {ni!r}")
 
 
 # --------------------------------------------------------------------------
@@ -425,38 +514,6 @@ def event_total(port: int, uid: int, category: str, needle: str) -> int:
     return total
 
 
-def warning_texts(port: int, uid: int) -> list:
-    """Every `unit_warning` text currently in the log for `uid`, one entry
-    per coalesced row repeated by its own `count` — so a re-emission is a
-    new element rather than an invisible counter bump."""
-    out = []
-    for e in event_log(port):
-        if e.get("category") == "unit_warning" and e.get("uid") == uid:
-            out.extend([e.get("text") or ""] * int(e.get("count", 1) or 1))
-    return out
-
-
-def knowledge(port: int, bid: int) -> dict:
-    got = send_json(port, f"return building.getContainerKnowledge({bid})")
-    return got if isinstance(got, dict) else {}
-
-
-def live_storage_ids(port: int, bid: int, def_name: str) -> list:
-    got = send_json(port, f"return building.getStorage({bid})")
-    if not isinstance(got, list):
-        return []
-    return sorted(int(it["instanceId"]) for it in got
-                  if isinstance(it, dict) and it.get("defName") == def_name
-                  and isinstance(it.get("instanceId"), (int, float)))
-
-
-def remembered_ids(port: int, bid: int, def_name: str) -> list:
-    return sorted(int(it["instanceId"])
-                  for it in (knowledge(port, bid).get("items") or [])
-                  if isinstance(it, dict) and it.get("defName") == def_name
-                  and isinstance(it.get("instanceId"), (int, float)))
-
-
 def session(port: int):
     return send_json(port, "return require('scripts.transfer_session').get()")
 
@@ -535,140 +592,6 @@ def calm(port: int, uid: int) -> None:
     clear_find_water(port, uid)
     retire_medic_drive(port, uid)
     sustain(port, uid)
-
-
-# --------------------------------------------------------------------------
-# Requirement 1d: one widget renders every container view
-# --------------------------------------------------------------------------
-class ViewLedger:
-    """Evidence, collected as each container view is opened, that the ONE
-    item-list widget rendered it.
-
-    Collected LIVE rather than replayed at the end: a list instance only
-    exists while its view is open, so the rendered dump is the only
-    moment the question can be asked at all. Two independent facts per
-    view - the list id names a live instance in the widget's OWN
-    registry (`scripts/ui/item_list.getModel`, which answers nil for
-    an id it does not own), and every row the widget oracle reports
-    for it carries `type = "item_list"` - because a view with no
-    rows can only supply the first, and a view whose rows came from
-    somewhere else would still have a registered instance."""
-
-    def __init__(self) -> None:
-        self.views: dict[str, dict] = {}
-
-    def record(self, port: int, label: str, list_id_lua: str) -> dict:
-        list_id = resolve_list_id(port, list_id_lua)
-        registered = False
-        if list_id is not None:
-            # getModel, not getTabs: getTabs answers `{}` for an id it
-            # does not own, and an empty table is TRUTHY in Lua, so it
-            # cannot tell a live instance from a missing one.
-            got = send(port, "local il = require('scripts.ui.item_list');"
-                             f" return tostring(il.getModel({list_id_lua})"
-                             " ~= nil)").strip().strip('"')
-            registered = got == "true"
-        rows = item_rows(port, list_id_lua) if list_id is not None else []
-        entry = {
-            "listId": list_id,
-            "registered": registered,
-            "rows": len(rows),
-            "allItemList": all(r.get("type") == "item_list" for r in rows),
-        }
-        self.views[label] = entry
-        return entry
-
-
-# --------------------------------------------------------------------------
-# The real create-world screen, pinned to a fixed seed
-# --------------------------------------------------------------------------
-def reach_main_menu(chk: Checks, port: int) -> bool:
-    return chk.ok(bool(poll_until(90.0, lambda: find_widget(port, "Create World"))),
-                  "the loading screen reaches the main menu")
-
-
-def create_world(chk: Checks, port: int, seed: int, world_size: int,
-                 plates: int) -> bool:
-    """Generate the session's world through the REAL create-world screen,
-    with the generation parameters pinned.
-
-    The seed and size are written into `createWorldMenu.pending`, which
-    is exactly what `create_world/generation.lua` reads: the settings
-    tab's own randbox and dropdown write there through their `onChange`,
-    and nothing between here and Generate overwrites either field (only
-    the advanced/general/timeline tabs' `getWidgetValues` feed back into
-    `pending`, and none of them owns the seed or the size). Without this
-    the seed is a fresh random roll per run and no fingerprint could be
-    compared across two of them."""
-    click_widget_center(port, find_widget(port, "Create World"))
-    if not chk.ok(bool(poll_until(30.0,
-                                  lambda: find_widget(port, "Generate World"))),
-                  "the create-world screen is reached"):
-        return False
-    send(port, "local m = require('scripts.create_world_menu');"
-               f" m.pending.seed = string.format('%08X', {seed});"
-               f" m.pending.worldSize = '{world_size}';"
-               f" m.pending.plateCount = '{plates}';"
-               " return 'ok'")
-    pinned = send_json(port, "local m = require('scripts.create_world_menu');"
-                             " return {seed = m.pending.seed,"
-                             " size = m.pending.worldSize}")
-    if not chk.ok(isinstance(pinned, dict)
-                  and pinned.get("seed") == "%08X" % seed
-                  and pinned.get("size") == str(world_size),
-                  f"the create-world screen is pinned to seed 0x{seed:08X} at "
-                  f"world size {world_size}", f"got {pinned!r}"):
-        return False
-    click_widget_center(port, find_widget(port, "Generate World"))
-    print("  (generating world, ~1-2 min)", flush=True)
-    # `world.getInitProgress()` returns FOUR values (phase, chunks done,
-    # chunks total, label); binding one local takes the phase alone,
-    # which is what this is asking about. Returning the call directly
-    # would send back the whole tuple and never compare equal.
-    done = poll_until(420.0,
-                      lambda: send(port, "local p = world.getInitProgress();"
-                                         " return p", timeout=5.0).strip() == "3",
-                      interval=2.0)
-    if not chk.ok(bool(done), "worldgen completes (phase 3)"):
-        return False
-    if not chk.ok(bool(poll_until(90.0, lambda: find_widget(port, "Continue"))),
-                  "the post-generation Continue button appears"):
-        return False
-    click_widget_center(port, find_widget(port, "Continue"))
-    if not chk.ok(bool(poll_until(90.0,
-                                  lambda: not find_widget(port, "Continue"))),
-                  "the in-game HUD is reached"):
-        return False
-    time.sleep(2.0)
-    got = send(port, "return tostring(world.getSeed())").strip().strip('"')
-    chk.ok(got == str(seed),
-           f"the generated world really carries the pinned seed {seed}",
-           f"world.getSeed() = {got!r}")
-    return True
-
-
-def load_fixtures(chk: Checks, port: int, base: str) -> bool:
-    """Register the probe's own throwaway defs. Written OUTSIDE the
-    checkout (into this run's temp dir) so nothing under `data/` is ever
-    touched, and loaded by absolute path."""
-    items = os.path.join(base, "unified_transfer_items.yaml")
-    builds = os.path.join(base, "unified_transfer_buildings.yaml")
-    with open(items, "w", encoding="utf-8") as f:
-        f.write(ITEMS_YAML)
-    with open(builds, "w", encoding="utf-8") as f:
-        f.write(BUILDINGS_YAML)
-    ni = send(port, f"return engine.loadItemYaml('{items}')").strip()
-    nb = send(port, f"return engine.loadBuildingYaml('{builds}')").strip()
-    # A rejected file is reported as a plain 0 (the loader hands back an
-    # empty list after a parse failure), so an exact count is what tells
-    # "registered" from "silently registered nothing".
-    okay = chk.ok(_num(ni) == float(len(ALL_ITEM_DEFS)),
-                  f"the probe's {len(ALL_ITEM_DEFS)} throwaway item defs "
-                  f"registered", f"engine.loadItemYaml returned {ni!r}")
-    okay = chk.ok(_num(nb) == 4.0,
-                  "the probe's four throwaway building defs registered",
-                  f"engine.loadBuildingYaml returned {nb!r}") and okay
-    return okay
 
 
 def _num(raw, default: float = -1.0) -> float:
@@ -946,33 +869,6 @@ def open_window(chk: Checks, port: int, ep, label: str) -> bool:
                   f"openFor returned {accepted!r}, isOpen={is_open}")
 
 
-def open_window_by_right_click(chk: Checks, port: int, ep, vp: dict,
-                               label: str) -> bool:
-    """The REAL route: right-click the world entity (located and
-    confirmed by the production hit test) and activate the rendered
-    "Contents" row located through `ui.dumpWidgets()`."""
-    kind = "building" if ep[0] == "building" else "unit"
-    pixel = focus_entity(chk, port, kind, ep[1], vp, label)
-    if pixel is None:
-        return False
-    right_click_pixel(port, pixel, vp)
-    labels = menu_labels(port)
-    entry = find_widget(port, "Contents")
-    if not chk.ok(bool(entry),
-                  f"{label}: the right-click menu offers 'Contents'",
-                  f"menu labels: {labels!r}"):
-        close_menu(port)
-        return False
-    click_widget_center(port, entry)
-    time.sleep(0.8)
-    lvl = send_json(port, f"return {WINDOW}.getLevel(1)")
-    src = (lvl or {}).get("src") if isinstance(lvl, dict) else None
-    return chk.ok(isinstance(src, dict) and src.get("endpointKind") == ep[0]
-                  and src.get("id") == ep[1],
-                  f"{label}: the activated row opened the window on the exact "
-                  f"endpoint identity {ep[0]} #{ep[1]}", f"got {src!r}")
-
-
 # --------------------------------------------------------------------------
 # Fixture staging and unit control, shared by every leg of both modes
 # --------------------------------------------------------------------------
@@ -988,38 +884,6 @@ def seed_source(port: int, src, def_name: str, stager: int) -> None:
         add_one(port, src[1], def_name)
     else:
         stage_into_hold(port, stager, src[1], def_name)
-
-
-def send_home(port: int, uid: int, home, away_from, gap: int = 3,
-              seconds: float = 120.0) -> None:
-    """Walk `uid` back to its own anchor until it is clear of
-    `away_from`.
-
-    Every leg leaves its carrier standing AT the endpoint it just
-    served, so without this the next leg would fire its gesture from
-    adjacent — and the "Mode B needed no adjacency" half of the leg
-    would be asserting something that happened to be false rather than
-    something the mode guarantees. Sending it home also gives each leg a
-    real trip to make, which is what the arrival commit is."""
-    if home is None:
-        return
-    send(port, f"unit.stop({uid}); require('scripts.unit_ai').commandMove("
-               f"{uid}, {home[0]}, {home[1]}); return 'ok'")
-    set_paused(port, False)
-    poll_until(seconds,
-               lambda: (footprint_gap(port, ("unit", uid), away_from) or 0)
-               >= gap, interval=0.5)
-    # Leave it IDLE where it stands, so nothing it was told to do
-    # earlier is still in flight when the next gesture is made — the
-    # same precondition `tools/item_list_widget_probe.py`'s
-    # `spawn_pair_apart` establishes before creating a session, and for
-    # the same reason: an action that is deliberately not forceExecute
-    # runs only on a switch or on an idle unit, so a carrier caught
-    # mid-path is a different starting state from the one a player ever
-    # produces.
-    send(port, f"unit.stop({uid}); return 'ok'")
-    set_paused(port, True)
-    time.sleep(0.4)
 
 
 def retire_leg_item(port: int, dst, def_name: str) -> None:
@@ -1048,72 +912,6 @@ def retire_leg_item(port: int, dst, def_name: str) -> None:
     send(port, "return unit.removeItem(%d, '%s')" % (int(ident), def_name))
 
 
-# --------------------------------------------------------------------------
-# Terrain around an endpoint, and whether a unit still takes orders
-# --------------------------------------------------------------------------
-def accepts_movement(port: int, uid: int, window: float = 10.0) -> bool:
-    """Does `uid` take an ordinary move order again?
-
-    Answered by watching the real AI either SELECT the order or act on
-    it. Selecting counts, and that is the point: the hold is a utility,
-    so "released" means the ordinary ladder decides again, and
-    `follow_command` becoming this unit's current action IS the ladder
-    taking the player's order. Whether the unit then covers ground is
-    generated terrain's business. `unit.stop` first, because a released
-    unit still carries whatever the hold preempted and the action would
-    not SWITCH when the new order arrives."""
-    info = send_json(port, f"return unit.getInfo({uid})")
-    if not isinstance(info, dict):
-        return False
-    ax, ay = int(info.get("gridX", 0)), int(info.get("gridY", 0))
-    before = (float(info.get("gridX", 0)), float(info.get("gridY", 0)))
-    ai = "require('scripts.unit_ai')"
-    for dx, dy in ((2, 0), (0, 2), (-2, 0), (0, -2), (4, 0), (0, 4)):
-        tx, ty = ax + dx, ay + dy
-        surface = tile_surface(port, tx, ty)
-        if surface is None or not surface[1]:
-            continue
-        send(port, f"unit.stop({uid}); {ai}.commandMove({uid}, {tx}, {ty});"
-                   " return 'ok'")
-
-        def moved_or_took():
-            got = send_json(port, f"return unit.getInfo({uid})")
-            if isinstance(got, dict):
-                now = (float(got.get("gridX", 0)), float(got.get("gridY", 0)))
-                if abs(now[0] - before[0]) + abs(now[1] - before[1]) > 0.5:
-                    return True
-            return ai_action(port, uid) == "follow_command"
-
-        if poll_until(window, moved_or_took, interval=0.4):
-            return True
-    return False
-
-
-def park_beside(port: int, uid: int, ep, seconds: float = 45.0) -> bool:
-    """Walk `uid` to within the contract's own reach of `ep` and answer
-    whether it got there.
-
-    Spawn position is not enough on its own: a fixture spawned beside a
-    container is free to wander off during the console round trips that
-    follow, and the proximity case below has to be measured on a unit
-    that really is standing there."""
-    rect = ep_rect(port, ep)
-    if rect is None:
-        return False
-    spot = adjacent_dry(port, rect[0], rect[1])
-    if spot is None:
-        return False
-    send(port, f"unit.stop({uid}); require('scripts.unit_ai').commandMove("
-               f"{uid}, {spot[0]}, {spot[1]}); return 'ok'")
-    set_paused(port, False)
-    got = poll_until(seconds,
-                     lambda: (footprint_gap(port, ("unit", uid), ep) or 9) <= 1,
-                     interval=0.5)
-    set_paused(port, True)
-    time.sleep(0.4)
-    return got is not None
-
-
 def adjacent_dry_tiles(port: int, gx: int, gy: int) -> list:
     """Every dry tile beside `(gx, gy)`.
 
@@ -1134,7 +932,140 @@ def adjacent_dry_tiles(port: int, gx: int, gy: int) -> list:
     return out
 
 
-def adjacent_dry(port: int, gx: int, gy: int):
-    """The first dry tile beside `(gx, gy)`, or None."""
-    tiles = adjacent_dry_tiles(port, gx, gy)
-    return tiles[0] if tiles else None
+# --------------------------------------------------------------------------
+# The escort-session lifecycle: this module's PUBLIC interface
+# --------------------------------------------------------------------------
+# `knowledge`, `batch` and `save` each open a real escort session too,
+# and they open it through exactly these entry points. There is one
+# implementation of "create a session, run the world until the escort
+# arrives and the pair opens, and tear the whole thing down again",
+# because the three ways an open can fail are only distinguishable when
+# every caller samples the same phases on the way.
+def stack_dump(port: int) -> dict:
+    got = send_json(port, f"return {WINDOW}.dump()")
+    return got if isinstance(got, dict) else {}
+
+
+def session_names(port: int, src_uid: int, dst_ep):
+    """`(does the live session name exactly these endpoints, the session)`."""
+    s = session(port)
+    return (isinstance(s, dict)
+            and (s.get("source") or {}).get("id") == src_uid
+            and (s.get("destination") or {}).get("kind") == dst_ep[0]
+            and (s.get("destination") or {}).get("id") == dst_ep[1]), s
+
+
+def create_session(chk: Checks, port: int, src_uid: int, dst_ep, vp: dict,
+                   label: str, via_menu: bool) -> bool:
+    """Create a Mode A session — through the REAL right-click "Transfer"
+    row when `via_menu`, otherwise through the same
+    `transfer_session.create` that row's callback calls.
+
+    The menu route is a REQUIRED observation with a fallback, never a
+    silent one: a row that cannot be located, and a row that produced a
+    session on some OTHER endpoint, are both recorded as failures here
+    and the session is then built directly so the legs below still
+    report. A silent fallback would delete these checks instead of
+    failing them."""
+    send(port, "unit.deselectAll(); return 'ok'")
+    send(port, f"return unit.select({src_uid})")
+    time.sleep(0.5)
+    if via_menu:
+        kind = "building" if dst_ep[0] == "building" else "unit"
+        pixel = focus_entity(chk, port, kind, dst_ep[1], vp, label)
+        if pixel is None:
+            via_menu = False   # focus_entity recorded the localization failure
+    if via_menu:
+        right_click_pixel(port, pixel, vp)
+        labels = menu_labels(port)
+        entry = find_widget(port, "Transfer")
+        if chk.ok(bool(entry),
+                  f"{label}: the right-click menu offers 'Transfer'",
+                  f"menu labels: {labels!r}"):
+            click_widget_center(port, entry)
+            time.sleep(0.8)
+            named, live = session_names(port, src_uid, dst_ep)
+            if chk.ok(named,
+                      f"{label}: activating the rendered 'Transfer' row "
+                      f"created the session on the exact endpoint identity "
+                      f"{dst_ep[0]}:{dst_ep[1]}", f"got {live!r}"):
+                return True
+            send(port, "require('scripts.transfer_session').clear();"
+                       " return 'ok'")
+        else:
+            close_menu(port)
+    made = send(port, "return tostring(require('scripts.transfer_session')"
+                      f".create({src_uid}, '{dst_ep[0]}', {dst_ep[1]})"
+                      " ~= nil)").strip().strip('"')
+    if not chk.ok(made == "true", f"{label}: a Mode A session is created",
+                  f"got {made!r}"):
+        return False
+    named, live = session_names(port, src_uid, dst_ep)
+    return chk.ok(named,
+                  f"{label}: the session names the exact endpoint identities",
+                  f"got {live!r}")
+
+
+def await_session_open(chk: Checks, port: int, src_uid: int, label: str,
+                       seconds: float = 150.0) -> bool:
+    """Run the world until the escort arrives and the pair opens.
+
+    Every distinct phase is recorded on the way, because the three ways
+    this can fail are not distinguishable from the final state alone:
+    stuck on `approaching` is an AI that never won, a phase that reached
+    `open` and then vanished is a TEARDOWN (a zoom-band change and a HUD
+    hide both clear a session), and never seeing a phase at all is a
+    session that was refused."""
+    seen: list = []
+    stale: list = []
+    poses: list = []
+
+    def look():
+        # `staleReason` is PUBLIC precisely so a gate can ask the same
+        # question the session's own tick asks; sampled alongside the
+        # phase, it is what tells "the AI never won" apart from "an
+        # endpoint stopped qualifying and the session was torn down".
+        got = send(port, "local ts = require('scripts.transfer_session');"
+                         " local s = ts.get();"
+                         " return (s and s.phase or 'none') .. '/' .."
+                         " tostring(s and ts.staleReason() or 'n/a') .. '/'"
+                         f" .. tostring(unit.getPose({src_uid}))"
+                   ).strip().strip('"')
+        phase, _, rest = got.partition("/")
+        reason, _, pose = rest.partition("/")
+        if pose and pose not in poses:
+            poses.append(pose)
+        if not seen or seen[-1] != phase:
+            seen.append(phase)
+        if reason not in ("nil", "n/a", "") and reason not in stale:
+            stale.append(reason)
+        return phase == "open"
+
+    set_paused(port, False)
+    opened = poll_until(seconds, look, interval=0.5)
+    set_paused(port, True)
+    time.sleep(0.6)
+    return chk.ok(bool(opened),
+                  f"{label}: the REAL unit AI walks the escort and opens the "
+                  f"pair on arrival",
+                  f"phases seen {seen!r}, stale reasons seen {stale!r}, "
+                  f"escort poses seen {poses!r} (a Collapsed one is a FALL "
+                  f"knockdown, which ends the session by rule), escort "
+                  f"running {ai_action(port, src_uid)!r}, stack depth "
+                  f"{stack_dump(port).get('depth')!r}, camera "
+                  f"{camera_state(port)!r}")
+
+
+def close_session(chk: Checks, port: int, held: list, label: str) -> None:
+    """One dismissal takes both panes AND the session AND every hold."""
+    send(port, f"{WINDOW}.popLevel(); return 'ok'")
+    time.sleep(0.8)
+    chk.ok(session(port) is None,
+           f"{label}: closing the level ends the session (one coupled teardown)")
+    for uid in held:
+        got = send(port, "return tostring(require('scripts.transfer_session')"
+                         f".holdsUnit({uid}))").strip().strip('"')
+        chk.ok(got == "false", f"{label}: unit {uid} is released by the "
+                               f"session ending", f"holdsUnit = {got!r}")
+
+

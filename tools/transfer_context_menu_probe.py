@@ -53,6 +53,16 @@ Verifies, in order:
      on the SELECTED acolyte itself offers no "Transfer" (self-transfer),
      and neither does a right-click on a wildlife unit
      (not player-commandable).
+  7. the GESTURE stages (`tools/transfer_gesture_stages.py`, folded in from
+     the retired end-to-end transfer probe, #2935): a REAL right-click on a
+     REAL rendered item-list row and a real click on the located
+     `Store 1` / `Retrieve 1` entry, across every ordered pair of the three
+     endpoint classes (acolyte, technomule, built storage) in both player
+     modes - Mode B queues exactly one durable order naming the exact
+     instance from out of reach and moves nothing at click time; Mode A
+     commits on the spot from the clicked pane and the contract's
+     structured answer flips from accepted to `instance_missing`. Reported
+     per stage (`setup`, `modeB`, `modeA`).
 
 Determinism (#1014 review): every unit is spawned several tiles away
 from the storage building's own tile and from each other, because
@@ -76,7 +86,16 @@ framebuffer space (what `input.*` takes); the two coincide under
 `--offscreen`, which is why the distinction has to hold by construction.
 The simulation stays PAUSED throughout -- these fixtures stand on a
 mountainous shoreline and an acolyte left walking on it accumulates fall
-damage until it dies (measured).
+damage until it dies (measured) -- except for the few ticks each Mode A
+session's real unit AI needs to open the pair, whose escort is spawned
+beside its endpoint so it never walks.
+
+Isolation (#2935): the engine boots on an invocation-owned resource root -
+`scripts`, `assets` and `data` symlinked, `config/` COPIED without
+`*.local.yaml`, and its own empty `saves/` - because the gesture stages
+read logged `unit_event` text (a local notification override could
+otherwise decide whether they pass) and the engine writes runtime
+configuration on startup.
 
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py`
 per CLAUDE.md; the CI-blocking gate for this feature is
@@ -102,6 +121,9 @@ from probelib import (boot, camera_state, centred_within,
                       focus_and_locate, locate_building_pixel, poll_until,
                       quit_engine, send, send_json, set_paused,
                       targeting_report, viewport, win_to_fb)
+from transfer_gesture_lib import make_isolated_root
+from transfer_gesture_stages import run_stages
+import probe_evidence
 
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "transfer_context_menu_probe_buildings.yaml")
@@ -528,16 +550,27 @@ def main() -> int:
     args = ap.parse_args()
     port = args.port
 
-    print(f"== offscreen boot (port {port}, {args.size}) ==")
-    proc = boot(port, mode=("--offscreen",), args=["--size", args.size],
-                label="offscreen engine")
-    # Registered for teardown before ANY fallible work below (#1323): an
-    # unexpected socket/parsing/widget exception used to skip every
-    # quit_engine call and strand this engine holding its port.
+    # The whole run lives on an invocation-owned resource root (symlinked
+    # read-only content, COPIED default config without `*.local.yaml`, its
+    # own empty saves/), so no developer override decides a gesture's
+    # outcome and the engine's runtime writes never reach the checkout.
+    base = tempfile.mkdtemp(prefix="synarchy_transfer_context_menu_")
+    proc = None
     try:
+        root = make_isolated_root(base)
+        print(f"== offscreen boot (port {port}, {args.size}, resource root "
+              f"{root}) ==")
+        proc = boot(port, mode=("--offscreen",),
+                    args=["--size", args.size, "--resource-root", root],
+                    label="offscreen engine")
+        # Registered for teardown before ANY fallible work below (#1323): an
+        # unexpected socket/parsing/widget exception used to skip every
+        # quit_engine call and strand this engine holding its port.
         return _run(port, args)
     finally:
-        quit_engine(port, proc)
+        if proc is not None:
+            quit_engine(port, proc)
+        probe_evidence.discard_scratch(base)
 
 
 def _run(port: int, args) -> int:
@@ -822,6 +855,20 @@ def _run(port: int, args) -> int:
         check("wildlife menu: 'Transfer' is ABSENT (not player-commandable)",
               find_widget(port, "Transfer") is None)
     close_menu(port)
+
+    # ------------------------------------------------------------------
+    # The gesture stages (modeB / modeA): real right-clicks on real
+    # rendered rows, one exact item instance across every ordered pair of
+    # the three endpoint classes. Reported stage by stage, so a failure
+    # names the stage that broke.
+    # ------------------------------------------------------------------
+    print("== gesture stages (real right-clicks on rendered item rows) ==")
+    gesture_failed = run_stages(
+        port, vp, {"acolyte": uid, "technomule": mule_uid, "hold": bid},
+        SPROOT)
+    if gesture_failed:
+        check(f"the gesture stages passed ({gesture_failed} check(s) failed)",
+              False)
 
     if failures:
         print(f"\ntransfer_context_menu_probe: {failures} check(s) FAILED")

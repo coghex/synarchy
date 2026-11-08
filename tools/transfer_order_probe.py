@@ -43,11 +43,22 @@ checks is downstream of that:
      timeout still completes — the closest-approach reset is what
      distinguishes a stall timer from a trip budget (#920).
   9. An order in flight survives a real save -> quit -> fresh restart ->
-     load, and the carrier resumes and completes it.
+     load with its EXACT durable identity (order id, endpoint identities,
+     instance ids in entry order), and the carrier resumes and completes
+     it exactly once. Each save is awaited by its own request id to its
+     terminal phase, and each engine's log is read only once its process
+     is gone (#1487, #2935).
  10. The player cancels a haul mid-walk: nothing moves and the carrier
      is released.
  11. The carrier DIES mid-walk: its order is retired rather than left
      pending forever on a unit that will never tick again.
+ 12. ONE exact instance walks the whole directed circuit of the three
+     endpoint classes (acolyte, technomule, built storage) through queued
+     orders - all six ordered pairs, each walked by a real carrier to its
+     arrival commit - with exact source and destination ownership read
+     before and after every leg, the order pruned and exactly one
+     attributed completion event per leg (#2935: the per-pair completion
+     the retired end-to-end probe gave each queued gesture).
 
 #1253's terminal cleanup runs through every one of those. Whichever way
 an order ends — committed, refused, retired, stalled or cancelled — its
@@ -77,13 +88,15 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 import probe_evidence
+from transfer_probe_checks import Checks, check_boundary_log
 from probelib import (FixtureNotRegistered, boot, clear_find_water,
                       init_arena, init_world, load_fixture_yaml, poll_until,
                       quit_engine, send, send_json, wait_load_published,
-                      load_ai_stack)
+                      load_ai_stack, capture_request_id, wait_save_complete)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_transfer_order_slot"
@@ -207,16 +220,10 @@ CANCEL_HOLD_X = 10
 KILL_HOLD_X = 30
 
 
-class Checks:
-    def __init__(self) -> None:
-        self.failed = 0
-
-    def ok(self, cond: bool, label: str, detail: str = "") -> bool:
-        print(f"  [{'PASS' if cond else 'FAIL'}] {label}"
-              + (f"  ({detail})" if detail and not cond else ""))
-        if not cond:
-            self.failed += 1
-        return bool(cond)
+# One stage per phase: a failure names the phase that broke, and every failed
+# check is a durable failure record (#2802) under that stage. The shared
+# recorder also carries the #1487 integrity-log oracle phase 9 ends with.
+STAGES = [f"phase{n}" for n in range(1, 13)]
 
 
 # --------------------------------------------------------------------------
@@ -328,6 +335,19 @@ def entry_states(order: dict) -> list:
             s += "/" + e["cause"]
         out.append(s)
     return out
+
+
+def order_identity(order: dict) -> dict:
+    """Everything durable about one order: its id, both endpoint identities
+    and the exact instance ids it names, in entry order."""
+    return {
+        "id": order.get("id"),
+        "source": f"{(order.get('source') or {}).get('kind')}"
+                  f":{(order.get('source') or {}).get('id')}",
+        "destination": f"{(order.get('destination') or {}).get('kind')}"
+                       f":{(order.get('destination') or {}).get('id')}",
+        "items": [e.get("instanceId") for e in (order.get("entries") or [])],
+    }
 
 
 def event_log(port: int) -> list:
@@ -862,6 +882,95 @@ def phase_cancel(port: int, chk: Checks) -> None:
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
+def endpoint_ids(port: int, ep) -> list:
+    """The exact `probe_ingot` instance ids an endpoint holds, as the
+    transfer contract projects them."""
+    info = send_json(port, "return unit.transferEndpointInfo("
+                           f"{{ kind = '{ep[0]}', id = {ep[1]} }})")
+    return sorted(int(i["instanceId"]) for i in (info or {}).get("contents")
+                  or [] if i.get("defName") == "probe_ingot")
+
+
+def phase_endpoint_circuit(port: int, chk: Checks) -> None:
+    """12. One exact instance through all six ordered endpoint-class pairs.
+
+    {acolyte, technomule, built storage} has six directed edges, and one
+    circuit visits each exactly once (A->S, S->M, M->A, A->M, M->S, S->A),
+    so a SINGLE instance is carried round it: any leg that moved a different
+    item, or moved it to the wrong place, breaks every leg after it. Each
+    leg is a queued order commanded for an EXACT instance and walked by a
+    real carrier (the unit endpoint it involves; a technomule for two of the
+    six) to its arrival commit. On the arena, so no terrain decides it."""
+    print("\n--- 12. one exact instance round the six endpoint-class "
+          "pairs ---")
+    lane = LANES[2]
+    hold_x = 20
+    bid = spawn_hold(port, "probe_wide_hold", hold_x, lane)
+    if not chk.ok(bid is not None, "3x1 probe hold spawned"):
+        return
+    acolyte = spawn_carrier(port, hold_x + 14, lane)
+    mraw = send(port, f"return unit.spawn('technomule', {hold_x + 14}, "
+                      f"{lane + 5}, nil, 'player')")
+    try:
+        mule = int(float(mraw))
+    except (TypeError, ValueError):
+        chk.ok(False, "technomule spawned", mraw)
+        return
+    clear_find_water(port, mule)
+    A, M, S = ("unit", acolyte), ("unit", mule), ("building", bid)
+    give(port, acolyte, "probe_ingot", 1)
+    held = endpoint_ids(port, A)
+    if not chk.ok(len(held) == 1, "the acolyte holds exactly one probe_ingot",
+                  str(held)):
+        return
+    iid = held[0]
+    # (name, source, destination, executor uid): the executor is the unit
+    # endpoint the leg involves; for unit<->unit it is the source, except
+    # M->A where the RECEIVER walks to fetch it.
+    circuit = [("acolyte->storage", A, S, acolyte),
+               ("storage->technomule", S, M, mule),
+               ("technomule->acolyte", M, A, acolyte),
+               ("acolyte->technomule", A, M, acolyte),
+               ("technomule->storage", M, S, mule),
+               ("storage->acolyte", S, A, acolyte)]
+    for name, src, dst, executor in circuit:
+        label = f"circuit {name}"
+        if not chk.ok(endpoint_ids(port, src) == [iid]
+                      and iid not in endpoint_ids(port, dst),
+                      f"{label}: the exact instance {iid} starts on the "
+                      f"source and not on the destination",
+                      f"src={endpoint_ids(port, src)!r} "
+                      f"dst={endpoint_ids(port, dst)!r}"):
+            return
+        before = event_total(port, executor, "unit_event", "transferred")
+        request = ("{ source = { kind = '%s', id = %d }, destination = "
+                   "{ kind = '%s', id = %d }, items = { { instanceId = %d, "
+                   "defName = 'probe_ingot' } } }"
+                   % (src[0], src[1], dst[0], dst[1], iid))
+        oid_raw = command_order(port, executor, request)
+        try:
+            oid = int(float(oid_raw))
+        except (TypeError, ValueError):
+            chk.ok(False, f"{label}: the order was accepted", oid_raw)
+            return
+        chk.ok(wait_settled(port, executor, oid, 150.0),
+               f"{label}: the carrier walks the order to its arrival commit "
+               f"and it is pruned")
+        chk.ok(endpoint_ids(port, dst) == [iid]
+               and iid not in endpoint_ids(port, src),
+               f"{label}: the exact instance is now on the destination and "
+               f"left the source - in exactly one endpoint",
+               f"src={endpoint_ids(port, src)!r} "
+               f"dst={endpoint_ids(port, dst)!r}")
+        chk.ok(not [o for o in orders(port, executor) if o.get("id") == oid],
+               f"{label}: no order is left in the store")
+        chk.ok(event_total(port, executor, "unit_event", "transferred")
+               - before == 1,
+               f"{label}: the completion reached the player exactly once")
+    for uid in (acolyte, mule):
+        send(port, f"unit.destroy({uid}); return 'ok'")
+
+
 def phase_carrier_dies(port: int, chk: Checks) -> None:
     """11. The carrier DIES mid-walk (#1253, review round 1).
 
@@ -958,12 +1067,15 @@ def find_hold_site(port: int) -> tuple[int, int, int] | None:
     return None
 
 
-def log_lines(path: str, needle: str) -> list[str]:
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return [ln.rstrip("\n") for ln in f if needle in ln]
-    except OSError:
-        return []
+def save_completed(port: int, what: str) -> bool:
+    """Await the terminal phase of the save just requested, by request id."""
+    rid = capture_request_id(port, "return engine.getSaveStatus()")
+    done, status = (wait_save_complete(port, rid, seconds=180.0)
+                    if rid is not None else (False, None))
+    if not done:
+        print(f"  ({what}: request {rid!r} never completed: {status!r})",
+              flush=True)
+    return bool(done)
 
 
 def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
@@ -974,6 +1086,7 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
     proc = boot(port, log=log_b, args=["--resource-root", root],
                 ready_timeout=180)
     uid = bid = oid = None
+    want = None     # the order's exact durable identity, captured pre-save
     try:
         bootstrap_defs(port, tmp)
         load_ai_stack(port)
@@ -989,8 +1102,10 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
         if not chk.ok(bid is not None, "3x1 probe hold spawned on real terrain"):
             return
         uid = spawn_carrier(port, gx + 12, gy)
-        give(port, uid, "probe_ingot", 1)
-        oid_raw = command_order(port, uid, order_request(port, uid, bid, 1))
+        # TWO instances, so the order's entry ORDER is part of the identity
+        # the fresh process has to reproduce exactly.
+        give(port, uid, "probe_ingot", 2)
+        oid_raw = command_order(port, uid, order_request(port, uid, bid, 2))
         try:
             oid = int(float(oid_raw))
         except (TypeError, ValueError):
@@ -998,6 +1113,12 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
             return
         chk.ok(wait_state(port, uid, oid, "in_transit", 30.0) is not None,
                "the order is IN FLIGHT when the save is taken")
+        flight = [o for o in orders(port, uid) if o.get("id") == oid]
+        if chk.ok(len(flight) == 1 and len(order_identity(flight[0])["items"]) == 2,
+                  "the in-flight order names both exact instances",
+                  str([order_identity(o) for o in orders(port, uid)])):
+            want = order_identity(flight[0])
+        held_before = sorted(i["instanceId"] for i in ingots(port, uid))
 
         # An ORPHAN candidate rides along in the same save (#1253): a
         # second carrier with its own in-flight order, destroyed before
@@ -1017,15 +1138,18 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
 
         saved = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
         chk.ok(saved.strip() == "true", "engine.saveWorld accepted", saved)
-        save_file = os.path.join(root, "saves", SLOT, "world.synworld")
-        chk.ok(poll_until(30.0, lambda: os.path.exists(save_file) or None)
-               is not None, "the save file appeared")
-        chk.ok(not log_lines(log_b, "integrity diagnostic"),
-               "the SAVE reported no integrity diagnostic — the destroyed "
-               "carrier's order never reached it",
-               str(log_lines(log_b, "integrity diagnostic")[:3]))
+        # `engine.saveWorld` only ACCEPTS the request; the save is durable
+        # when ITS request id reaches a terminal phase (and a failed or
+        # unfinished save need not log an integrity diagnostic at all).
+        chk.ok(save_completed(port, "engine B's save"),
+               "the save completes and is durable (its own request id "
+               "reaches SaveCaptureComplete)")
     finally:
         quit_engine(port, proc)
+        # The SAVE reported no integrity diagnostic - the destroyed
+        # carrier's order never reached it. Read once the process is gone,
+        # and an unreadable log is a FAILURE, never "no diagnostics" (#1487).
+        check_boundary_log(chk, chk.stage, "engine B (save)", log_b, proc)
 
     proc = boot(port, log=log_c, args=["--resource-root", root],
                 ready_timeout=180)
@@ -1043,17 +1167,30 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
             chk.ok(not restored[0].get("terminal"),
                    "still non-terminal, so there is a trip left to resume",
                    str(entry_states(restored[0])))
-        # Requirement 5's "the integrity sweep stays quiet", end to end
-        # and in a fresh process: World.Load.Stage logs one line per
-        # dangling transfer-order reference, and the orphaned order's
-        # dead carrier, endpoints and items would be several.
-        chk.ok(not log_lines(log_c, "transfer-order integrity diagnostic"),
-               "the LOAD reported no dangling transfer-order reference",
-               str(log_lines(log_c, "transfer-order integrity diagnostic")[:3]))
+        # The EXACT durable identity, not just that an order came back:
+        # same order id, same endpoint identities, same instance ids in the
+        # same entry order, and nothing else queued beside it.
+        got = [order_identity(o) for o in orders(port, uid)]
+        chk.ok(want is not None and got == [want],
+               "the order survives with its EXACT identity - same order id, "
+               "same endpoint identities, same instance ids in the same order",
+               f"got {got!r} want {[want]!r}")
+        chk.ok(sorted(i["instanceId"] for i in ingots(port, uid))
+               == held_before and held_before == sorted(want["items"] or []),
+               "and the carrier still holds exactly the instances it names",
+               f"held {sorted(i['instanceId'] for i in ingots(port, uid))!r}")
+        # Requirement 5's "the integrity sweep stays quiet", end to end and
+        # in a fresh process, is checked once this engine has gone: the
+        # whole boundary's log, load and the final save included.
+        ev_before = event_total(port, uid, "unit_event", "transferred")
         send(port, "engine.setPaused(false); return 'ok'")
         chk.ok(wait_settled(port, uid, oid, 180.0),
                "the carrier resumes, the order completes and is pruned")
-        chk.ok(len(stored(port, bid)) == 1, "the item is in the hold")
+        chk.ok(len(stored(port, bid)) == 2, "both items are in the hold")
+        chk.ok(event_total(port, uid, "unit_event", "transferred")
+               - ev_before == 1,
+               "it completed EXACTLY ONCE across the process boundary - one "
+               "attributed completion event, never a second commit")
         chk.ok(orders(port, uid) == [],
                "and the carrier is left with no order at all",
                str(orders(port, uid)))
@@ -1063,14 +1200,19 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
         # cleanly with no diagnostic is what says so at the boundary
         # rather than only in the store.
         saved2 = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
-        chk.ok(saved2.strip() == "true", "a post-completion save succeeds",
+        chk.ok(saved2.strip() == "true", "a post-completion save is accepted",
                saved2)
-        time.sleep(2.0)
-        chk.ok(not log_lines(log_c, "integrity diagnostic"),
-               "…with no integrity diagnostic of any kind",
-               str(log_lines(log_c, "integrity diagnostic")[:3]))
+        chk.ok(save_completed(port, "the post-completion save"),
+               "…and completes durably: its own request id reaches "
+               "SaveCaptureComplete, so the final boundary's clean log is "
+               "about a save that actually finished")
     finally:
         quit_engine(port, proc)
+        # The LOAD reported no dangling transfer-order reference
+        # (`World.Load.Stage` logs one line per dangling reference) and the
+        # post-completion save no diagnostic of any kind.
+        check_boundary_log(chk, chk.stage, "engine C (load, then a second "
+                                           "save)", log_c, proc)
 
 
 # --------------------------------------------------------------------------
@@ -1091,45 +1233,79 @@ def main() -> int:
                     help="comma-separated phase numbers (default: all)")
     args = ap.parse_args()
 
-    all_phases = set(range(1, 12))
+    all_phases = set(range(1, 13))
     wanted = {int(p) for p in args.only.split(",") if p.strip()} or all_phases
     # A selection that names no real phase must FAIL, not report a clean
     # run of nothing: an exit-0 probe that executed zero checks is
     # indistinguishable from one that passed.
     if not wanted & all_phases:
-        print(f"no such phase(s): {sorted(wanted)} (valid: 1-11)")
+        print(f"no such phase(s): {sorted(wanted)} (valid: 1-12)")
         return 2
     tmp = tempfile.mkdtemp(prefix="synarchy_transfer_order_probe_")
-    chk = Checks()
+    # Only the SELECTED phases are stages, so a `--only` run is not reported
+    # as having "not reached" the ones it never asked for.
+    chk = Checks("transfer_order_probe",
+                 [f"phase{n}" for n in sorted(wanted & all_phases)])
     proc = None
     try:
-        if wanted & (set(range(1, 9)) | {10, 11}):
-            print(f"== arena engine (port {args.port}) ==")
-            proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
-            bootstrap_defs(args.port, tmp)
-            load_ai_stack(args.port)
-            init_arena(args.port, name="move_test")
-            phases = [
-                (1, phase_walk_and_commit),
-                (2, phase_command_time_refusal),
-                (3, phase_partial_batch),
-                (4, phase_arrival_refusal),
-                (5, phase_stale_instance),
-                (6, phase_vanished_counterpart),
-                (7, phase_blocked_approach),
-                (8, phase_long_trip),
-                (10, phase_cancel),
-                (11, phase_carrier_dies),
-            ]
-            for n, fn in phases:
-                if n in wanted:
-                    fn(args.port, chk)
-            quit_engine(args.port, proc)
-            proc = None
-        if 9 in wanted:
-            root = make_isolated_root(tmp)
-            phase_save_load(chk, root, tmp, args.port, args.seed, args.size)
+        try:
+            if wanted & (set(range(1, 9)) | {10, 11, 12}):
+                print(f"== arena engine (port {args.port}) ==")
+                proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
+                bootstrap_defs(args.port, tmp)
+                load_ai_stack(args.port)
+                init_arena(args.port, name="move_test")
+                phases = [
+                    (1, phase_walk_and_commit),
+                    (2, phase_command_time_refusal),
+                    (3, phase_partial_batch),
+                    (4, phase_arrival_refusal),
+                    (5, phase_stale_instance),
+                    (6, phase_vanished_counterpart),
+                    (7, phase_blocked_approach),
+                    (8, phase_long_trip),
+                    (10, phase_cancel),
+                    (11, phase_carrier_dies),
+                    (12, phase_endpoint_circuit),
+                ]
+                for n, fn in phases:
+                    if n in wanted:
+                        chk.enter(f"phase{n}")
+                        fn(args.port, chk)
+                quit_engine(args.port, proc)
+                proc = None
+            if 9 in wanted:
+                root = make_isolated_root(tmp)
+                chk.enter("phase9")
+                phase_save_load(chk, root, tmp, args.port, args.seed, args.size)
+        except FixtureNotRegistered as exc:
+            # A SETUP failure, not a behavioural one: nothing downstream of
+            # a fixture that never registered can pass. It keeps its setup
+            # meaning (the `setup` record kind and the message the entry
+            # point has always printed) but is now recorded against the
+            # stage it interrupted, with the stage summary still printed.
+            print(f"\n{exc}")
+            chk.ok(False, f"a probe fixture was rejected by the engine "
+                          f"loader during stage '{chk.stage}': {exc}",
+                   setup=True)
+        except SystemExit as exc:
+            # `probelib.boot` reports an engine that died before READY, or
+            # never printed it, by calling sys.exit() - and SystemExit
+            # derives from BaseException, so the clause below would not see
+            # it. Left uncaught it would unwind past the stage summary.
+            chk.ok(False, f"the engine could not be started, or died, during "
+                          f"stage '{chk.stage}' (SystemExit: {exc.code})")
+        except Exception as exc:  # noqa: BLE001
+            # An operational failure - a dead engine, a socket timeout, a
+            # malformed console response - is a real probe failure and must
+            # name its stage like any other. Left to propagate it would exit
+            # non-zero with a traceback but NO recorded failing check.
+            # KeyboardInterrupt is deliberately still allowed to propagate.
+            chk.ok(False, f"unexpected {type(exc).__name__} while running "
+                          f"stage '{chk.stage}': {exc}")
+            traceback.print_exc()
 
+        chk.report("the transfer-order unit job")
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
               f"{chk.failed} check(s) failed")
         return 0 if chk.failed == 0 else 1
