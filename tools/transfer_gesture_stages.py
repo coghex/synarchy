@@ -60,8 +60,12 @@ from transfer_gesture_lib import (CARGO_LIST_ID, LEG_DEFS_A, LEG_DEFS_B,
 from transfer_probe_checks import Checks
 
 
-def _cancel_order(port: int, uid: int, oid) -> None:
-    send(port, f"unit.cancelTransferOrder({uid}, {int(oid)}); return 'ok'")
+def _cancel_order(port: int, uid: int) -> None:
+    """The player's own "Cancel transfer": the shipped Lua entry cancels
+    every pending order of the unit AND prunes it (#1253). The raw
+    `unit.cancelTransferOrder` verb alone only marks the entries cancelled."""
+    send(port, "return tostring(require('scripts.unit_ai')"
+               f".cancelTransferOrder({uid}))")
     time.sleep(0.4)
 
 
@@ -170,7 +174,7 @@ def mode_b_leg(chk: Checks, port: int, key: str, src, dst, def_name: str,
 
     # Read, so retire it: the walk to the arrival commit is the order
     # probe's, and a live order would leave this carrier walking later.
-    _cancel_order(port, executor, ident["id"])
+    _cancel_order(port, executor)
     chk.ok(not any(o.get("id") == ident["id"] for o in orders(port, executor))
            and iid in ep_ids(port, src, def_name),
            f"{label}: cancelling the order retires it and still moves "
