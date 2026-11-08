@@ -28,7 +28,7 @@ under test does:
                      longest-expected-first dispatch, retries, Ctrl-C,
                      and the synthetic fixtures' own validation;
   `diagnostics`  16  the durable progress and failure record protocols,
-                     including the item-list and unified-transfer
+                     including the item-list and transfer-probe
                      producers' real check recorders (#2802).
 
 Each owner declares its own ordered `TESTS` under

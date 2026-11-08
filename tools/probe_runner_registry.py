@@ -377,19 +377,14 @@ PROBES = [
      "vanished counterpart retiring quietly; a blocked approach stalling "
      "out; a progressing trip outliving the stall budget; and a mid-walk "
      "save/load round trip resuming to completion"),
-    ("unified_transfer", "unified_transfer_probe.py",
-     "offscreen: the unified transfer system end to end (#1255) - one "
-     "fixed-seed session proving an exact instance moves in BOTH directions "
-     "between all three endpoint classes (acolyte, technomule, built "
-     "storage) through BOTH modes, a twelve-into-eight partial batch, the "
-     "container-knowledge reveal rule, one widget rendering every container "
-     "view, and a Mode B order surviving a fresh-process reload while a Mode "
-     "A session does not"),
     ("transfer_context_menu", "transfer_context_menu_probe.py",
      "offscreen: right-click 'Transfer' on a built storage building and on "
      "the technomule, located via ui.dumpWidgets(), creates a session with "
      "the exact source/receiver identities and never falls through to a "
-     "move order (#1014)"),
+     "move order (#1014); then the gesture stages (#2935, replacing the "
+     "retired end-to-end transfer probe): real right-clicks on rendered item "
+     "rows move or queue one exact instance across all six ordered pairs of "
+     "acolyte/technomule/storage in both player modes"),
     ("wander_hazard", "wander_hazard_probe.py",
      "ambient wander never routes over a damaging drop: a sustained AI-live "
      "wander window on a 3-high ledge, setMoveSpeed retaining an in-flight "

@@ -114,7 +114,7 @@ def make_isolated_root(base: str) -> str:
     probe did not create is ever removed (`shutil.rmtree` unlinks the
     symlinks themselves, never walking into the repository they name).
     Pattern from
-    `tools/unified_transfer_probe_support.py:make_isolated_root`.
+    `tools/transfer_order_probe.py:make_isolated_root`.
     """
     root = os.path.join(base, "root")
     os.makedirs(root, exist_ok=True)

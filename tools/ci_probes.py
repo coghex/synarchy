@@ -510,21 +510,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                 "located via ui.dumpWidgets() against a real "
                                 "Vulkan-rendered HUD — no GPU on the CI runner "
                                 "(#1088)"),),
-    # #1440: two independent counts. Even on a GPU-equipped runner the
-    # real generated world and fresh-process save/load would still make
-    # the unified transfer gate too expensive for every matching PR.
-    "unified_transfer": (Reason(NEEDS_GPU, "offscreen boot: the unified transfer "
-                                "system's end-to-end gate (#1255) - two real "
-                                "Vulkan-rendered engine boots driving Mode A's "
-                                "flanking panes and Mode B's row menus through "
-                                "ui.dumpWidgets() - no GPU on the CI runner"),
-                         Reason(SLOW_WORLDGEN, "the same gate also generates a real "
-                                "world and drives a fresh-process save/load across "
-                                "its two boots (#1255)"),),
     "transfer_context_menu": (Reason(NEEDS_GPU, "offscreen boot: real right-click -> "
                                      "\"Transfer\" context-menu row located via "
                                      "ui.dumpWidgets() against a real Vulkan-rendered "
-                                     "menu — no GPU on the CI runner (#1014/#1085)"),),
+                                     "menu, and (#2935) real right-clicks on rendered item-list "
+                                     "rows driving Mode A sessions and Mode B queued "
+                                     "gestures — no GPU on the CI runner "
+                                     "(#1014/#1085/#2935)"),),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (Reason(SLOW_WORLDGEN, "needs a real generated world to scan for a "

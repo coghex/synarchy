@@ -53,6 +53,16 @@ Verifies, in order:
      on the SELECTED acolyte itself offers no "Transfer" (self-transfer),
      and neither does a right-click on a wildlife unit
      (not player-commandable).
+  7. the GESTURE stages (`tools/transfer_gesture_stages.py`, folded in from
+     the retired end-to-end transfer probe, #2935): a REAL right-click on a
+     REAL rendered item-list row and a real click on the located
+     `Store 1` / `Retrieve 1` entry, across every ordered pair of the three
+     endpoint classes (acolyte, technomule, built storage) in both player
+     modes - Mode B queues exactly one durable order naming the exact
+     instance from out of reach and moves nothing at click time; Mode A
+     commits on the spot from the clicked pane and the contract's
+     structured answer flips from accepted to `instance_missing`. Reported
+     per stage (`setup`, `modeB`, `modeA`).
 
 Determinism (#1014 review): every unit is spawned several tiles away
 from the storage building's own tile and from each other, because
@@ -76,7 +86,9 @@ framebuffer space (what `input.*` takes); the two coincide under
 `--offscreen`, which is why the distinction has to hold by construction.
 The simulation stays PAUSED throughout -- these fixtures stand on a
 mountainous shoreline and an acolyte left walking on it accumulates fall
-damage until it dies (measured).
+damage until it dies (measured) -- except for the few ticks each Mode A
+session's real unit AI needs to open the pair, whose escort is spawned
+beside its endpoint so it never walks.
 
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py`
 per CLAUDE.md; the CI-blocking gate for this feature is
@@ -102,6 +114,7 @@ from probelib import (boot, camera_state, centred_within,
                       focus_and_locate, locate_building_pixel, poll_until,
                       quit_engine, send, send_json, set_paused,
                       targeting_report, viewport, win_to_fb)
+from transfer_gesture_stages import run_stages
 
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "transfer_context_menu_probe_buildings.yaml")
@@ -822,6 +835,20 @@ def _run(port: int, args) -> int:
         check("wildlife menu: 'Transfer' is ABSENT (not player-commandable)",
               find_widget(port, "Transfer") is None)
     close_menu(port)
+
+    # ------------------------------------------------------------------
+    # The gesture stages (modeB / modeA): real right-clicks on real
+    # rendered rows, one exact item instance across every ordered pair of
+    # the three endpoint classes. Reported stage by stage, so a failure
+    # names the stage that broke.
+    # ------------------------------------------------------------------
+    print("== gesture stages (real right-clicks on rendered item rows) ==")
+    gesture_failed = run_stages(
+        port, vp, {"acolyte": uid, "technomule": mule_uid, "hold": bid},
+        SPROOT)
+    if gesture_failed:
+        check(f"the gesture stages passed ({gesture_failed} check(s) failed)",
+              False)
 
     if failures:
         print(f"\ntransfer_context_menu_probe: {failures} check(s) FAILED")
