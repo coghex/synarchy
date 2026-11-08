@@ -600,6 +600,8 @@ def heat_cases():
          "a non-finite core")
     says([b1], [dict(f1, core=float("nan"))], [1], "core temperature unreadable", "NaN core")
 
+    recorded_heat_cases(judge)
+
     # The scenario-table check.
     m = {"hyper": 0.0, "units": [f for _, f in good]}
     base = {"units": [b for b, _ in good]}
@@ -616,6 +618,67 @@ def heat_cases():
         {"hyper": 0.9, "units": [f for _, f in [pair(1, rise=0.30)]]},
         {"units": [pair(1)[0]]}, [1])
     expect(not ok_, "aggregate hyperthermia no longer excuses a disagreeing unit")
+
+
+def recorded_heat_cases(judge):
+    """The humid-heat judgement against REAL engine recordings (60 acolytes,
+    12 repeats of the probe's humid-heat scenario, with the heat-balance read
+    and the executed-step ledger at both snapshots)."""
+    doc = load_fixture("physiology_humid_heat_recordings.json")
+    expect(len(doc["revision"]) == 40 and "record_physiology_heat_fixture" in doc["command"],
+           "the heat fixture carries its revision and command")
+    expect(len(doc["runs"]) == 12 and all(len(r["spawned"]) == 5 for r in doc["runs"]),
+           "12 recorded repeats of five acolytes")
+
+    def pairs(run):
+        def full(u):
+            return dict(u, stats={"hyperthermia": u["hyperthermia"]})
+        return [full(u) for u in run["baseline"]], [full(u) for u in run["final"]]
+
+    worst, worst_rel, least_rise = 0.0, 0.0, 1.0
+    for run in doc["runs"]:
+        base, final = pairs(run)
+        got = pe.humid_heat_problems(base, final, run["spawned"])
+        expect(got == [], f"recorded repeat {run['repeat']} must pass: {got}")
+        by = {u["id"]: u for u in base}
+        for u in final:
+            want, why = pe.predicted_rise(by[u["id"]], u)
+            rise = u["core"] - by[u["id"]]["core"]
+            expect(want is not None, f"recorded unit unpredictable: {why}")
+            if want is None:
+                continue
+            worst = max(worst, abs(rise - want))
+            worst_rel = max(worst_rel, abs(rise - want) / abs(want))
+            least_rise = min(least_rise, rise)
+            # every recorded unit sits well inside its own tolerance (>= 4x)
+            expect(abs(rise - want) * 4 < pe.heat_tolerance(want),
+                   f"unit {u['id']} repeat {run['repeat']}: deviation "
+                   f"{abs(rise - want):.5f} is not 4x inside tol {pe.heat_tolerance(want):.5f}")
+    expect(worst < 1e-3 and worst_rel < 0.01,
+           f"recorded deviations are {worst:.2e} C / {worst_rel:.2%}; the stated "
+           "bound (HEAT_TOL_ABS + HEAT_TOL_REL) must keep a wide margin over them")
+    expect(least_rise > 2 * pe.HEAT_MIN_RISE,
+           f"the smallest recorded rise {least_rise:.4f} is over twice the heating floor")
+
+    # Each way the engine could disagree with its own rule, applied to real
+    # records, fails every unit it touches.
+    base, final = pairs(doc["runs"][0])
+    ids = doc["runs"][0]["spawned"]
+    hotter = [dict(u, core=u["core"] + 0.1 * (u["core"] - b["core"]) + 0.006)
+              for u, b in zip(final, base)]
+    expect(len(pe.humid_heat_problems(base, hotter, ids)) == 5,
+           "every unit 10% hotter than the rule fails")
+    half = [dict(u, ledger=dict(u["ledger"], t=(u["ledger"]["t"] + b["ledger"]["t"]) / 2))
+            for u, b in zip(final, base)]
+    expect(len(pe.humid_heat_problems(base, half, ids)) == 5,
+           "a ledger that reports half the executed time fails every unit")
+    swapped = final[1:] + final[:1]
+    swapped = [dict(u, id=f["id"]) for u, f in zip(swapped, final)]
+    expect(pe.humid_heat_problems(base, swapped, ids) != [],
+           "rates and temperatures from different units do not agree")
+    noledger = [dict(u, ledger=None) for u in final]
+    expect(len(pe.humid_heat_problems(base, noledger, ids)) == 5,
+           "no executed-step ledger fails every unit")
 
 
 def probe_wiring_cases():

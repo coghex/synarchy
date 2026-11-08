@@ -1419,7 +1419,7 @@ readOnlyVerbs ∷ [Text]
 readOnlyVerbs =
     [ "unit.getStat", "unit.getWounds", "unit.getInfo", "unit.getPose"
     , "unit.getPhysioMode", "unit.getActivity", "unit.readPhysio", "unit.getMaxSpeed"
-    , "unit.readPhysioBase", "unit.readBloodView", "unit.getScars", "unit.getPhysioDefault"
+    , "unit.readPhysioBase", "unit.readBloodView", "unit.peekStat", "unit.getScars", "unit.getPhysioDefault"
     , "unit.getModifiers", "unit.getMaxStamina", "unit.getInsulation", "unit.getCurrentAnim"
     , "unit.getCarryingWeight", "unit.getBlood", "unit.getAllStats", "unit.getAllIds"
     , "unit.previewStamina", "unit.previewPhysio", "equipment.getLoadout"
