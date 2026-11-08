@@ -234,10 +234,20 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                 "failing-check set each run (3/3 solo runs failed, no two "
                                 "alike, #724) — not #489 (whetstone), which is long fixed "
                                 "and never implicated"),),
-    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
-                                 "pass threshold and failed both failing runs (0.74, 0.75); "
-                                 "the combat-vs-idle calorie-drain-ratio check also flaked "
-                                 "once, alongside it (2/3 solo runs failed, #724)"),),
+    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min >= 0.75' is a probe-side "
+                                 "edge, not a product fault (#2944): circulation is "
+                                 "(0.5+0.5*constitution)*(1-0.7*max(0,fat/body-0.2)) for a "
+                                 "healthy unit, and the acolytes roll constitution "
+                                 "N(1,0.25) clamped to [0.5,1.5], so 0.75 is the floor of "
+                                 "the rolled population with any extra body fat falling "
+                                 "under it (model ~2.3% of units, ~11% of five-acolyte "
+                                 "runs; 0/12 measured on a1ce85bb6, 2 of 3 earlier runs "
+                                 "failed at 0.70/0.73). The old squirrel salt-band failure "
+                                 "is gone: red_squirrel salt is Nominal since #2833 (conc "
+                                 "exactly 1.0 in 12/12). Other checks flake at ~1/12 each "
+                                 "(humid-heat rise > 0.1C read 0.10-0.17, fatigued-sprint "
+                                 "ratio, combat-vs-idle calorie drain); any change to the "
+                                 "population or thresholds is owner-gated"),),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---

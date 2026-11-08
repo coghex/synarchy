@@ -183,6 +183,41 @@ def main():
                                     "nutrition": "nominal"},
            "the expected modes are SD-10's simple profile")
 
+    # 11. The per-unit diagnostics (#2944) observe only: one console call
+    #     carries the unchanged aggregate and the unit list, the chunk uses
+    #     read verbs only, and the extra key never reaches an assertion.
+    sent = []
+    agg = {"n": 1, "dead": 0, "core": {"min": 37, "max": 37, "avg": 37},
+           "conc": {"min": 1, "max": 1, "avg": 1},
+           "circ": {"min": 0.9, "max": 0.9, "avg": 0.9}}
+    reply = dict(agg, units=[{"id": 4, "circ": 0.9}])
+
+    def fake_send(port, lua):
+        sent.append(lua)
+        return json.dumps(agg if lua == probe.AGG else reply)
+
+    real_send = probe.send
+    probe.send = fake_send
+    try:
+        plain = probe.measure(9170)
+        diag = probe.measure(9170, units=True, species="acolyte")
+    finally:
+        probe.send = real_send
+    expect(sent[0] == probe.AGG, "measure() without units sends exactly AGG")
+    expect(probe.AGG in sent[1] and probe.DIAG in sent[1],
+           "measure(units=True) sends AGG and DIAG in ONE console call")
+    expect(diag.get("units") == reply["units"] and diag["species"] == "acolyte",
+           "the unit list and species come back with the aggregate")
+    expect("units" not in plain, "the plain aggregate carries no unit list")
+    expect(probe.temperate_ok(diag) == probe.temperate_ok(plain),
+           "the diagnostic key does not change a temperate verdict")
+    for verb in ("unit.getPhysioMode", "unit.readPhysio(u,'circulation')",
+                 "unit.readBloodView", "unit.getAllStats"):
+        expect(verb in probe.DIAG, f"the diagnostics use {verb}")
+    for raw in ("unit.getStat(", "unit.getStatBase(", "unit.setStat(",
+                "unit.spawn(", "debugAmbient"):
+        expect(raw not in probe.DIAG, f"the diagnostics make no call {raw}")
+
     if failures:
         print("physiology probe self-test: FAILED")
         for failure in failures:
