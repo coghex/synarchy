@@ -26,7 +26,7 @@ Usage: python3 tools/physiology_probe.py [--port 9170] [--seconds 30] [--count 5
 Exit 0 = all scenarios passed.
 """
 from __future__ import annotations
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, json, os, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/physiology_probe_engine.log"
@@ -73,12 +73,73 @@ AGG = (
 )
 
 
-def measure(port):
-    raw = send(port, AGG)
+# ---- Observation-only per-unit diagnostics (#2944) ----
+#
+# AGG keeps only min/max/avg, so a failed `circ min` or salt band names no unit.
+# This second chunk is evaluated in the SAME console call as AGG (one Lua
+# state, no yield between them), so the per-unit values are the assertion
+# snapshot itself. It only READS: no stimulus, population, threshold or check
+# changes, and the extra `units` key is ignored by every assertion. The stat
+# snapshot comes from `unit.getAllStats` (effective values; the access audit
+# does not follow it) and the registry-owned keys through the read verbs.
+#: Optional file every `[DIAG]` record is also appended to (one JSON per line).
+DIAG_SINK_ENV = "SYNARCHY_PHYSIOLOGY_DIAG_FILE"
+DIAG_SYSTEMS = ("thermo", "salt", "hydration", "nutrition", "cardio", "blood")
+DIAG = (
+    "local function f(v) if v==nil then return nil end "
+    "if v~=v or v==math.huge or v==-math.huge then return 'nonfinite' end "
+    "return v end "
+    "local out={} for _,u in ipairs(_U or {}) do "
+    "local modes={} for _,s in ipairs({'thermo','salt','hydration','nutrition',"
+    "'cardio','blood'}) do modes[s]=unit.getPhysioMode(u,s) or 'none' end "
+    "local stats={} for k,v in pairs(unit.getAllStats(u) or {}) do "
+    "if type(v)=='number' then stats[k]=f(v) end end "
+    "local bv=unit.readBloodView(u) or {} "
+    "local circ,cm=unit.readPhysio(u,'circulation') "
+    "local conc,sm=unit.readPhysio(u,'salt_conc') "
+    "out[#out+1]={id=u,pose=unit.getPose(u),modes=modes,stats=stats,"
+    "circ=f(circ),circMode=cm,conc=f(conc),concMode=sm,"
+    "core=f(unit.readPhysio(u,'core_temp')),"
+    "heartRate=f(unit.readPhysio(u,'heart_rate')),"
+    "bloodFraction=f(bv.fraction),bloodVolume=f(bv.volume),bloodMax=f(bv.max)} "
+    "end return out"
+)
+
+
+def measure(port, units=False, species=None):
+    """The scenario aggregate. With `units`, the same Lua call also returns a
+    per-unit `units` list (observation only; see DIAG) tagged with `species`."""
+    if not units:
+        raw = send(port, AGG)
+    else:
+        raw = send(port, "local function agg() " + AGG + " end "
+                         "local r=agg() "
+                         "local ok,us=pcall(function() " + DIAG + " end) "
+                         "if ok then r.units=us else r.unitsError=tostring(us) end "
+                         "return r")
     try:
-        return json.loads(raw)
+        m = json.loads(raw)
     except json.JSONDecodeError:
         return {"_raw": raw}
+    if units and isinstance(m, dict):
+        m["species"] = species
+    return m
+
+
+def emit_diag(label, phase, m):
+    """One greppable `[DIAG]` line per snapshot: the per-unit evidence behind
+    the scenario's aggregates, unrounded, for later per-check analysis."""
+    rec = {"scenario": label, "phase": phase, "species": m.get("species"),
+           "units": m.get("units"), "unitsError": m.get("unitsError"),
+           "agg": {k: m.get(k) for k in ("n", "dead", "core", "conc", "circ")}}
+    line = json.dumps(rec, sort_keys=True)
+    print("  [DIAG] " + line)
+    # Optional durable sink: a runner that keeps only a failing probe's output
+    # (tools/run_probes.py) still leaves every attempt's per-unit evidence here.
+    sink = os.environ.get(DIAG_SINK_ENV)
+    if sink:
+        with open(sink, "a") as fh:
+            fh.write(line + "\n")
 
 
 def spawn_batch(port, count, species="acolyte", x0=1):
@@ -237,9 +298,13 @@ def small_creature_section(port, seconds):
         print("  [FAIL] small creature: could not spawn red_squirrel")
         return False
     time.sleep(1.0)
+    # Observation only: the three squirrels' per-unit baseline (≈ spawn state).
+    emit_diag("small creature temperate", "baseline",
+              measure(port, units=True, species="red_squirrel"))
     masses = unit_masses(port, sq[0])
     time.sleep(seconds)
-    m = measure(port)
+    m = measure(port, units=True, species="red_squirrel")
+    emit_diag("small creature temperate", "final", m)
     bad = []
     if masses:
         bm, fm, lm = masses
@@ -893,9 +958,11 @@ def main():
             set_climate(port, ambient, humidity)
             spawn_batch(port, args.count)
             time.sleep(1.0)
-            base = measure(port)        # per-scenario baseline (≈ spawn state)
+            base = measure(port, units=True, species="acolyte")  # baseline (≈ spawn state)
             time.sleep(args.seconds)
-            m = measure(port)
+            m = measure(port, units=True, species="acolyte")
+            emit_diag(name, "baseline", base)
+            emit_diag(name, "final", m)
             if "_raw" in m or "_raw" in base:
                 print(f"  [FAIL] {name}: bad measurement: "
                       f"{m.get('_raw', base.get('_raw',''))[:120]}")
