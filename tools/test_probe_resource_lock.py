@@ -53,6 +53,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -273,6 +274,52 @@ def taking(scratch: Scratch, *, exclusive=(), shared=(), namespace=None):
         return None, None, error
 
 
+ADMISSION_SETTLE_SECONDS = 5.0
+ADMISSION_RETRY_SECONDS = 0.01
+
+
+def taking_admitted(scratch: Scratch, *, exclusive=(), shared=(),
+                    namespace=None, timeout: float = ADMISSION_SETTLE_SECONDS,
+                    attempts: list | None = None):
+    """Like `taking`, but ride out a transient admission-mutex refusal.
+
+    `lock.acquire` is nonblocking by contract: while a live waiter polls
+    (every 20 ms) it briefly owns the namespace admission mutex, and an
+    unqueued caller that arrives in that window is refused with no named
+    holder even though nothing conflicts. A case that expects admission
+    therefore retries within `timeout`. Nothing else is masked: a refusal
+    that persists to the deadline is returned as the busy it is, and a
+    `ResourceLockError` is returned at once, never retried.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if attempts is not None:
+            attempts.append(time.monotonic())
+        result = taking(scratch, exclusive=exclusive, shared=shared,
+                        namespace=namespace)
+        if result[1] is None or time.monotonic() >= deadline:
+            return result
+        time.sleep(ADMISSION_RETRY_SECONDS)
+
+
+def taking_refused(scratch: Scratch, *, exclusive=(), shared=(),
+                   namespace=None, timeout: float = ADMISSION_SETTLE_SECONDS):
+    """Like `taking`, for a case that expects a refusal naming its holders.
+
+    A refusal that names nobody is the transient mutex refusal (see
+    `taking_admitted`), not the conflict the case is about, so it is
+    retried until the refusal carries holders or `timeout` passes.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        result = taking(scratch, exclusive=exclusive, shared=shared,
+                        namespace=namespace)
+        busy = result[1]
+        if busy is None or busy.holders or time.monotonic() >= deadline:
+            return result
+        time.sleep(ADMISSION_RETRY_SECONDS)
+
+
 # --------------------------------------------------------------------------
 # The four interest combinations
 # --------------------------------------------------------------------------
@@ -409,7 +456,7 @@ def test_a_waiting_writer_stops_later_readers_from_barging() -> None:
                                 purpose="queued writer")
         expect(writer.queued(), "the writer published its queued request")
 
-        late, busy, error = taking(scratch, shared={"cabal-build"})
+        late, busy, error = taking_refused(scratch, shared={"cabal-build"})
         expect(late is None and busy is not None,
                f"a later reader is refused while the writer waits "
                f"(busy={busy}, error={error})")
@@ -502,7 +549,8 @@ def test_a_queue_blocks_only_conflicting_resources() -> None:
         expect(reader.took_it(), "the existing reader took cabal-build")
         writer = scratch.waiter(exclusive={"cabal-build"})
         expect(writer.queued(), "the cabal-build writer is queued")
-        unrelated, busy, error = taking(scratch, shared={"repo-config"})
+        unrelated, busy, error = taking_admitted(
+            scratch, shared={"repo-config"})
         expect(unrelated is not None,
                f"unrelated repo-config work still starts "
                f"(busy={busy}, error={error})")
@@ -1028,13 +1076,93 @@ def test_a_headless_probe_runs_beside_a_gpu_probe() -> None:
                                 purpose="a second GPU probe", namespace=clone)
         expect(waiter.queued(), "a second GPU probe queues")
         for namespace in (None, clone):
-            hold, busy, error = taking(scratch, shared=HEADLESS_SHARED,
-                                       namespace=namespace)
+            hold, busy, error = taking_admitted(
+                scratch, shared=HEADLESS_SHARED, namespace=namespace)
             expect(hold is not None,
                    f"headless work still starts while a GPU probe waits "
                    f"(busy={busy}, error={error})")
+            # Admission must happen WHILE the GPU holder is active and the
+            # second GPU probe is still queued, not after either has exited.
+            expect(gpu_probe.proc.poll() is None
+                   and waiter.proc.poll() is None
+                   and waiter.outcome(0.5).get("state") == "queued",
+                   "and it was admitted while the first GPU probe still held "
+                   "gpu-desktop and the second was still queued")
             if hold is not None:
                 hold.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_transient_admission_mutex_refusal_is_ridden_out_not_masked() -> None:
+    print("\n-- the admission mutex's transient refusal is retried; real "
+          "conflicts and lock errors still fail")
+    scratch = Scratch()
+    try:
+        base = lock._check_shared_dir(scratch.root)
+
+        # One acquire while a polling waiter owns the mutex is refused with
+        # nobody named, though nothing conflicts (the CI failure, forced).
+        mutex = lock._try_queue_mutex(scratch.namespace, base)
+        expect(mutex is not None, "the test holds the admission mutex")
+        hold, busy, error = taking(scratch, shared=HEADLESS_SHARED)
+        expect(hold is None and busy is not None and not busy.holders
+               and error is None,
+               f"a single nonblocking acquire is refused with no holder "
+               f"(busy={busy}, error={error})")
+
+        # A case expecting admission rides it out once the mutex frees ...
+        threading.Timer(0.3, lock._release_queue_mutex, args=(mutex,)).start()
+        attempts: list = []
+        hold, busy, error = taking_admitted(scratch, shared=HEADLESS_SHARED,
+                                            attempts=attempts)
+        expect(hold is not None and busy is None and error is None
+               and len(attempts) > 1,
+               f"the retry is admitted after the mutex frees "
+               f"(attempts={len(attempts)}, busy={busy}, error={error})")
+        if hold is not None:
+            hold.release()
+
+        # ... but a mutex that never frees is still a failure at the deadline.
+        mutex = lock._try_queue_mutex(scratch.namespace, base)
+        hold, busy, error = taking_admitted(scratch, shared=HEADLESS_SHARED,
+                                            timeout=0.3)
+        expect(hold is None and busy is not None and error is None,
+               f"a persistent mutex refusal is returned, not hidden "
+               f"(busy={busy}, error={error})")
+        lock._release_queue_mutex(mutex)
+
+        # A real conflict is not masked either, and names its holder.
+        writer = scratch.holder(exclusive={"cabal-build"}, purpose="a writer")
+        expect(writer.took_it(), "a writer holds cabal-build")
+        hold, busy, error = taking_admitted(scratch, shared={"cabal-build"},
+                                            timeout=0.3)
+        expect(hold is None and busy is not None and busy.holders
+               and busy.resource == "cabal-build",
+               f"a persistent resource conflict still fails "
+               f"(busy={busy}, error={error})")
+        hold, busy, error = taking_refused(scratch, shared={"cabal-build"},
+                                           timeout=0.3)
+        expect(hold is None and busy is not None and busy.holders,
+               "and an expected refusal still reports the holder")
+        writer.stop()
+
+        # A ResourceLockError is returned at once, never retried.
+        unsafe = Scratch()
+        try:
+            target = unsafe.root / "elsewhere"
+            target.write_text("")
+            os.symlink(target, lock.queue_mutex_path(
+                namespace=unsafe.namespace, root=unsafe.root))
+            attempts = []
+            hold, busy, error = taking_admitted(
+                unsafe, shared=HEADLESS_SHARED, attempts=attempts)
+            expect(hold is None and busy is None and error is not None
+                   and len(attempts) == 1,
+                   f"a lock error is returned on the first attempt "
+                   f"(attempts={len(attempts)}, error={error})")
+        finally:
+            unsafe.cleanup()
     finally:
         scratch.cleanup()
 
@@ -1730,6 +1858,7 @@ def main() -> int:
     test_holders_is_best_effort_and_says_so()
     test_two_gpu_probes_from_different_checkouts_serialize()
     test_a_headless_probe_runs_beside_a_gpu_probe()
+    test_a_transient_admission_mutex_refusal_is_ridden_out_not_masked()
     test_a_gpu_waiter_waits_names_the_holder_and_then_runs()
     test_a_dead_gpu_holder_is_reclaimed()
     test_the_host_wide_holder_is_found_from_any_namespace()
