@@ -8,6 +8,14 @@
 --   physiology access: any code may call them, including the console Lua
 --   the probes send, because they never change physiology state.
 --
+--   __A sixth read verb, @unit.peekStat@ (#2960).__ The engine's stat
+--   getters lazy-roll an unrolled templated stat, which advances the stat
+--   RNG and caches the roll, so no caller that must OBSERVE a unit without
+--   changing it can use them. @unit.peekStat@ answers the effective value
+--   of a stat the unit already holds and otherwise says why it cannot,
+--   touching nothing. The heat-balance read (@thermo.readHeatBalance@) is
+--   built on it.
+--
 --   __Two mutating verbs, facade-only.__ @unit.setPhysioMode@ and
 --   @unit.clearPhysioMode@ are the engine half of
 --   @scripts\/physiology.lua@'s @setMode@ \/ @clearMode@, and
@@ -37,6 +45,9 @@ module Engine.Scripting.Lua.API.Units.Physiology
     , unitReadPhysioFn
     , unitReadPhysioBaseFn
     , unitReadBloodViewFn
+    , unitPeekStatFn
+    , PeekResult(..)
+    , peekStat
     , unitSetPhysioModeFn
     , unitClearPhysioModeFn
     , unitApplyCombatEngagementFn
@@ -62,6 +73,7 @@ import Unit.Blood (BloodView(..), bloodView, bloodViewOf)
 import Unit.Physiology
 import Unit.Physiology.Transition
 import Unit.Physiology.Types
+import Unit.Stats (effectiveStat)
 import Unit.Types
 
 -- | The outcome of a physiology read, before any Lua marshalling.
@@ -220,6 +232,70 @@ unitReadBloodViewFn env = do
                     Lua.pushnumber (Lua.Number (realToFrac x))
                     Lua.setfield (-2) k
     return 1
+
+-- | Why 'peekStat' has no value, or the value.
+data PeekResult
+    = PeekValue !Float
+      -- ^ the EFFECTIVE value (base plus active modifiers) of a stat or
+      --   skill the unit already holds.
+    | PeekUnrolled
+      -- ^ the unit's definition templates the stat but it has not been
+      --   rolled yet; reading it through @unit.getStat@ WOULD roll it.
+    | PeekUndefined
+      -- ^ neither held nor templated: @unit.getStat@ answers nil too.
+    | PeekNoUnit
+    deriving (Show, Eq)
+
+-- | Read a stat without rolling, caching or advancing any generator: the
+--   same lookup order as 'getEffectiveStat' (stats, then skills) over the
+--   unit's STORED values, with the modifiers applied at the current game
+--   time. A value 'getEffectiveStat' would return is returned unchanged;
+--   one it would have to roll is reported as 'PeekUnrolled' instead.
+peekStat ∷ EngineEnv → UnitId → Text → IO PeekResult
+peekStat env uid name = do
+    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    pure $ case HM.lookup uid (umInstances um) of
+        Nothing → PeekNoUnit
+        Just inst → case heldBase inst of
+            Just base → PeekValue (effectiveStat now base
+                            (HM.lookupDefault [] name (uiModifiers inst)))
+            Nothing → case HM.lookup (uiDefName inst) (umDefs um) of
+                Just def | HM.member name (udStatTemplates def) → PeekUnrolled
+                _ → PeekUndefined
+  where
+    -- stats first, then skills, as 'getOrRollStat' looks them up
+    heldBase inst = case HM.lookup name (uiStats inst) of
+        Just v  → Just v
+        Nothing → HM.lookup name (uiSkills inst)
+
+-- | @unit.peekStat(uid, name)@ → @value@ | @nil, reason@, with reason one of
+--   @"unrolled"@ (templated but not yet rolled; @unit.getStat@ would roll
+--   it), @"undefined"@, @"nounit"@ or @"badargs"@. Changes nothing, so any
+--   code may call it; the audit allows it in a pure read where it refuses
+--   @unit.getStat@.
+unitPeekStatFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitPeekStatFn env = do
+    idTy   ← Lua.ltype 1
+    idArg  ← Lua.tointeger 1
+    keyTy  ← Lua.ltype 2
+    keyArg ← Lua.tostring 2
+    case (idTy ≡ Lua.TypeNumber, idArg, keyTy ≡ Lua.TypeString, keyArg) of
+        (True, Just n, True, Just keyBS) → do
+            r ← Lua.liftIO $ peekStat env (UnitId (fromIntegral n))
+                                      (TE.decodeUtf8Lenient keyBS)
+            case r of
+                PeekValue v → Lua.pushnumber (Lua.Number (realToFrac v))
+                              >> return 1
+                PeekUnrolled  → nilWith "unrolled"
+                PeekUndefined → nilWith "undefined"
+                PeekNoUnit    → nilWith "nounit"
+        _ → nilWith "badargs"
+  where
+    nilWith why = do
+        Lua.pushnil
+        Lua.pushstring why
+        return 2
 
 -- | @unit.getPhysioMode(uid, system)@ → @"nominal"@ | @"simulated"@ |
 --   @nil@. @nil@ for an Unsupported system, an unknown system id or a

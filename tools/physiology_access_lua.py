@@ -616,3 +616,79 @@ def helper_call_sites(scan: ChunkScan, helpers: dict[str, list[HelperDef]],
                                  _enclosing_name(ev.frames), "helper-call",
                                  False, scan.scope, scan.straight, scan.sig,
                                  ev.idx)
+
+
+# ------------------------------------------------- pure-function bodies (#2960)
+
+@dataclass(frozen=True)
+class BodyRef:
+    """A dotted name used inside a function body: a call (with its second
+    argument when that is a single string literal, the registry-key position of
+    ``physiology.get(uid, "key")``) or a plain reference such as
+    ``thermo.TICK``."""
+    line: int
+    chain: str
+    is_call: bool
+    key_literal: Optional[str] = None
+    key_dynamic: bool = False   # a second argument exists and is not a literal
+
+
+def function_body_refs(src: str, owner: Optional[str], name: str
+                       ) -> Optional[list[BodyRef]]:
+    """Every dotted name used inside ``function <owner>.<name>(...) ... end``
+    (or ``local function <name>(...)`` when ``owner`` is None), or None when
+    the text has no such function.
+
+    A chain is the whole dotted name (``unit.getStat``, ``physiology.debit``,
+    ``thermo.TICK``); a call through a local alias keeps the alias spelling.
+    Block structure is counted on ``function`` / ``if`` / ``do`` / ``repeat``
+    openers (``for`` and ``while`` open through their ``do``) and ``end`` /
+    ``until`` closers, so a nested closure's names belong to the function that
+    contains it, which is the conservative reading for a purity rule.
+    """
+    toks = tokenize(src)
+    head = ([owner, "."] if owner else []) + [name]
+    want = ["function"] + head + ["("]
+    for i in range(len(toks)):
+        if [t.text for t in toks[i:i + len(want)]] != want:
+            continue
+        j = _match(toks, i + len(want) - 1) + 1
+        depth, refs = 1, []
+        while j < len(toks) and depth > 0:
+            t = toks[j]
+            if t.kind != "name":
+                j += 1
+                continue
+            if t.text in ("function", "if", "do", "repeat"):
+                depth += 1
+            elif t.text in ("end", "until"):
+                depth -= 1
+            elif t.text not in _KEYWORDS and not _after_dot(toks, j):
+                k, chain = j, [t.text]
+                while k + 2 < len(toks) and toks[k + 1].text in (".", ":") \
+                        and toks[k + 2].kind == "name":
+                    chain.append(toks[k + 2].text)
+                    k += 2
+                is_call = k + 1 < len(toks) and toks[k + 1].text == "("
+                lit, dyn = None, False
+                if is_call:
+                    args, _ = split_args(toks, k + 1)
+                    if len(args) >= 2:
+                        if len(args[1]) == 1 and args[1][0].kind == "str":
+                            lit = args[1][0].text
+                        else:
+                            dyn = True
+                if len(chain) > 1 or is_call:
+                    refs.append(BodyRef(t.line, ".".join(chain), is_call, lit, dyn))
+            j += 1
+        return refs
+    return None
+
+
+def function_body_calls(src: str, owner: Optional[str], name: str
+                        ) -> Optional[list[tuple[int, str]]]:
+    """The calls among 'function_body_refs' as ``(line, dotted callee)``."""
+    refs = function_body_refs(src, owner, name)
+    if refs is None:
+        return None
+    return [(r.line, r.chain) for r in refs if r.is_call]

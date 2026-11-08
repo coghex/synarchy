@@ -13,6 +13,7 @@ module Test.Headless.Unit.PhysiologyCardioCirculationModes.Rule (spec) where
 
 import UPrelude
 import Control.Exception (evaluate)
+import Data.Aeson (FromJSON(..), eitherDecodeFileStrict, withObject, (.:), (.:?))
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -22,12 +23,14 @@ import Test.Headless.Unit.PhysiologyFixture (readShippedPhysiologyRegistry)
 import Test.Headless.Unit.PhysiologyModes.Harness
 import Unit.Blood
 import Unit.Physiology
+import Unit.Physiology.Circulation (CirculationInputs(..), circulationRule)
 import Unit.Physiology.Types
 import Unit.Types
 
 spec ∷ Spec
 spec = describe "the on-demand circulation rule and the blood read" $ do
     referenceSpec
+    pythonPortFixtureSpec
     wrapperSpec
     freshnessSpec
     bloodSpec
@@ -184,6 +187,63 @@ referenceSpec = beforeAll readShippedPhysiologyRegistry $
         physioReadPure ReadEffective
             ctx { pcPhysiology = noUnitPhysiology } "circulation"
             `shouldBe` OutcomeUnsupported
+
+-----------------------------------------------------------------------
+-- The probe's Python port (#2960)
+-----------------------------------------------------------------------
+
+-- | One case of tools/fixtures/physiology_circulation_parity.json: the
+--   rule's inputs and the value tools\/physiology_expectations.py's port
+--   yields for them.
+data ParityCase = ParityCase
+    { pxName ∷ Text, pxResting ∷ Float, pxBlood ∷ Float, pxConstitution ∷ Float
+    , pxFat ∷ Float, pxBody ∷ Float, pxSepsis ∷ Float, pxCore ∷ Float
+    , pxHeart ∷ Maybe Float, pxExpected ∷ Float }
+
+newtype ParityFile = ParityFile [ParityCase]
+
+instance FromJSON ParityCase where
+    parseJSON = withObject "case" $ \o → ParityCase
+        <$> o .: "name" <*> o .: "resting" <*> o .: "bloodFraction"
+        <*> o .: "constitution" <*> o .: "fatMass" <*> o .: "bodyMass"
+        <*> o .: "sepsis" <*> o .: "core" <*> o .:? "heartRate"
+        <*> o .: "expected"
+
+instance FromJSON ParityFile where
+    parseJSON = withObject "file" $ \o → ParityFile <$> o .: "cases"
+
+-- | The Python port the physiology probe judges circulation with must give
+--   the PRODUCTION rule's value on every case of the shared fixture, which
+--   spans each clamp, the non-positive body-mass fallback and the Nominal
+--   (no heart rate) branch. tools/test_physiology_probe.py holds the port to
+--   the same file, so a change to either side fails one of the two.
+pythonPortFixtureSpec ∷ Spec
+pythonPortFixtureSpec =
+    describe "the probe's Python port (tools/fixtures/physiology_circulation_parity.json)" $ do
+    it "is reproduced by circulationRule on every fixture case" $ do
+        decoded ← eitherDecodeFileStrict "tools/fixtures/physiology_circulation_parity.json"
+        ParityFile cases ← either (\e → fail ("parity fixture: " ⧺ e)) pure decoded
+        length cases `shouldSatisfy` (≥ 25)
+        let bad = [ (pxName c, got, pxExpected c)
+                  | c ← cases
+                  , let got = circulationRule (pxResting c) CirculationInputs
+                          { ciBloodFraction = pxBlood c
+                          , ciConstitution = pxConstitution c
+                          , ciFatMass = pxFat c, ciBodyMass = pxBody c
+                          , ciSepsis = pxSepsis c, ciCore = pxCore c
+                          , ciHeartRate = pxHeart c }
+                  , abs (got - pxExpected c) > 2e-5 ]
+        bad `shouldBe` []
+
+    it "uses the registry's RESTING_HR as the fixture's resting rate" $ do
+        decoded ← eitherDecodeFileStrict "tools/fixtures/physiology_circulation_parity.json"
+        ParityFile cases ← either (\e → fail ("parity fixture: " ⧺ e)) pure decoded
+        reg ← readShippedPhysiologyRegistry
+        Map.lookup "RESTING_HR" (prConstants reg)
+            `shouldBe` Just (pxResting (head' cases))
+  where
+    head' (c : _) = c
+    head' []      = error "parity fixture has no cases"
 
 -----------------------------------------------------------------------
 -- Through the installed Lua verbs

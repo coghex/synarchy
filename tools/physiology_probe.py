@@ -22,12 +22,22 @@ What it guards (the point):
 It asserts INVARIANTS + TRENDS over a short run, not full death timelines
 (those are covered by the per-phase manual probes). Runtime ~3-4 min.
 
+Two scenario checks judge each unit against the engine's own rule for THAT
+unit's rolled inputs rather than a population threshold (#2960, after #2944
+showed the old fixed thresholds failed healthy units): temperate circulation
+against `circulationRule` (a fixture-verified port) with an absolute floor of
+0.65, and the humid-heat core rise against `thermo.readHeatBalance` integrated
+over the thermo steps the engine actually executed. The pure judgements are in
+tools/physiology_expectations.py and are proven engine-free by
+tools/test_physiology_probe.py.
+
 Usage: python3 tools/physiology_probe.py [--port 9170] [--seconds 30] [--count 5]
 Exit 0 = all scenarios passed.
 """
 from __future__ import annotations
 import argparse, glob, json, os, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
+import physiology_expectations as expect
 
 LOG = "/tmp/physiology_probe_engine.log"
 
@@ -53,6 +63,30 @@ def bootstrap(port):
     send(port, "pcall(function() require('scripts.unit_ai').update = "
                "function() end end); return 'ok'")
     send(port, "require('scripts.movement_arena').buildCourse('flat'); return 'ok'")
+    send(port, LEDGER_LUA)
+
+
+# ---- Executed-step ledger (#2960) ----
+#
+# The humid-heat check compares each unit's core rise with the rise the
+# engine's heat-balance rule predicts over the window, so it needs the
+# SIMULATED seconds the window executed. That is not the wall-clock sleep: the
+# scheduler passes a fixed script tick as dt and drops missed passes. Wrapping
+# thermo.tick and summing the step receipts it returns counts exactly the steps
+# that ran (one chunk, installed once, before any unit exists). The wrapper
+# only counts; it forwards every call and its result unchanged, so no
+# stimulus, population or simulated value differs from an unwrapped run.
+LEDGER_LUA = (
+    "local t=require('scripts.thermo') "
+    "if not t.debugLedger then "
+    "local L={} t.debugLedger=L local orig=t.tick "
+    "t.tick=function(uid,info,dt) local s=orig(uid,info,dt) "
+    "if s then local r=L[uid] "
+    "if not r then r={n=0,t=0,delta=0,applied=0} L[uid]=r end "
+    "r.n=r.n+1 r.t=r.t+s.dt r.delta=r.delta+s.delta r.applied=r.applied+s.applied "
+    "end return s end end "
+    "return 'ok'"
+)
 
 
 # One-line Lua chunk that aggregates the scenario's units (set in _U) into a
@@ -89,6 +123,7 @@ DIAG = (
     "local function f(v) if v==nil then return nil end "
     "if v~=v or v==math.huge or v==-math.huge then return 'nonfinite' end "
     "return v end "
+    "local th=require('scripts.thermo') local lg=th.debugLedger or {} "
     "local out={} for _,u in ipairs(_U or {}) do "
     "local modes={} for _,s in ipairs({'thermo','salt','hydration','nutrition',"
     "'cardio','blood'}) do modes[s]=unit.getPhysioMode(u,s) or 'none' end "
@@ -97,7 +132,20 @@ DIAG = (
     "local bv=unit.readBloodView(u) or {} "
     "local circ,cm=unit.readPhysio(u,'circulation') "
     "local conc,sm=unit.readPhysio(u,'salt_conc') "
+    "local okh,hb,hi=pcall(th.readHeatBalance,u) local heat,heatErr "
+    "if okh and hb then heat={rate=f(hb.rate),net=f(hb.net),"
+    "production=f(hb.production),loss=f(hb.loss),sweat=f(hb.sweat),"
+    "shiver=f(hb.shiver),inertia=f(hb.inertia),insul=f(hb.insul),"
+    "calFactor=f(hb.calFactor),core=f(hi.core),circ=f(hi.circ),"
+    "ambient=f(hi.ambient),humidity=f(hi.humidity),metab=f(hi.metab),"
+    "fatM=f(hi.fatM),bodyM=f(hi.bodyM),clothing=f(hi.clothing),"
+    "calFrac=f(hi.calFrac),moving=hi.moving,feverOffset=f(hi.feverOffset),"
+    "sweatFactor=f(hi.sweatFactor)} "
+    "elseif not okh then heatErr=tostring(hb) elseif hi then heatErr=tostring(hi) end "
+    "local l=lg[u] local ledger=l and {n=l.n,t=f(l.t),delta=f(l.delta),"
+    "applied=f(l.applied)} or nil "
     "out[#out+1]={id=u,pose=unit.getPose(u),modes=modes,stats=stats,"
+    "heat=heat,heatError=heatErr,ledger=ledger,"
     "circ=f(circ),circMode=cm,conc=f(conc),concMode=sm,"
     "core=f(unit.readPhysio(u,'core_temp')),"
     "heartRate=f(unit.readPhysio(u,'heart_rate')),"
@@ -874,24 +922,30 @@ def starvation_bands_section(port, seconds):
 
 
 # ---- Scenario definitions ----
-# Each: name, ambient °C, humidity 0..1, and an assert(m)->(ok, detail) on the
-# measured aggregate.
-def temperate_ok(m):
+# Each: name, ambient °C, humidity 0..1, and an assert(m, base, spawned)->(ok,
+# detail) on the measured aggregate. `spawned` is the id list the scenario
+# spawned (its --count units): the per-unit checks judge exactly that
+# population and fail on a missing, duplicate or unexpected observation.
+def temperate_ok(m, spawned=None):
     bad = []
     if m["dead"] != 0: bad.append(f"{m['dead']} died")
     if not (35.5 <= m["core"]["min"] and m["core"]["max"] <= 38.5):
         bad.append(f"core {m['core']['min']:.1f}-{m['core']['max']:.1f}")
     if not (0.8 <= m["conc"]["min"] and m["conc"]["max"] <= 1.2):
         bad.append(f"salt {m['conc']['min']:.2f}-{m['conc']['max']:.2f}")
-    if m["circ"]["min"] < 0.75: bad.append(f"circ min {m['circ']['min']:.2f}")
+    # Circulation is judged per unit against the engine's own rule for that
+    # unit's rolled inputs, with an absolute floor (#2960). The old
+    # `circ min >= 0.75` was the floor of the rolled population, so a healthy
+    # unit with extra body fat legitimately read under it (#2944).
+    bad += expect.circulation_problems(m.get("units"), spawned or [])
     return (not bad, "; ".join(bad) or "all normal")
 
 
-def temperate_check(m, base):
-    return temperate_ok(m)
+def temperate_check(m, base, spawned=None):
+    return temperate_ok(m, spawned)
 
 
-def arctic_check(m, base):
+def arctic_check(m, base, spawned=None):
     # Cold must move core DOWN over the window (real thermal inertia is slow, so
     # we check the direction vs the scenario's own baseline, not a magnitude).
     drop = base["core"]["avg"] - m["core"]["avg"]
@@ -900,14 +954,32 @@ def arctic_check(m, base):
     return False, f"core only −{drop:.2f}°C — not cooling"
 
 
-def humid_heat_check(m, base):
-    rise = m["core"]["avg"] - base["core"]["avg"]
-    if rise > 0.1 or m["hyper"] > 0:
-        return True, f"core +{rise:.2f}°C (heating), hyper {m['hyper']:.2f}"
-    return False, f"core only +{rise:.2f}°C — not heating"
+def humid_heat_check(m, base, spawned=None):
+    # Every unit's own rise is judged against the rise the engine's heat-balance
+    # rule predicts from that unit's recorded state over the executed window,
+    # and every unit must itself heat (rise or hyperthermia) (#2960). The old
+    # fixed `mean rise > 0.1C` failed healthy units whose own rule value was
+    # 0.086 (#2944).
+    bad = expect.humid_heat_problems(base.get("units"), m.get("units"),
+                                     spawned or [])
+    rises = []
+    if isinstance(base.get("units"), list) and isinstance(m.get("units"), list):
+        b = {u.get("id"): u.get("core") for u in base["units"]
+             if isinstance(u, dict)}
+        rises = [u["core"] - b[u["id"]] for u in m["units"]
+                 if isinstance(u, dict) and expect.finite(u.get("core"))
+                 and expect.finite(b.get(u.get("id")))]
+    if rises:
+        span = f"rises {min(rises):+.3f}..{max(rises):+.3f}C"
+    else:
+        span = "no per-unit rises"
+    if bad:
+        return False, f"{span}, hyper {m['hyper']:.2f}: " + "; ".join(bad)
+    return True, (f"core {span} (each unit matches the heat-balance rule), "
+                  f"hyper {m['hyper']:.2f}")
 
 
-def survivable_check(m, base):
+def survivable_check(m, base, spawned=None):
     # Dry heat / mild cold: shouldn't kill over the short run; just sane.
     return (m["dead"] == 0, f"{m['dead']} died" if m["dead"] else "survived")
 
@@ -956,7 +1028,7 @@ def main():
         passed &= exhaustion_section(port, args.seconds)
         for name, ambient, humidity, check in SCENARIOS:
             set_climate(port, ambient, humidity)
-            spawn_batch(port, args.count)
+            spawned = spawn_batch(port, args.count)
             time.sleep(1.0)
             base = measure(port, units=True, species="acolyte")  # baseline (≈ spawn state)
             time.sleep(args.seconds)
@@ -969,7 +1041,12 @@ def main():
                 passed = False
                 continue
             b_ok, b_detail = sane_bounds(m)
-            s_ok, s_detail = check(m, base)
+            if len(spawned) != args.count:
+                print(f"  [FAIL] {name}: spawned {len(spawned)} of "
+                      f"{args.count} acolytes")
+                passed = False
+                continue
+            s_ok, s_detail = check(m, base, spawned)
             ok = b_ok and s_ok
             passed &= ok
             print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {s_detail}"

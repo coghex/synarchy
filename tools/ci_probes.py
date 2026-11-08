@@ -238,20 +238,22 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                               "say nothing about the slower, variable-speed "
                                               "CI runner for combat/treatment arbitration "
                                               "timing"),),
-    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min >= 0.75' is a probe-side "
-                                 "edge, not a product fault (#2944): circulation is "
-                                 "(0.5+0.5*constitution)*(1-0.7*max(0,fat/body-0.2)) for a "
-                                 "healthy unit, and acolytes roll constitution N(1,0.25) "
-                                 "clamped to [0.5,1.5], so 0.75 is the floor of the rolled "
-                                 "population and extra body fat falls under it (model ~2.3% "
-                                 "of units, ~11% of five-acolyte runs; measured 1/24 runs, "
-                                 "unit 0.74 = constitution 0.68, fat 37%, matching the rule). "
-                                 "The old squirrel salt-band failure is gone: red_squirrel "
-                                 "salt is Nominal since #2833 (conc exactly 1.0, 0/24). Other "
-                                 "checks flake too, of 24 runs: humid-heat rise > 0.1C 3, "
-                                 "fatigued-sprint ratio 3, combat-vs-idle calorie drain 1; "
-                                 "any change to the population or thresholds is "
-                                 "owner-gated"),),
+    "physiology": (Reason(FLAKY, "the two former probe-side edges are fixed (#2960): "
+                                 "temperate circulation is judged per unit against the "
+                                 "engine's own rule for that unit's rolled inputs (a "
+                                 "fixture-verified port of circulationRule, absolute floor "
+                                 "0.65) and the humid-heat core rise per unit against "
+                                 "thermo.readHeatBalance integrated over the thermo steps "
+                                 "the engine executed; 0 failures of either in 24 complete "
+                                 "runs (#2944 measured 1 and 3 of 24). Whole-probe "
+                                 "reliability is NOT established: those 24 runs still "
+                                 "failed 2, both on checks outside #2960 that #2944 also "
+                                 "saw flake (fatigued-sprint ratio 1 of 24, rested 0.88 vs "
+                                 "fatigued 0.85 tiles/s; combat-vs-idle calorie drain 1 of "
+                                 "24, combat 1.21x idle against the required 1.3x). The old "
+                                 "squirrel salt-band failure is gone: red_squirrel salt is "
+                                 "Nominal since #2833 (conc exactly 1.0). Any change to the "
+                                 "population or thresholds is owner-gated"),),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
