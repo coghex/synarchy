@@ -453,6 +453,12 @@ def circulation_cases():
     says([dict(u1, modes=None)], [1], "no modes", "modes removed")
     says([dict(u1, stats=None)], [1], "no stats", "stats removed")
     says([dict(u1, stats=[])], [1], "no stats", "stats of the wrong type")
+    says([{"id": 1, "circ": 1.0, "bloodFraction": 1.0, "core": 37.0, "stats": {},
+           "modes": {}, "heartRate": "nonfinite"}], [1], "mode of cardio",
+         "an EMPTY modes map (round 2 of #2968)")
+    says([{"id": 1, "circ": 1.0, "bloodFraction": 1.0, "core": 37.0, "stats": {},
+           "modes": {}, "heartRate": "nonfinite"}], [1], "mode of thermo",
+         "an empty modes map, thermo too")
     says([dict(u1, modes={"cardio": "simulated"})], [1], "mode of thermo",
          "thermo mode absent")
     says([dict(u1, modes={"thermo": "simulated"})], [1], "mode of cardio",

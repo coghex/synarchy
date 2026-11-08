@@ -168,11 +168,12 @@ def circulation_inputs(rec: dict, constants: dict) -> tuple:
     if not isinstance(stats, dict):
         bad.append("observation carries no stats")
         stats = {}
-    if modes:
-        for system in ("cardio", "thermo"):
-            word = modes.get(system)
-            if word not in MODE_WORDS:
-                bad.append(f"mode of {system} is {word!r}, not one of {MODE_WORDS}")
+    # Both mode keys are required even when the map is empty: a missing mode
+    # must never silently select the Nominal (no heart-rate factor) branch.
+    for system in ("cardio", "thermo"):
+        word = modes.get(system)
+        if word not in MODE_WORDS:
+            bad.append(f"mode of {system} is {word!r}, not one of {MODE_WORDS}")
     inputs = {
         "blood_fraction": rec.get("bloodFraction"),
         "constitution": _stat(rec, "constitution", 1.0),
