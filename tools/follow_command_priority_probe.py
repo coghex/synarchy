@@ -167,7 +167,8 @@ PHASE_OF: dict[int, str] = {}
 HIT_WINDOW_SEC = 10.0
 
 
-def observe(port: int, uid: int, attacker=None) -> dict:
+def observe(port: int, uid: int, attacker=None,
+            keep_adjacent: bool = False) -> dict:
     """One console transaction snapshotting everything the arbitration reads.
 
     Action, goal, pending move, treatment state, the last-attacker record,
@@ -178,10 +179,24 @@ def observe(port: int, uid: int, attacker=None) -> dict:
     combat sources' eligibility (unit_ai_combat.lua's incoming_hit gate and
     unit_ai_combat_attack.lua's attack goal, both 8.0) so a treat_ally
     action can be read against whether combat was eligible to beat it.
+
+    ``keep_adjacent`` (D and E polls only): until the staged attacker has
+    landed its first hit on ``uid``, re-place it beside ``uid`` at the start
+    of the same transaction. The victim keeps walking and an acolyte chasing
+    an equal-speed walker may never close (2 of 20 trials at 46401665f, and
+    2 of 20 at 0bdd3b56f). Staging only: once a hit lands nothing is moved
+    and the victim's reaction is its own arbitration.
     """
     labels = ",".join(f"[{u}]='{l}'" for u, l in sorted(PHASE_OF.items()))
     atk = "nil" if attacker is None else str(int(attacker))
+    adj = (f"if {1 if keep_adjacent else 0}==1 and {atk}~=nil "
+           f"and unit.exists({atk}) then "
+           f"local a0=unit.getLastAttacker({int(uid)}); "
+           f"if not (a0 and a0.uid=={atk}) then "
+           f"local v=unit.getInfo({int(uid)}); "
+           f"if v then unit.setPos({atk}, v.gridX+0.6, v.gridY) end end end;")
     lua = " ".join([
+        adj,
         "local ai=require('scripts.unit_ai');",
         "local pol=require('scripts.unit_ai_combat_policy');",
         f"local uid={int(uid)}; local atk={atk}; local L={{{labels}}};",
@@ -237,7 +252,7 @@ def poll_observed(port: int, uid: int, want, seconds: float, attacker=None,
     snaps: list[dict] = []
     last: dict = {}
     for _ in range(int(seconds / 0.4)):
-        last = observe(port, uid, attacker)
+        last = observe(port, uid, attacker, keep_adjacent=attacker is not None)
         if sink is not None:
             sink.append(last)
         a = last.get("action", "nil")
