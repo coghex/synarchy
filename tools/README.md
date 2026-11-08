@@ -877,6 +877,36 @@ cannot disagree about what a given language allows.
 
 Exit codes: 0 pass, 1 check failure, 2 bad invocation.
 
+## Probe cost table (`probe_cost_table.py`, #2947)
+
+`docs/probe_costs.json` (`probe-costs/v1`) is a tracked, generated record of
+what each registered probe cost the last times the quruntul lab ran it, so a
+review of which probes earn their runtime does not have to rebuild the data
+from the lab's untracked ledger. Every key of `probe_runner_registry.PROBES`
+has a row: the most recent sample (wall seconds, state, 12-character revision,
+run id, UTC date) and, over every sample, the count and the minimum, median and
+maximum seconds. A probe the lab never ran has explicit nulls and a count of 0.
+The figures are recorded lab-trial wall times: one trial each, serial on the lab
+machine at the time, including engine boot and any resource wait. They are not
+CI timings, and nothing in CI reads them.
+
+Refresh (needs the local lab ledger, `<git-common-dir>/quruntul/ledger.sqlite3`;
+`--ledger PATH` or `PROBE_COST_LEDGER` point elsewhere):
+
+```bash
+python3 tools/probe_cost_table.py
+python3 tools/test_probe_cost_table.py
+```
+
+The ledger is opened read-only; a missing, unreadable or incompatible ledger
+fails without touching the tracked file, and two runs against one ledger are
+byte-identical. `tools/test_probe_cost_table.py` also fails when a registered
+probe has no row or the file names an unregistered one, so adding or retiring a
+probe means rerunning the generator. Because that test reads the file, the table
+is test input: a refresh goes through a pull request (as does this README),
+not `docs-push`. `PROBE_EXPECTED_SECONDS` may be refreshed from the table
+later; that is not done yet.
+
 ## Behavior probes (headless engine)
 
 Unlike the worldgen tools above (which shell out to `--dump`, no TCP), these
