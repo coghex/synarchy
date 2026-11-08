@@ -242,18 +242,33 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                 "failing-check set each run (3/3 solo runs failed, no two "
                                 "alike, #724) — not #489 (whetstone), which is long fixed "
                                 "and never implicated"),),
-    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
-                                 "pass threshold and failed both failing runs (0.74, 0.75); "
-                                 "the combat-vs-idle calorie-drain-ratio check also flaked "
-                                 "once, alongside it (2/3 solo runs failed, #724)"),),
+    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min >= 0.75' is a probe-side "
+                                 "edge, not a product fault (#2944): circulation is "
+                                 "(0.5+0.5*constitution)*(1-0.7*max(0,fat/body-0.2)) for a "
+                                 "healthy unit, and acolytes roll constitution N(1,0.25) "
+                                 "clamped to [0.5,1.5], so 0.75 is the floor of the rolled "
+                                 "population and extra body fat falls under it (model ~2.3% "
+                                 "of units, ~11% of five-acolyte runs; measured 1/24 runs, "
+                                 "unit 0.74 = constitution 0.68, fat 37%, matching the rule). "
+                                 "The old squirrel salt-band failure is gone: red_squirrel "
+                                 "salt is Nominal since #2833 (conc exactly 1.0, 0/24). Other "
+                                 "checks flake too, of 24 runs: humid-heat rise > 0.1C 3, "
+                                 "fatigued-sprint ratio 3, combat-vs-idle calorie drain 1; "
+                                 "any change to the population or thresholds is "
+                                 "owner-gated"),),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
     "construction": (Reason(SCENARIO_HEAVY, "long construct_job AI end-to-end scenario: "
                                             "inventory + ground sourcing, dead-claimant "
-                                            "release, blueprint staking (4 phases, "
-                                            "~123-168s solo); 14/14 checks passed all 3 "
-                                            "solo runs (#724)"),),
+                                            "release, blueprint staking, #799's paid-death, "
+                                            "preemption, save/load and cancel-refund "
+                                            "(nine phases). Cost: 123-168s solo was "
+                                            "measured when it had four phases (#724, "
+                                            "2026-07-12); the nine-phase probe took "
+                                            "525-580s in three lab trials (2026-10-04, "
+                                            "2026-10-05, 2026-10-19) and 574s nested in "
+                                            "the persistence sweep (#2940)"),),
     "location_content": (Reason(SCENARIO_HEAVY, "thirteen real-engine-process scenario: ruin "
                                                 "content spawn + geometry, seed-stable "
                                                 "per-instance loot in same and reversed visit "
@@ -513,21 +528,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                 "located via ui.dumpWidgets() against a real "
                                 "Vulkan-rendered HUD — no GPU on the CI runner "
                                 "(#1088)"),),
-    # #1440: two independent counts. Even on a GPU-equipped runner the
-    # real generated world and fresh-process save/load would still make
-    # the unified transfer gate too expensive for every matching PR.
-    "unified_transfer": (Reason(NEEDS_GPU, "offscreen boot: the unified transfer "
-                                "system's end-to-end gate (#1255) - two real "
-                                "Vulkan-rendered engine boots driving Mode A's "
-                                "flanking panes and Mode B's row menus through "
-                                "ui.dumpWidgets() - no GPU on the CI runner"),
-                         Reason(SLOW_WORLDGEN, "the same gate also generates a real "
-                                "world and drives a fresh-process save/load across "
-                                "its two boots (#1255)"),),
     "transfer_context_menu": (Reason(NEEDS_GPU, "offscreen boot: real right-click -> "
                                      "\"Transfer\" context-menu row located via "
                                      "ui.dumpWidgets() against a real Vulkan-rendered "
-                                     "menu — no GPU on the CI runner (#1014/#1085)"),),
+                                     "menu, and (#2935) real right-clicks on rendered item-list "
+                                     "rows driving Mode A sessions and Mode B queued "
+                                     "gestures — no GPU on the CI runner "
+                                     "(#1014/#1085/#2935)"),),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (Reason(SLOW_WORLDGEN, "needs a real generated world to scan for a "
