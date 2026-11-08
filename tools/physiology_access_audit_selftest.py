@@ -106,6 +106,25 @@ LEGACY_NEUTRALIZE = (
         '  for _, stat in ipairs(SURVIVAL_METERS) do\n    unit.setStat(uid, stat, 0)\n'
         '  end\nend\nreturn M\n')
 
+THERMO_BASE = (
+    'local t = {}\nlocal thermo = t\n'
+    'local function feverOffsetOf(uid) return 0 end\n'
+    'function thermo.heatInputs(uid, info)\n'
+    '  return { core = unit.readPhysio(uid, "core_temp"),\n'
+    '           fever = feverOffsetOf(uid) }\nend\n'
+    'function thermo.heatBalance(inputs) return { net = 0, inertia = 1 } end\n'
+    'function thermo.coreDelta(balance, dt)\n'
+    '  return balance.net * dt * balance.inertia\nend\n'
+    'function thermo.readHeatBalance(uid)\n'
+    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n'
+    '  return thermo.heatBalance(inputs), inputs\nend\n'
+    'function thermo.tick(uid)\n'
+    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n'
+    '  local bal = thermo.heatBalance(inputs)\n'
+    '  local c = unit.getStat(uid, "core_temp") or 37\n'
+    '  unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))\nend\n'
+    'return t\n')
+
 # A corpus in which every owner file exists and names its keys and nothing
 # violates a rule: the baseline every case perturbs.
 BASE: dict[str, str] = {
@@ -115,9 +134,8 @@ BASE: dict[str, str] = {
     "scripts/unit_stats.lua":
         'local stats = {}\nfunction stats.get(uid, name) return unit.getStat(uid, name) end\n'
         'return stats\n',
-    "scripts/thermo.lua": 'local t = {}\nfunction t.tick(uid)\n'
-        '  local c = unit.getStat(uid, "core_temp") or 37\n'
-        '  unit.setStat(uid, "core_temp", c)\nend\nreturn t\n',
+    # Thermo (#2960): the pure heat-balance read and the tick that shares it.
+    "scripts/thermo.lua": THERMO_BASE,
     "scripts/salts.lua": 'local s = {}\nfunction s.tick(uid)\n'
         '  unit.setStat(uid, "salt", unit.getStat(uid, "salt"))\n'
         '  unit.setStat(uid, "salt_store", 1)\nend\n'
@@ -836,6 +854,77 @@ def case_templated_physiology_names_rejected():
                "in stats:", units=units)
     assert any("salt_conc" in x and "skills:" in x for x in f), f
     expect_clean("unrelated templates")
+
+def case_pure_heat_read():
+    """#2960: the heat-balance read changes nothing and the tick shares it."""
+    expect_clean("the baseline thermo module")
+
+    def with_body(fn_old, fn_new):
+        return {"scripts/thermo.lua": THERMO_BASE.replace(fn_old, fn_new, 1)}
+
+    # Every write family is refused inside a pure read.
+    for label, call in (
+            ("a raw write", 'unit.setStat(uid, "core_temp", 1)'),
+            ("a debit", 'physiology.debit(uid, "hydration", 1)'),
+            ("a credit", 'physiology.credit(uid, "hydration", 1)'),
+            ("a mode change", 'physiology.setMode(uid, "thermo", "nominal")'),
+            ("the atomic stamina commit", 'unit.commitStamina(uid, 1)'),
+            ("a frostbite", 'unit.frostbite(uid, "l_hand", 1)'),
+            ("a spawn", 'unit.spawn("acolyte", 1, 1)'),
+            ("a random draw", 'math.random()'),
+            ("the effects seam", 'effects.recomputeBody(uid)'),
+            ("an effects alias", 'fx.setStat(uid, "core_temp", 1)'),
+            ("a non-getter unit verb", 'unit.feed(uid, "rations")')):
+        src = THERMO_BASE.replace(
+            'function thermo.heatBalance(inputs) return { net = 0, inertia = 1 } end',
+            'local fx = require("scripts.unit_effects")\n'
+            'function thermo.heatBalance(inputs)\n  ' + call +
+            '\n  return { net = 0, inertia = 1 }\nend', 1)
+        f = expect(label, "pure read thermo.heatBalance() calls", files={
+            "scripts/thermo.lua": src})
+        assert any("change nothing" in x for x in f), (label, f)
+    # The same write in the tick (its job) is fine.
+    expect_clean("the tick writes", files=with_body(
+        'unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))',
+        'unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))\n'
+        '  physiology.debit(uid, "hydration", 1)'))
+    # Getters and pure helpers are fine in a read.
+    expect_clean("getters in a read", files=with_body(
+        'return { core = unit.readPhysio(uid, "core_temp"),',
+        'local a = unit.getActivity(uid) or unit.getInsulation(uid)\n'
+        '  return { core = unit.readPhysio(uid, "core_temp"), act = a,'))
+    # A write reached through the local helper is caught as well.
+    expect("a helper that writes", "pure read feverOffsetOf() calls",
+           files=with_body('local function feverOffsetOf(uid) return 0 end',
+                           'local function feverOffsetOf(uid)\n'
+                           '  unit.setStat(uid, "core_temp", 1) return 0\nend'))
+    # A pure function that is renamed away is a finding, not a silent pass.
+    expect("renamed read", "pure read thermo.readHeatBalance() is missing",
+           files=with_body('function thermo.readHeatBalance(uid)',
+                           'function thermo.readBalance(uid)'))
+    expect("renamed rule", "pure read thermo.heatBalance() is missing",
+           files=with_body('function thermo.heatBalance(inputs)',
+                           'function thermo.balanceOf(inputs)'))
+    # The tick must run the shared rule.
+    expect("tick forks the rule", "thermo.tick() no longer calls thermo.heatBalance()",
+           files=with_body('  local bal = thermo.heatBalance(inputs)\n',
+                           '  local bal = { net = 0, inertia = 1 }\n'))
+    expect("tick gathers its own", "no longer calls thermo.heatInputs()",
+           files=with_body('function thermo.tick(uid)\n'
+                           '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n',
+                           'function thermo.tick(uid)\n  local inputs = {}\n'))
+    expect("tick forks the clamp", "no longer calls thermo.coreDelta()",
+           files=with_body('c + thermo.coreDelta(bal, 1)', 'c + bal.net'))
+    expect("tick missing", "thermo.tick() is missing",
+           files=with_body('function thermo.tick(uid)', 'function thermo.step(uid)'))
+    # Calls in strings and comments are not calls.
+    expect_clean("comment mentioning a write", files=with_body(
+        'function thermo.heatBalance(inputs) return',
+        'function thermo.heatBalance(inputs) -- unit.setStat(uid, "x", 1)\n  return'))
+    # The probe may read it: nothing about the read is a write.
+    expect_clean("the probe reads the balance", probe=PROBE_PY + (
+        '    send(port, "return require(\'scripts.thermo\').readHeatBalance(1)")\n'))
+
 
 
 def case_tokenizer():

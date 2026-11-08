@@ -48,6 +48,14 @@ What it checks (exit 1 on any finding, with path:line diagnostics):
   4. TEMPLATING. No unit definition templates a registry key in ``stats:`` or
      ``skills:`` (the loader refuses it at run time; this is the static
      twin).
+  5. PURE HEAT READ (#2960). ``thermo.readHeatBalance`` and the functions it
+     is built from (``heatInputs``, ``heatBalance``, ``coreDelta``,
+     ``feverOffsetOf``, ``PURE_READS``) call nothing that writes, mutates or
+     draws randomness, no ``unit.*`` verb that is not a getter, and nothing
+     through the effects seam; ``thermo.tick`` must call ``heatInputs``,
+     ``heatBalance`` and ``coreDelta`` itself, so the read the probe judges a
+     unit against and the step the engine takes are one rule. A listed
+     function that no longer exists is a finding.
 
 Scope: every ``scripts/**/*.lua`` file and the Lua embedded in
 ``tools/physiology_probe.py`` (extracted from its Python string literals).
@@ -332,9 +340,40 @@ BLOOD_FIELD_TOKENS = ("uiBlood", "bloodView", "bloodViewOf", "unitBloodView",
                       "instanceBloodView")
 
 
+# Pure reads (#2960). The heat balance is READ by the physiology probe to judge
+# a unit against what the engine's own rule predicts, so the functions that
+# gather and evaluate it must not change anything, and ``thermo.tick`` (the one
+# writer) must run the very same functions, so the expectation cannot drift from
+# the simulation. Each entry: (file, owner table or None for a file-local
+# function, the pure functions). A function that disappears is a finding, so a
+# rename cannot silently leave the read unguarded.
+PURE_READS: tuple[tuple[str, Optional[str], tuple[str, ...]], ...] = (
+    ("scripts/thermo.lua", "thermo",
+     ("heatInputs", "heatBalance", "coreDelta", "readHeatBalance")),
+    ("scripts/thermo.lua", None, ("feverOffsetOf",)),
+)
+#: (file, function, callees it must reach): the shared-rule requirement.
+PURE_READ_SHARED: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("scripts/thermo.lua", "tick",
+     ("thermo.heatInputs", "thermo.heatBalance", "thermo.coreDelta")),
+)
+#: Last-segment names of calls that write or mutate, whatever they hang off.
+PURE_WRITE_NAMES = frozenset({
+    "setStat", "setPhysioMode", "clearPhysioMode", "applyCombatEngagement",
+    "commitStamina", "commitPhysio", "commit", "debit", "credit",
+    "creditBatch", "setMode", "clearMode", "applyEngagement", "recomputeBody",
+    "frostbite", "kill", "setPose", "addItem", "removeItem", "destroy", "spawn",
+    "emitEventForUnit", "randomseed", "random",
+})
+#: A ``unit.<verb>`` call in a pure read must be a getter.
+PURE_UNIT_READ_PREFIXES = ("get", "read", "is", "has")
+
+
 @dataclass(frozen=True)
 class Policy:
     owners: tuple[Owner, ...] = OWNERS
+    pure_reads: tuple = PURE_READS
+    pure_read_shared: tuple = PURE_READ_SHARED
     haskell_owners: dict[str, tuple[str, ...]] = field(
         default_factory=lambda: dict(HASKELL_OWNERS))
     blood_inventory: dict[str, str] = field(
@@ -465,6 +504,54 @@ def check_coverage(doc: dict, files: dict[str, str], policy: Policy,
         if sid not in reg.systems:
             out.append(f"tools/physiology_access_audit.py HASKELL_OWNERS: "
                        f"unknown system '{sid}'")
+    return out
+
+
+def check_pure_reads(files: dict[str, Optional[str]], policy: Policy) -> list[str]:
+    """The pure heat-balance functions make no write, mutation or random draw
+    and read the unit only through getters; ``thermo.tick`` calls the same
+    functions (#2960)."""
+    out: list[str] = []
+    for path, owner, names in policy.pure_reads:
+        src = files.get(path)
+        if src is None:
+            out.append(f"{path}: holds the pure reads {', '.join(names)} but "
+                       "does not exist")
+            continue
+        effects = lua.effects_aliases(lua.tokenize(src)) | {"effects"}
+        for name in names:
+            calls = lua.function_body_calls(src, owner, name)
+            label = f"{owner}.{name}" if owner else name
+            if calls is None:
+                out.append(f"{path}: pure read {label}() is missing (a rename "
+                           "leaves the read unguarded: update PURE_READS)")
+                continue
+            for line, callee in calls:
+                segs = callee.split(".")
+                why = None
+                if segs[0] in effects:
+                    why = "goes through the effects seam, which writes"
+                elif segs[-1] in PURE_WRITE_NAMES:
+                    why = "writes, mutates or draws randomness"
+                elif segs[0] == "unit" and len(segs) == 2 and not \
+                        segs[1].startswith(PURE_UNIT_READ_PREFIXES):
+                    why = "is a unit verb that is not a getter"
+                if why:
+                    out.append(f"{path}:{line}: pure read {label}() calls "
+                               f"{callee}(), which {why}; a read of the heat "
+                               "balance must change nothing")
+    for path, name, needs in policy.pure_read_shared:
+        src = files.get(path)
+        calls = lua.function_body_calls(src, "thermo", name) if src else None
+        if calls is None:
+            out.append(f"{path}: thermo.{name}() is missing; it must run the "
+                       "shared heat-balance rule")
+            continue
+        reached = {c for _, c in calls}
+        for need in needs:
+            if need not in reached:
+                out.append(f"{path}: thermo.{name}() no longer calls {need}(): "
+                           "the tick and the read must share one rule")
     return out
 
 
@@ -691,6 +778,7 @@ def run_audit(files: dict[str, str], probe: Optional[tuple[str, str]],
     reg = load_registry(doc)
     findings = [f.render() for f in scan_corpus(files, probe, reg, policy)]
     findings += check_coverage(doc, files, policy, hs_files)
+    findings += check_pure_reads(files, policy)
     if hs_files is not None:
         findings += check_blood_inventory(hs_files, policy)
     findings += check_templating(doc, unit_docs)

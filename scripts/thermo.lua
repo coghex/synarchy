@@ -118,20 +118,46 @@ function thermo.sweatMassScale(bodyM)
     return bodyM / HUMAN_MASS
 end
 
--- Advance a unit's core temperature one tick. `info` is unit.getInfo(uid)
--- (for gridX/gridY). No-op if there's no world climate to sample.
-function thermo.tick(uid, info, dt)
+-- ---- The heat balance (#2960) ----
+--
+-- One tick's heat balance is split in three so the engine's own rule can be
+-- READ without advancing anything:
+--
+--   thermo.heatInputs(uid, info)  gathers a unit's current state (reads only);
+--   thermo.heatBalance(inputs)    is the rule, a PURE function of that table;
+--   thermo.tick(uid, info, dt)    = gather -> rule -> apply (the only writer).
+--
+-- `thermo.readHeatBalance(uid)` is the read verb: gather + rule for a unit's
+-- current state, with no mutation (no setStat, debit, frostbite or cache). The
+-- physiology probe reads it to judge a unit against what the rule predicts
+-- from that unit's own state. thermo.tick calls the same two functions, so
+-- the expectation and the simulation cannot drift apart.
+
+local function feverOffsetOf(uid)
+    return math.min(FEVER_MAX_OFFSET,
+                    FEVER_OFFSET_K * injuries.infectionLoad(uid))
+end
+
+-- Gather the state one tick's heat balance reads. Reads only: it never
+-- writes and never mutates. Returns nil when there is nothing to balance (no
+-- grid position, no active world climate, or no stored core temperature).
+-- `info` is unit.getInfo(uid) (for gridX/gridY).
+--
+-- The sweat factor is read only for a unit past its sweat onset, exactly as
+-- the tick always did, so a unit that is not sweating never reads the salt
+-- concentration.
+function thermo.heatInputs(uid, info)
     local gx, gy = info.gridX, info.gridY
-    if not gx or not gy then return end
+    if not gx or not gy then return nil end
     local clim = world.getClimateAt(gx, gy)
-    if not clim then return end   -- no active world → leave core_temp alone
+    if not clim then return nil end   -- no active world → leave core_temp alone
 
     -- Only a SIMULATED thermo ticks (scripts/unit_resources.lua gates it), so
     -- its stored core is present by the seeding rule (#2831): a missing one
     -- is an invariant violation that physiology.get raises, never a cue to
     -- start from the baseline.
     local core = physiology.get(uid, "core_temp")
-    if not core then return end
+    if not core then return nil end
 
     -- Circulation, derived on demand (#2836, S9) from the unit's current
     -- inputs, so it is coherent with this tick's blood, stats and heart rate.
@@ -156,18 +182,63 @@ function thermo.tick(uid, info, dt)
     local metab = unit.getStat(uid, "metabolism") or 1.0
     local fatM  = unit.getStat(uid, "fat_mass") or 0.0
     local bodyM = unit.getStat(uid, "body_mass") or 70.0
-    local fatFrac = (bodyM > 0) and (fatM / bodyM) or 0.2
-    -- Insulation: baseline + body fat + WORN CLOTHING (unit.getInsulation sums
+    -- Insulation inputs: body fat and WORN CLOTHING (unit.getInsulation sums
     -- the equipped/accessory gear's insulation). Clothing is the difference
     -- between freezing naked and being comfortable — dress for the climate.
     local clothing = (unit.getInsulation and unit.getInsulation(uid)) or 0
-    local insul = INSUL_BASE + fatFrac * FAT_INSUL_K + clothing * CLOTHING_INSUL_K
 
-    -- Starvation factor: a low calorie STORE (not the stomach meter —
-    -- a unit with an empty stomach but a fed store keeps full output)
-    -- throttles metabolic heat.
+    -- Starvation input: a low calorie STORE (not the stomach meter — a unit
+    -- with an empty stomach but a fed store keeps full output) throttles
+    -- metabolic heat. nil for a unit with no calorie store.
+    local calFrac = physiology.fraction(uid, "calories", "max_calories")
+
+    local feverOffset = feverOffsetOf(uid)
+    local sweatFactor = nil
+    if core > SWEAT_START + feverOffset then
+        sweatFactor = salts.sweatFactor(uid)
+    end
+
+    return {
+        core        = core,
+        circ        = circ,
+        ambient     = ambient,
+        humidity    = humidity,
+        metab       = metab,
+        fatM        = fatM,
+        bodyM       = bodyM,
+        clothing    = clothing,
+        calFrac     = calFrac,
+        moving      = MOVING[unit.getActivity(uid) or "idle"] == true,
+        feverOffset = feverOffset,
+        sweatFactor = sweatFactor,
+    }
+end
+
+-- THE RULE. A pure function of a heat-inputs table (see heatInputs): no
+-- reads of the world or of any unit, no writes, deterministic. Returns the
+-- terms of one tick's balance:
+--
+--   production, shiver, loss, sweat   heat fluxes (shiver is INCLUDED in
+--                                     production, and reported for its cost)
+--   net                               production - loss - sweat
+--   inertia                           °C per flux-second (∝ HUMAN_MASS/mass)
+--   rate                              net * inertia: the UNCLAMPED core-temp
+--                                     rate in °C/s the unit is on right now
+--   insul, calFactor, fatFrac         the intermediate values the terms use
+--
+-- A tick of `dt` seconds moves the core by thermo.coreDelta(balance, dt).
+function thermo.heatBalance(inputs)
+    local core, circ = inputs.core, inputs.circ
+    local bodyM = inputs.bodyM
+    local fatFrac = (bodyM > 0) and (inputs.fatM / bodyM) or 0.2
+    -- Insulation: baseline + body fat + WORN CLOTHING.
+    local insul = INSUL_BASE + fatFrac * FAT_INSUL_K
+                + inputs.clothing * CLOTHING_INSUL_K
+
+    -- Starvation factor: below HUNGER_HEAT_FLOOR_FRAC of the calorie store
+    -- the metabolic heat output ramps down linearly toward HUNGER_HEAT_MIN.
     local calFactor = 1.0
-    local frac = physiology.fraction(uid, "calories", "max_calories")
+    local frac = inputs.calFrac
     if frac and frac < HUNGER_HEAT_FLOOR_FRAC then
         calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
                                       * (frac / HUNGER_HEAT_FLOOR_FRAC)
@@ -179,16 +250,13 @@ function thermo.tick(uid, info, dt)
     -- needs metabolic fuel — likewise fails on an empty stomach (a real
     -- sign of severe hypoglycemia), so a starving body in the cold can't
     -- defend its temperature and chills far faster.
-    local activity = unit.getActivity(uid) or "idle"
-    local production = BASAL_HEAT * metab * calFactor
-    if MOVING[activity] then production = production + ACTIVITY_HEAT * calFactor end
+    local production = BASAL_HEAT * inputs.metab * calFactor
+    if inputs.moving then production = production + ACTIVITY_HEAT * calFactor end
 
     -- Fever raises the setpoint: the body shivers up to (and won't sweat below)
     -- SHIVER_START/SWEAT_START + this offset.
-    local feverOffset = math.min(FEVER_MAX_OFFSET,
-                                 FEVER_OFFSET_K * injuries.infectionLoad(uid))
-    local shiverStart = SHIVER_START + feverOffset
-    local sweatStart  = SWEAT_START  + feverOffset
+    local shiverStart = SHIVER_START + inputs.feverOffset
+    local sweatStart  = SWEAT_START  + inputs.feverOffset
 
     local shiver = 0
     if core < shiverStart then
@@ -202,7 +270,7 @@ function thermo.tick(uid, info, dt)
     -- cold unit sheds heat more slowly — protecting the core at the expense of
     -- the extremities (the frostbite tradeoff).
     local circLoss = CIRC_LOSS_FLOOR + (1 - CIRC_LOSS_FLOOR) * circ
-    local loss = (core - ambient) * LOSS_COEFF / insul * circLoss
+    local loss = (core - inputs.ambient) * LOSS_COEFF / insul * circLoss
 
     -- Evaporative cooling (sweat). Useless in high humidity — which is what
     -- makes a hot, humid environment lethal at lower temperatures than a dry one.
@@ -210,18 +278,61 @@ function thermo.tick(uid, info, dt)
     -- overheats sooner (the salt↔heat tie-in).
     local sweat = 0
     if core > sweatStart then
-        sweat = math.min(SWEAT_MAX, SWEAT_K * (core - sweatStart) * (1 - humidity))
-        sweat = sweat * salts.sweatFactor(uid)
+        sweat = math.min(SWEAT_MAX, SWEAT_K * (core - sweatStart)
+                                    * (1 - inputs.humidity))
+        sweat = sweat * (inputs.sweatFactor or 1.0)
     end
 
     -- Heat capacity ∝ mass → rate ∝ 1/mass (small bodies swing fast).
     local inertia = THERMAL_INERTIA * (HUMAN_MASS / math.max(bodyM, 0.001))
-    local dTemp = (production - loss - sweat) * dt * inertia
-    dTemp = clamp(dTemp, -MAX_DTEMP_PER_TICK, MAX_DTEMP_PER_TICK)
-    core = clamp(core + dTemp, 15.0, 45.0)
+    local net = production - loss - sweat
+    return {
+        production = production, shiver = shiver, loss = loss, sweat = sweat,
+        net = net, inertia = inertia, rate = net * inertia,
+        insul = insul, calFactor = calFactor, fatFrac = fatFrac,
+    }
+end
+
+-- The core-temperature change one tick of `dt` seconds makes from a balance:
+-- the stability-clamped step (MAX_DTEMP_PER_TICK never bites at human scale).
+function thermo.coreDelta(balance, dt)
+    return clamp(balance.net * dt * balance.inertia,
+                 -MAX_DTEMP_PER_TICK, MAX_DTEMP_PER_TICK)
+end
+
+-- READ VERB (#2960): a unit's current heat balance, with no side effects, or
+-- nil when there is nothing to balance. Returns the balance table and the
+-- inputs table it was evaluated from. Honors the same climate selection and
+-- debug overrides the tick does, because it gathers through the same function.
+function thermo.readHeatBalance(uid)
+    local info = unit.getInfo(uid)
+    if not info then return nil end
+    local inputs = thermo.heatInputs(uid, info)
+    if not inputs then return nil end
+    return thermo.heatBalance(inputs), inputs
+end
+
+-- Advance a unit's core temperature one tick. `info` is unit.getInfo(uid)
+-- (for gridX/gridY). No-op if there's no world climate to sample.
+--
+-- Returns a receipt of the step it executed, or nil when it executed none:
+-- { dt = seconds, delta = the unclamped net * dt * inertia, applied = the
+-- stability-clamped change coreDelta moved the core by }. The scheduler
+-- passes a fixed script tick as `dt` and drops missed passes, so the number
+-- of executed steps is not derivable from wall-clock time; a caller that must
+-- account executed simulated time (the physiology probe's ledger, #2960) wraps
+-- this function and sums the receipts. The production caller ignores it.
+function thermo.tick(uid, info, dt)
+    local inputs = thermo.heatInputs(uid, info)
+    if not inputs then return nil end
+    local bal = thermo.heatBalance(inputs)
+
+    local applied = thermo.coreDelta(bal, dt)
+    local core = clamp(inputs.core + applied, 15.0, 45.0)
     effects.setStat(uid, "core_temp", core)
 
     -- Minimal costs of thermoregulating.
+    local shiver, sweat = bal.shiver, bal.sweat
     if shiver > 0 then
         -- A relative, atomic debit (#2834, S8-F2): the old read-modify-write
         -- republished an absolute value and refunded any strike combat
@@ -231,7 +342,7 @@ function thermo.tick(uid, info, dt)
     if sweat > 0 then
         -- Debits scale with body mass (thermo.sweatMassScale): the same
         -- sweat removes the same FRACTION of any body's pools.
-        local massScale = thermo.sweatMassScale(bodyM)
+        local massScale = thermo.sweatMassScale(inputs.bodyM)
         physiology.debit(uid, "hydration", SWEAT_HYDRATION_K * massScale * sweat * dt)
         -- Sweat loses salt too. With water replaced by drinking but salt only
         -- by eating, heavy sweating + plain water → hyponatremia.
@@ -241,6 +352,7 @@ function thermo.tick(uid, info, dt)
     -- Frostbite: freeze the extremities when it's cold and circulation is poor.
     -- The engine (unit.frostbite → woundNecrosis) handles the rest: rot-off,
     -- infection susceptibility, display.
+    local ambient, circ = inputs.ambient, inputs.circ
     if ambient < FROST_AMBIENT then
         local drive = clamp((FROST_AMBIENT - ambient) / FROST_AMBIENT_SCALE, 0, 1)
                     * clamp(FROST_CIRC_REF - circ, 0, 1)
@@ -251,6 +363,7 @@ function thermo.tick(uid, info, dt)
             end
         end
     end
+    return { dt = dt, delta = bal.net * dt * bal.inertia, applied = applied }
 end
 
 function thermo.coreTemp(uid)
