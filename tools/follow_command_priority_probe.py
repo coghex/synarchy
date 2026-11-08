@@ -117,9 +117,111 @@ def poll_for_action(port: int, uid: int, want, seconds: float = 8.0):
 
 COMBAT_ACTIONS = {"engage", "attack_target", "retreat"}
 
+# --------------------------------------------------------------------------
+# Evidence capture (#2945). Printing only: nothing here is graded.
+# --------------------------------------------------------------------------
+# uid -> the phase that spawned it ("E", "E-attacker", ...), so a wounded unit
+# on the arena can be attributed to the check that left it there.
+PHASE_OF: dict[int, str] = {}
 
-def spawn_acolyte(port: int, unit: str, x: float, y: float) -> int:
+# Mirrors ENGAGE_WINDOW_SEC (scripts/unit_ai_combat.lua): the incoming_hit
+# source only counts a hit this recent.
+HIT_WINDOW_SEC = 10.0
+
+
+def observe(port: int, uid: int, attacker=None) -> dict:
+    """One console transaction snapshotting everything the arbitration reads.
+
+    Action, goal, pending move, treatment state, the last-attacker record,
+    the staged attacker's identity/pose and the wounded units on the arena
+    are read in ONE round trip so they describe the same instant (the AI
+    tick is live: separate round trips let it act in between). The
+    ``incoming_hit_scores`` / ``attack_goal_scores`` fields restate the two
+    combat sources' eligibility (unit_ai_combat.lua's incoming_hit gate and
+    unit_ai_combat_attack.lua's attack goal, both 8.0) so a treat_ally
+    action can be read against whether combat was eligible to beat it.
+    """
+    labels = ",".join(f"[{u}]='{l}'" for u, l in sorted(PHASE_OF.items()))
+    atk = "nil" if attacker is None else str(int(attacker))
+    lua = " ".join([
+        "local ai=require('scripts.unit_ai');",
+        "local pol=require('scripts.unit_ai_combat_policy');",
+        f"local uid={int(uid)}; local atk={atk}; local L={{{labels}}};",
+        "local now=engine.gameTime(); local s=ai.getState(uid) or {};",
+        "local me=unit.getInfo(uid); local att=unit.getLastAttacker(uid);",
+        "local function pose(u) return (u and unit.exists(u)) and unit.getPose(u) or nil end;",
+        "local function pos(u) local i=u and unit.getInfo(u);",
+        "return i and {x=i.gridX,y=i.gridY,page=i.page} or nil end;",
+        "local ct=s.commandedTask;",
+        "local o={action=s.currentAction or 'nil', goal=s.activeGoal,",
+        "attackTarget=s.attackTargetUid, now=now,",
+        "movePending=(ct~=nil), movePlayer=((ct and ct.player) and true or false),",
+        "treatClaim=(s.treatClaim and s.treatClaim.patient) or nil,",
+        "treatPending=(s.treatPending and s.treatPending.uid) or nil,",
+        "pose=pose(uid), pos=pos(uid), attackerUid=atk, attackerPose=pose(atk),",
+        "attackerPos=pos(atk)};",
+        "if att then o.lastAttacker={uid=att.uid, at=att.at, age=now-(att.at or 0)} end;",
+        f"local win={HIT_WINDOW_SEC};",
+        "o.hitByStaged=((atk~=nil) and att~=nil and att.uid==atk and (now-(att.at or 0))<=win) and true or false;",
+        "local elig=false; local basis=nil;",
+        "if att and unit.exists(att.uid) and unit.getPose(att.uid)~='dead' and (now-(att.at or 0))<=win then",
+        "local hold=s.holdAnchor; local held=hold and hold.combatWithdrawalCompletedAt and (att.at or 0)<=hold.combatWithdrawalCompletedAt;",
+        "if not held then local ok,b=pcall(pol.acquireBasis,uid,att.uid,att); if ok and b then elig=true; basis=b end end end;",
+        "o.incomingHitScores=elig; o.incomingHitBasis=basis;",
+        "o.attackGoalScores=((s.activeGoal=='attack') and s.attackTargetUid~=nil) and true or false;",
+        "local w={}; for _,u in ipairs(unit.getAllIds() or {}) do local ws=unit.getWounds(u) or {};",
+        "if #ws>0 then local i=unit.getInfo(u); local k={};",
+        "for _,x in ipairs(ws) do k[#k+1]=tostring(x.kind) end;",
+        "w[#w+1]={uid=u, phase=L[u] or '?', wounds=#ws, kinds=table.concat(k,'/'),",
+        "page=i and i.page, x=i and i.gridX, y=i and i.gridY,",
+        "dist=(i and me) and math.sqrt((i.gridX-me.gridX)^2+(i.gridY-me.gridY)^2) or nil} end end;",
+        "o.wounded=w; return o",
+    ])
+    r = send_json(port, lua)
+    if not isinstance(r, dict):
+        return {"action": str(r), "observeError": True}
+    if not r.get("wounded"):
+        r["wounded"] = []  # the console renders an empty Lua table as {}
+    return r
+
+
+def poll_observed(port: int, uid: int, want, seconds: float, attacker=None):
+    """``poll_for_action`` with an ``observe`` snapshot taken in the same
+    transaction as every action sample. Returns
+    (timeline, hit, transition_snapshots, last_snapshot). Same stop rule and
+    cadence as ``poll_for_action``; the snapshots are only printed."""
+    wants = {want} if isinstance(want, str) else set(want)
+    seen: list[str] = []
+    snaps: list[dict] = []
+    last: dict = {}
+    for _ in range(int(seconds / 0.4)):
+        last = observe(port, uid, attacker)
+        a = last.get("action", "nil")
+        if not seen or seen[-1] != a:
+            seen.append(a)
+            snaps.append(last)
+        if a in wants:
+            return seen, True, snaps, last
+        time.sleep(0.4)
+    return seen, False, snaps, last
+
+
+def print_obs(tag: str, snaps: list, last: dict) -> None:
+    """Print each action-transition snapshot plus the final sample."""
+    def line(label, o):
+        print(f"  [{tag} obs {label}] "
+              f"{json.dumps(o, sort_keys=True, separators=(',', ':'))}")
+    for i, o in enumerate(snaps):
+        line(f"transition {i + 1} -> {o.get('action')}", o)
+    if last and (not snaps or last is not snaps[-1]):
+        line("final", last)
+
+
+
+def spawn_acolyte(port: int, unit: str, x: float, y: float,
+                  label: str = "?") -> int:
     uid = int(float(send(port, f"return unit.spawn('{unit}', {x}, {y})")))
+    PHASE_OF[uid] = label
     time.sleep(1.5)  # settle onto ground
     return uid
 
@@ -242,7 +344,7 @@ def main() -> int:
         checks: list[tuple[str, bool]] = []
 
         # --- Check A: explicit pickup beats a pending move order ----------
-        ua = spawn_acolyte(args.port, args.unit, sx, sy)
+        ua = spawn_acolyte(args.port, args.unit, sx, sy, "A")
         if ua < 0:
             print(f"FAIL: could not spawn '{args.unit}'", file=sys.stderr)
             return 2
@@ -273,7 +375,7 @@ def main() -> int:
         checks.append(("pickup_ground wins over a pending move order", hit))
 
         # --- Check B: a dry-canteen refill beats a pending move order -----
-        ub = spawn_acolyte(args.port, args.unit, sx + 1, sy + 1)
+        ub = spawn_acolyte(args.port, args.unit, sx + 1, sy + 1, "B")
         # Empty the canteen (acolytes spawn with a full 2 L canteen).
         send(args.port,
              f"unit.modifyItemFill({ub}, 'canteen_steel_2l', -5.0); return 'drained'")
@@ -295,7 +397,7 @@ def main() -> int:
         # other input it searches (search_for_water). Issuing a move must pull
         # it onto follow_command -> a routine goal yields to a player order
         # (command > goals; the inversion this fix corrects).
-        uc = spawn_acolyte(args.port, args.unit, sx + 2, sy + 2)
+        uc = spawn_acolyte(args.port, args.unit, sx + 2, sy + 2, "C")
         # Confirm it is searching first (goal is live, no water known).
         pre = current_action(args.port, uc)
         send(args.port,
@@ -309,12 +411,14 @@ def main() -> int:
         # goal-bound acolyte (searching for water). When struck it must react
         # with a combat action (engage/attack_target/retreat), NOT keep
         # searching -- self-defense outranks a routine goal.
-        ud = spawn_acolyte(args.port, args.unit, sx + 4, sy)
-        atk = spawn_acolyte(args.port, args.unit, sx + 5, sy)  # adjacent
+        ud = spawn_acolyte(args.port, args.unit, sx + 4, sy, "D")
+        atk = spawn_acolyte(args.port, args.unit, sx + 5, sy, "D-attacker")  # adjacent
         send(args.port,
              f"require('scripts.unit_ai').commandAttack({atk},{ud}); return 'fight'")
-        seend, hitd = poll_for_action(args.port, ud, COMBAT_ACTIONS, args.seconds + 6)
+        seend, hitd, snapd, lastd = poll_observed(
+            args.port, ud, COMBAT_ACTIONS, args.seconds + 6, attacker=atk)
         print(f"\n[D combat-beats-goal] victim timeline: {' -> '.join(seend)}")
+        print_obs("D", snapd, lastd)
         checks.append(("a struck goal-bound unit reacts with combat, not search",
                        hitd))
 
@@ -323,21 +427,32 @@ def main() -> int:
         # stale move yanks the unit off the fight). Give the victim a move
         # order FIRST, then attack it; it must reach a combat action AND not
         # fall back to follow_command while the fight is on.
-        ue = spawn_acolyte(args.port, args.unit, sx + 7, sy)
+        ue = spawn_acolyte(args.port, args.unit, sx + 7, sy, "E")
         send(args.port,
              f"require('scripts.unit_ai').commandMove({ue},{far_x},{far_y}); return 'moved'")
-        atk2 = spawn_acolyte(args.port, args.unit, sx + 8, sy)  # adjacent
+        atk2 = spawn_acolyte(args.port, args.unit, sx + 8, sy, "E-attacker")  # adjacent
         send(args.port,
              f"require('scripts.unit_ai').commandAttack({atk2},{ue}); return 'fight'")
-        seene, hite = poll_for_action(args.port, ue, COMBAT_ACTIONS, args.seconds + 6)
+        seene, hite, snape, laste = poll_observed(
+            args.port, ue, COMBAT_ACTIONS, args.seconds + 6, attacker=atk2)
         # Once fighting, sample a few more times: it must NOT revert to the move.
         tail = []
+        tail_obs = []
         for _ in range(8):
             time.sleep(0.4)
-            tail.append(current_action(args.port, ue))
+            o = observe(args.port, ue, atk2)
+            tail_obs.append(o)
+            tail.append(o.get("action", "nil"))
         reverted = "follow_command" in tail
         print(f"\n[E combat-commits-over-move] timeline: {' -> '.join(seene)}"
               f"  | tail: {' '.join(tail)}")
+        print_obs("E", snape, laste)
+        # The tail snapshot that decided the hand-back verdict: the first
+        # follow_command sample if there was one, else the last sample.
+        decisive = next((o for o in tail_obs
+                         if o.get("action") == "follow_command"), tail_obs[-1])
+        print(f"  [E obs tail {'follow_command' if reverted else 'last'}] "
+              f"{json.dumps(decisive, sort_keys=True, separators=(',', ':'))}")
         checks.append(("combat reached over a pending move", hite))
         checks.append(("combat does NOT hand back to the stale move", not reverted))
 
@@ -350,7 +465,7 @@ def main() -> int:
         # to misread as a ladder regression. Staged over capacity here, so
         # it is the capacity path and not commandPickup's separate
         # missing/off-page-item refusal that is under test.
-        uf = spawn_acolyte(args.port, args.unit, sx, sy + 6)
+        uf = spawn_acolyte(args.port, args.unit, sx, sy + 6, "F")
         gidf = spawn_ground(args.port, "granite_chunk",
                             int(sx) + 2, int(sy) + 6)
         if gidf is None:
@@ -370,9 +485,10 @@ def main() -> int:
                        refused["accepted"] is False))
         checks.append(("a refused pickup stores no pickupOrder",
                        refused["order"] == -1))
-        seenf, hitf = poll_for_action(args.port, uf, "follow_command",
-                                      args.seconds)
+        seenf, hitf, snapf, lastf = poll_observed(
+            args.port, uf, "follow_command", args.seconds)
         print(f"[F refusal-keeps-move] action timeline: {' -> '.join(seenf)}")
+        print_obs("F", snapf, lastf)
         checks.append(("a refused pickup leaves the pending move selected",
                        hitf))
 
