@@ -1,0 +1,34 @@
+flat arena: spawn (-2.5,0.5), far move target (6.5,0.5)
+[A staged] carried 12.10 kg + item 10.00 kg vs a staged 23.10 kg capacity; commandPickup accepted, pickupOrder live on gid 0
+
+[A pickup-beats-move] action timeline: pickup_ground
+
+[B refill-beats-move] action timeline: refill_canteen
+
+[C move-beats-goal] pre=search_for_water  timeline: follow_command
+
+[D combat-beats-goal] victim timeline: search_for_water
+  [D obs transition 1 -> search_for_water] {"action":"search_for_water","attackGoalScores":false,"attackerPos":{"page":"move_test","x":2.3617086410522,"y":1.1573405265808},"attackerPose":"standing","attackerUid":5,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":37.218846000265,"pos":{"page":"move_test","x":4.0371298789978,"y":0.59397733211517},"pose":"standing","wounded":[]}
+  [D obs final] {"action":"search_for_water","attackGoalScores":false,"attackerPos":{"page":"move_test","x":4.8669395446777,"y":5.7128291130066},"attackerPose":"standing","attackerUid":5,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":61.616810000036,"pos":{"page":"move_test","x":1.5847475528717,"y":7.4178199768066},"pose":"standing","wounded":[]}
+  [D staged attacker landed a qualifying hit: False]
+
+[E combat-commits-over-move] timeline: follow_command -> attack_target  | tail: attack_target attack_target attack_target attack_target attack_target attack_target attack_target attack_target
+  [E obs transition 1 -> follow_command] {"action":"follow_command","attackGoalScores":false,"attackerPos":{"page":"move_test","x":5.0875368118286,"y":0.99247497320175},"attackerPose":"standing","attackerUid":7,"goal":"find_water","hitByStaged":true,"incomingHitBasis":"self_defense","incomingHitScores":true,"lastAttacker":{"age":0.273791000247,"at":66.93933199998,"uid":7},"movePending":true,"movePlayer":false,"now":67.213123000227,"pos":{"page":"move_test","x":5.8868088722229,"y":0.79713428020477},"pose":"standing","wounded":[{"dist":0.0,"kinds":"stab","page":"move_test","phase":"E","uid":6,"wounds":1,"x":5.8868088722229,"y":0.79713428020477}]}
+  [E obs transition 2 -> attack_target] {"action":"attack_target","attackGoalScores":true,"attackTarget":7,"attackerPos":{"page":"move_test","x":5.0875368118286,"y":0.99247497320175},"attackerPose":"standing","attackerUid":7,"goal":"attack","hitByStaged":true,"incomingHitBasis":"self_defense","incomingHitScores":true,"lastAttacker":{"age":0.99094000039622,"at":66.93933199998,"uid":7},"movePending":false,"movePlayer":false,"now":67.930272000376,"pos":{"page":"move_test","x":5.5130219459534,"y":0.87427389621735},"pose":"standing","wounded":[{"dist":0.0,"kinds":"stab","page":"move_test","phase":"E","uid":6,"wounds":1,"x":5.5130219459534,"y":0.87427389621735}]}
+  [E obs tail last] {"action":"attack_target","attackGoalScores":true,"attackTarget":7,"attackerPos":{"page":"move_test","x":5.0875368118286,"y":0.99247497320175},"attackerPose":"standing","attackerUid":7,"goal":"attack","hitByStaged":true,"incomingHitBasis":"self_defense","incomingHitScores":true,"lastAttacker":{"age":1.2965580001473,"at":72.340327000245,"uid":7},"movePending":false,"movePlayer":false,"now":73.636885000393,"pos":{"page":"move_test","x":5.0875368118286,"y":0.99247497320175},"pose":"standing","wounded":[{"dist":0.0,"kinds":"slash/stab","page":"move_test","phase":"E","uid":6,"wounds":2,"x":5.0875368118286,"y":0.99247497320175},{"dist":0.0,"kinds":"stab/stab","page":"move_test","phase":"E-attacker","uid":7,"wounds":2,"x":5.0875368118286,"y":0.99247497320175}]}
+  [E staged attacker landed a qualifying hit: True]
+
+[F staged] carried 12.10 kg + item 10.00 kg vs a staged 13.10 kg capacity
+[F refusal-keeps-move] action timeline: follow_command
+  [F obs transition 1 -> follow_command] {"action":"follow_command","attackGoalScores":false,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":true,"movePlayer":true,"now":77.33034100011,"pos":{"page":"move_test","x":-1.7941542863846,"y":7.2292437553406},"pose":"standing","wounded":[]}
+
+--- checks ---
+  [PASS] pickup_ground wins over a pending move order
+  [PASS] refill_canteen (dry) wins over a pending move order
+  [PASS] follow_command beats a routine find_water goal
+  [FAIL] a struck goal-bound unit reacts with combat, not search
+  [PASS] combat reached over a pending non-player move
+  [PASS] combat does NOT hand back to the stale move
+  [PASS] an over-capacity commandPickup returns false
+  [PASS] a refused pickup stores no pickupOrder
+  [PASS] a refused pickup leaves the pending move selected
