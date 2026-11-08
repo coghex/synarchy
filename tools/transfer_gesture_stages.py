@@ -314,6 +314,11 @@ def stage_mode_a(chk: Checks, port: int, ids: dict, vp: dict) -> None:
           ("technomule->acolyte", U_M, ("unit", escort_p), LEG_DEFS_A[5],
            "Retrieve", "destination")]),
     ]
+    # Read ONCE, before any session has touched the hold: every later
+    # commit also refreshes the record, and the game clock does not advance
+    # while the world is paused between sessions, so a second session's open
+    # can legitimately carry the same timestamp as the previous commit.
+    revealed_before = _revealed_at(port, hold)
     for name, escort, dst_ep, legs in sessions:
         label = f"modeA {name}"
         set_paused(port, True)
@@ -332,7 +337,6 @@ def stage_mode_a(chk: Checks, port: int, ids: dict, vp: dict) -> None:
             seeded[leg_key] = got[0]
         if not seeded:
             continue
-        revealed_before = _revealed_at(port, hold)
         if not create_session(chk, port, escort, dst_ep, vp, label,
                               via_menu=False):
             send(port, "require('scripts.transfer_session').clear(); return 'ok'")
