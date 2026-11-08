@@ -20,9 +20,17 @@ Checks (each on a fresh acolyte on a flat arena):
   C. a move order beats a ROUTINE goal (a fresh acolyte's find_water search).
   D. combat beats a goal: a struck goal-bound acolyte reacts with a combat
      action instead of continuing to search.
-  E. combat COMMITS over a pending move: a unit under a move order that is
-     attacked enters combat and stays there (attack_target out-ranks the
-     pending follow_command, so engage's hand-off isn't yanked back).
+  E. combat COMMITS over a pending NON-PLAYER move: a unit under an
+     internal/ordinary move order (``commandMove(..., internal=true)``, 7.0)
+     that is attacked enters combat and stays there (attack_target, 8.0,
+     out-ranks the pending follow_command, so engage's hand-off isn't
+     yanked back). Narrowed in #2945: #916 superseded the #306 rule that
+     every attack outranks every pending move. A PLAYER move now scores 9.0
+     against an active attack goal (scripts/unit_ai_combat_move.lua) and may
+     pull the unit out of combat, so E asserts nothing about it; player
+     withdrawal stays covered by the Hspec group ``player move orders
+     during combat (#916)`` (test-headless/Test/Headless/Lua/
+     UnitAiCombatMove.hs).
   F. the OTHER side of A's precondition: an over-capacity commandPickup is
      refused, stores no pickupOrder, and leaves the pending move selected.
 
@@ -36,11 +44,32 @@ carrying_capacity modifier sized off the carrier's own live load) and assert
 the admission decision before judging arbitration, so neither outcome depends
 on body generation and a phase A failure means a real arbitration regression.
 
+D and E stage their fight with a COMMITTED attack order (``commandAttack(
+attacker, victim, true)``). An uncommitted order opens an "autonomous",
+non-exempt attack occurrence, and #2521's combat policy ends that goal
+before any swing for two same-faction acolytes (neither is hostile to the
+other, the attacker has no last attacker, and the production fixture inputs
+authorize nothing), so on a plain ``commandAttack`` the staged attacker
+never landed a hit (#2945 before-batch: 0 of 20 trials). The victim is still
+graded on its OWN arbitration: it reacts through self-defense once hits land.
+Each combat pair is destroyed when its check is done, so no wounded unit is
+left in reach of a later phase's acolytes (treat_ally would otherwise be a
+legitimate choice there, not an arbitration fault).
+
+Each check prints an ``observe`` snapshot (goal, pending move, treatment
+state, last attacker, wounded units, combat eligibility) read in the same
+console transaction as the action it sits beside; see ``observe``.
+
 Run from the repo/worktree root (scripts/ resolve relative to CWD):
   python3 tools/follow_command_priority_probe.py [--port N] [--unit acolyte]
 
 Exit code 0 = all checks passed; 1 = a graded check failed; 2 = a fixture
-never established itself, so nothing downstream of it was graded.
+never established itself, so nothing downstream of it was graded; 3 = check
+E's SETUP failed (the staged attacker never landed a qualifying hit on E's
+subject, so E's arbitration was never exercised) and no other graded check
+failed. 3 is a failure, never a pass, and is distinct from a graded
+arbitration failure (exit 1: a hit landed and the subject still did not
+reach or hold combat).
 """
 from __future__ import annotations
 
@@ -185,17 +214,21 @@ def observe(port: int, uid: int, attacker=None) -> dict:
     return r
 
 
-def poll_observed(port: int, uid: int, want, seconds: float, attacker=None):
+def poll_observed(port: int, uid: int, want, seconds: float, attacker=None,
+                  sink: list | None = None):
     """``poll_for_action`` with an ``observe`` snapshot taken in the same
     transaction as every action sample. Returns
     (timeline, hit, transition_snapshots, last_snapshot). Same stop rule and
-    cadence as ``poll_for_action``; the snapshots are only printed."""
+    cadence as ``poll_for_action``; the snapshots are only printed. Every
+    sample is also appended to ``sink`` when given."""
     wants = {want} if isinstance(want, str) else set(want)
     seen: list[str] = []
     snaps: list[dict] = []
     last: dict = {}
     for _ in range(int(seconds / 0.4)):
         last = observe(port, uid, attacker)
+        if sink is not None:
+            sink.append(last)
         a = last.get("action", "nil")
         if not seen or seen[-1] != a:
             seen.append(a)
@@ -204,6 +237,13 @@ def poll_observed(port: int, uid: int, want, seconds: float, attacker=None):
             return seen, True, snaps, last
         time.sleep(0.4)
     return seen, False, snaps, last
+
+
+def destroy_units(port: int, *uids: int) -> None:
+    """Remove a finished phase's units so nothing they wounded is left on
+    the arena for a later phase's acolytes to treat."""
+    for u in uids:
+        send(port, f"unit.destroy({int(u)}); return 'ok'")
 
 
 def print_obs(tag: str, snaps: list, last: dict) -> None:
@@ -342,6 +382,7 @@ def main() -> int:
         print(f"flat arena: spawn ({sx},{sy}), far move target ({far_x},{far_y})")
 
         checks: list[tuple[str, bool]] = []
+        e_setup_failed = False
 
         # --- Check A: explicit pickup beats a pending move order ----------
         ua = spawn_acolyte(args.port, args.unit, sx, sy, "A")
@@ -413,34 +454,51 @@ def main() -> int:
         # searching -- self-defense outranks a routine goal.
         ud = spawn_acolyte(args.port, args.unit, sx + 4, sy, "D")
         atk = spawn_acolyte(args.port, args.unit, sx + 5, sy, "D-attacker")  # adjacent
+        # COMMITTED order (#2945): see the module docstring.
         send(args.port,
-             f"require('scripts.unit_ai').commandAttack({atk},{ud}); return 'fight'")
+             f"require('scripts.unit_ai').commandAttack({atk},{ud},true); "
+             f"return 'fight'")
+        sampd: list = []
         seend, hitd, snapd, lastd = poll_observed(
-            args.port, ud, COMBAT_ACTIONS, args.seconds + 6, attacker=atk)
+            args.port, ud, COMBAT_ACTIONS, args.seconds + 6, attacker=atk,
+            sink=sampd)
         print(f"\n[D combat-beats-goal] victim timeline: {' -> '.join(seend)}")
         print_obs("D", snapd, lastd)
+        print(f"  [D staged attacker landed a qualifying hit: "
+              f"{any(o.get('hitByStaged') for o in sampd)}]")
+        destroy_units(args.port, ud, atk)
         checks.append(("a struck goal-bound unit reacts with combat, not search",
                        hitd))
 
-        # --- Check E: combat COMMITS over a pending move (issue: engage hands
-        # off to attack_target, which must stay above follow_command or the
-        # stale move yanks the unit off the fight). Give the victim a move
-        # order FIRST, then attack it; it must reach a combat action AND not
-        # fall back to follow_command while the fight is on.
+        # --- Check E: combat COMMITS over a pending NON-PLAYER move (engage
+        # hands off to attack_target, which must stay above follow_command
+        # or the stale move yanks the unit off the fight). Give the victim an
+        # INTERNAL move order FIRST (commandMove's ``internal`` argument: no
+        # ``commandedTask.player``, so it keeps the ordinary 7.0), then
+        # attack it; it must reach a combat action AND not fall back to
+        # follow_command while the fight is on. A PLAYER move is out of
+        # scope since #916 scores it 9.0 against an active attack and lets
+        # the player withdraw (#2945; Hspec "player move orders during
+        # combat (#916)" owns that).
         ue = spawn_acolyte(args.port, args.unit, sx + 7, sy, "E")
         send(args.port,
-             f"require('scripts.unit_ai').commandMove({ue},{far_x},{far_y}); return 'moved'")
+             f"require('scripts.unit_ai').commandMove({ue},{far_x},{far_y},"
+             f"nil,true); return 'moved'")
         atk2 = spawn_acolyte(args.port, args.unit, sx + 8, sy, "E-attacker")  # adjacent
         send(args.port,
-             f"require('scripts.unit_ai').commandAttack({atk2},{ue}); return 'fight'")
+             f"require('scripts.unit_ai').commandAttack({atk2},{ue},true); "
+             f"return 'fight'")
+        sampe: list = []
         seene, hite, snape, laste = poll_observed(
-            args.port, ue, COMBAT_ACTIONS, args.seconds + 6, attacker=atk2)
+            args.port, ue, COMBAT_ACTIONS, args.seconds + 6, attacker=atk2,
+            sink=sampe)
         # Once fighting, sample a few more times: it must NOT revert to the move.
         tail = []
         tail_obs = []
         for _ in range(8):
             time.sleep(0.4)
             o = observe(args.port, ue, atk2)
+            sampe.append(o)
             tail_obs.append(o)
             tail.append(o.get("action", "nil"))
         reverted = "follow_command" in tail
@@ -453,8 +511,24 @@ def main() -> int:
                          if o.get("action") == "follow_command"), tail_obs[-1])
         print(f"  [E obs tail {'follow_command' if reverted else 'last'}] "
               f"{json.dumps(decisive, sort_keys=True, separators=(',', ':'))}")
-        checks.append(("combat reached over a pending move", hite))
-        checks.append(("combat does NOT hand back to the stale move", not reverted))
+        # Requirement 3 (#2945): tell a SETUP failure (the staged attacker
+        # never landed a qualifying hit, so E's arbitration was never
+        # exercised) from an ARBITRATION failure (a hit landed and the
+        # subject still did not reach or hold combat). Neither is a pass.
+        landed = any(o.get("hitByStaged") for o in sampe)
+        print(f"  [E staged attacker landed a qualifying hit: {landed}]")
+        e_checks = [("combat reached over a pending non-player move", hite),
+                    ("combat does NOT hand back to the stale move",
+                     not reverted)]
+        if landed:
+            checks.extend(e_checks)
+        else:
+            e_setup_failed = True
+            print("  [E SETUP FAILURE] the staged attacker never landed a "
+                  f"qualifying hit on the subject within {HIT_WINDOW_SEC:g} s; "
+                  "check E's arbitration was not exercised, so its two "
+                  "assertions are NOT graded and NOT passed", file=sys.stderr)
+        destroy_units(args.port, ue, atk2)
 
         # --- Check F: the command-time capacity refusal, asserted rather
         # than observed. A's mirror image (#1736): commandPickup gates
@@ -497,7 +571,12 @@ def main() -> int:
         for label, ok in checks:
             print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
             all_ok = all_ok and ok
-        return 0 if all_ok else 1
+        if e_setup_failed:
+            for label, _ in e_checks:
+                print(f"  [SETUP] {label} (check E setup failure: not graded)")
+        if not all_ok:
+            return 1
+        return 3 if e_setup_failed else 0
     finally:
         quit_engine(args.port, proc)
 
