@@ -18,7 +18,7 @@ It is a **stale probe staging assumption**, not a gameplay regression. Every aco
 
 - `python3 tools/mental_state_probe.py --self-test`: all pass.
 - `--lashout-case stale`: exit 0, stale discard then a valid passing restage. `--lashout-case ineligible`: MET 3/3, exit 1 as designed.
-- `run_probes --only mental_state --exact`, run alone, on the final code: runs 5-8 of the 8-run sample and the five before it were consecutive passes.
+- `run_probes --only mental_state --exact`, run alone, on the final code: four consecutive passes (runs 5-8 of an 8-run sample) and, in an earlier sample, four consecutive passes before a fifth failed at the episode-end pursuit check below.
 
 ## Residual flakes (not the staging)
 
