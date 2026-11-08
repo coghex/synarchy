@@ -55,9 +55,9 @@ run writes structured events while a standalone run keeps its human-readable
 per-check output.
 """
 from __future__ import annotations
-import argparse, glob, socket, subprocess, sys, time
+import argparse, socket, subprocess, sys, time
 import probe_protocol
-from probelib import quit_engine, boot, send
+from probelib import (quit_engine, boot, send, load_definitions)
 
 LOG = "/tmp/thought_probe_engine.log"
 LOG_NAME = "thought_probe_engine.log"
@@ -107,18 +107,9 @@ PHASE4_ATTEMPTS = 120
 
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     # unit_ai's wander is neutralised so gridX/gridY (read by the
     # environmental trigger) stay put; unit_resources/thought_log are

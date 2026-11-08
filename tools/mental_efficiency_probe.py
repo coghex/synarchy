@@ -49,14 +49,14 @@ run writes structured events while a standalone run keeps its human-readable
 per-check output.
 """
 import argparse
-import glob
 import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 
 import probe_protocol
-from probelib import boot, quit_engine, send, send_json, spawn_acolyte, poll_until
+from probelib import (boot, quit_engine, send, send_json, spawn_acolyte,
+                      poll_until, load_definitions)
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/mental_efficiency_probe_recipes.yaml"
@@ -134,19 +134,9 @@ def near(a, b, tol=0.01):
 def bootstrap(port):
     """Load defs + a flat arena (the loading screen doesn't run headless).
     Mirrors tools/craft_bill_probe.py's proven bootstrap exactly."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit", "recipe", "building"))
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     for _ in range(60):

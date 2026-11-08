@@ -59,10 +59,10 @@ run writes structured events while a standalone run keeps human-readable
 per-check output.
 """
 from __future__ import annotations
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, json, socket, subprocess, sys, time
 
 import probe_protocol
-from probelib import quit_engine, boot, send
+from probelib import (quit_engine, boot, send, load_definitions)
 
 LOG = "/tmp/state_of_mind_probe_engine.log"
 LOG_NAME = "state_of_mind_probe_engine.log"
@@ -116,19 +116,9 @@ GUARD_BANDS = [
 ]
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "faction",
+        "physiology", "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
     # Neutralise the AI wander tick so units stay put — we're measuring the
