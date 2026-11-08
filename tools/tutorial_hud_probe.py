@@ -269,6 +269,29 @@ def reach_hud(port: int, shots: str) -> bool:
     return hold_world_still(port, shots)
 
 
+def frame_diff_bbox(a, b):
+    """Bounding box of every RGB difference between two frames, or None.
+
+    Compared as RGB on purpose: `Image.getbbox()` on an RGBA difference
+    inspects the ALPHA channel only, and the engine forces every screenshot's
+    alpha to 255, so the difference is all-zero alpha and an RGBA comparison
+    reports "identical" for any colour change at all."""
+    from PIL import ImageChops
+    return ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox()
+
+
+def frame_diff_negative_control() -> bool:
+    """The still-frame gate's own oracle must be able to FAIL: two opaque
+    frames that differ by one luma level in one pixel must report a
+    difference, and identical frames must not."""
+    from PIL import Image
+    base = Image.new("RGBA", (16, 16), (100, 100, 100, 255))
+    nudged = base.copy()
+    nudged.putpixel((7, 9), (101, 101, 101, 255))
+    return (frame_diff_bbox(base, nudged) == (7, 9, 8, 10)
+            and frame_diff_bbox(base, base.copy()) is None)
+
+
 def hold_world_still(port: int, shots: str) -> bool:
     """Freeze the live world beneath the HUD before any pixel comparison (#2942).
 
@@ -308,13 +331,15 @@ def hold_world_still(port: int, shots: str) -> bool:
     # instead of surfacing as an unstable glyph measurement phases later.
     still_a = os.path.join(shots, "still_a.png")
     still_b = os.path.join(shots, "still_b.png")
+    check("the still-frame oracle detects a one-level RGB difference on "
+          "opaque frames and accepts identical ones",
+          frame_diff_negative_control())
     if not check("held-world frame captures answer",
                  screenshot(port, still_a) and screenshot(port, still_b)):
         return False
-    from PIL import Image, ImageChops
+    from PIL import Image
     with Image.open(still_a) as a, Image.open(still_b) as b:
-        bbox = ImageChops.difference(a.convert("RGBA"),
-                                     b.convert("RGBA")).getbbox()
+        bbox = frame_diff_bbox(a, b)
     check("two captures of the held world are pixel-identical "
           "(the frame beneath the HUD is still, #2942)",
           bbox is None, f"differing region {bbox}")
