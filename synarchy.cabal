@@ -1876,6 +1876,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Blood.Impact
                    Test.Headless.Blood.Teardown
                    Test.Headless.Blood.Trail
+                   Test.Headless.Blood.OngoingBleed
                    Test.Headless.Blood.LuaApi
                    Test.Headless.UI.CreateWorldControls
                    Test.Headless.UI.Tooltip
@@ -2149,6 +2150,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiPickupPage
                    Test.Headless.Lua.UnitAiPickupPending
                    Test.Headless.Lua.UnitAiRepairGround
+                   Test.Headless.Lua.UnitAiRepairFixture
+                   Test.Headless.Lua.UnitAiRepairSourcing
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity

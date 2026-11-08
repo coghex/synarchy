@@ -238,10 +238,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                               "say nothing about the slower, variable-speed "
                                               "CI runner for combat/treatment arbitration "
                                               "timing"),),
-    "repair_ai": (Reason(FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
-                                "failing-check set each run (3/3 solo runs failed, no two "
-                                "alike, #724) — not #489 (whetstone), which is long fixed "
-                                "and never implicated"),),
     "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min >= 0.75' is a probe-side "
                                  "edge, not a product fault (#2944): circulation is "
                                  "(0.5+0.5*constitution)*(1-0.7*max(0,fat/body-0.2)) for a "
@@ -424,8 +420,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                        "(world.show) boundary from the same decodeUtf8Lenient sweep"),),
     "blood_decal": (Reason(TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),),
     "blood_impact": (Reason(TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),),
-    "bleeding_trail": (Reason(TARGETED, "narrow #882/#883 ongoing-bleeding emission regression "
-                                        "(moving trail + stationary/collapsed pooling)"),),
     "circadian": (Reason(TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),),
     "circadian_species": (Reason(TARGETED, "narrow #613 species-specific circadian phase regression"),),
     "thought": (Reason(TARGETED, "thought event/log backend plumbing, narrower than the full "

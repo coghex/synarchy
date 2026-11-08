@@ -52,9 +52,6 @@ PROBES = [
      "wound-kind/severity -> impact-blood style/volume mapping (#607)"),
     ("blood_gpu_lifecycle", "blood_gpu_lifecycle_probe.py",
      "blood GPU textures disposed on world destroy/replace teardown paths (#788; offscreen, needs a GPU)"),
-    ("bleeding_trail", "bleeding_trail_probe.py",
-     "ongoing bleeding-trail emission: distance/cadence-gated marks, timescale invariance, "
-     "clot/internal-wound/death cutoffs (#882)"),
     ("canteen_instance", "canteen_instance_probe.py",
      "the water AI drains/fills the exact canteen instance it selected, not the "
      "first same-def match (#1220)"),
@@ -285,8 +282,6 @@ PROBES = [
      "entry points all opening ONE panel, morpheme rows whose surface tokens "
      "reproduce the stored name, bound/free and recurrence presentation, the "
      "honest unavailable state, and resize/close/teardown (#1104)"),
-    ("repair_ai", "repair_ai_probe.py",
-     "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
     ("resource_root", "resource_root_probe.py",
      "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
     ("river_naming", "river_naming_probe.py",

@@ -86,7 +86,7 @@ def test_both_identities_map_to_one_probe() -> None:
                     f"a non-string test id ({type(rejected).__name__}) resolves to none")
 
     # Prefix families stay distinct across BOTH namespaces.
-    for shorter, longer in (("repair", "repair_ai"), ("repair", "repair_item"),
+    for shorter, longer in (("repair", "repair_item"),
                             ("power", "power_workshop"),
                             ("persistence_contract", "persistence_contract_sweep")):
         short_ids = set(evidence.test_ids_for_probe(shorter).values())
