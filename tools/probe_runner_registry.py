@@ -487,9 +487,14 @@ def describe_gui_conflicts(conflicts) -> str:
 
 
 
-# farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
-# slowest probe in the ordinary runtime class at ~11.5 min solo on a warm dev
-# machine (#721), so the shared default needs real margin above that. A probe
+# farm_ai_probe.py (#336) is among the slowest probes in the ordinary runtime
+# class: it boots a real generated world and waits on the real acolyte AI
+# through till, plant, a time-scaled grow-and-harvest, a re-designation and a
+# save/reload. It no longer scans natural terrain for its six sites (#2938:
+# they are two authored `world.addTile` plateaus, and it prints per-phase
+# times), so measure it with its own phase table rather than quoting a
+# figure here; the runtime CropPlot harvest search it exercises is distinct
+# and stays. The shared default keeps real margin above the slowest. A probe
 # whose declared scenario structurally exceeds this class belongs in the
 # validated override table below rather than making every hung probe wait for
 # the exceptional case's budget.
