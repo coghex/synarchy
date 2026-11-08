@@ -207,6 +207,13 @@ authorized.
    Nominal substitute.
 4. **Templating**: no unit definition templates a registry key in `stats:`
    or `skills:`.
+5. **Pure heat read** (#2960): `thermo.readHeatBalance` and the functions it is
+   built from (`heatInputs`, `heatBalance`, `coreDelta`, `feverOffsetOf`) call
+   nothing that writes, mutates or draws randomness, no `unit.*` verb that is
+   not a getter and nothing through the effects seam, and `thermo.tick` must
+   call `heatInputs`, `heatBalance` and `coreDelta` itself. The read is how
+   the physiology probe judges a unit against the engine's own rule; the
+   tick calling the same functions is what keeps the two from drifting.
 
 Scope: all `scripts/**/*.lua` and the Lua embedded in
 `tools/physiology_probe.py` (extracted from its Python string literals; an
