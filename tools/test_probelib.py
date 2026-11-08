@@ -42,6 +42,7 @@ import contextlib
 import inspect
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -1553,6 +1554,221 @@ def _tree(base: str, files: list[str]) -> None:
             fh.write("[]\n")
 
 
+# ---------------------------------------------------------------------
+# No per-file definition loop (#2953)
+# ---------------------------------------------------------------------
+# #2952 gave probes `load_definitions`, one console call for the whole file
+# list. A tools file that goes back to one console call per YAML file costs
+# ~0.3 s a file again (#2948), so this scan fails on the old shape. It looks
+# for the two ways that shape is spelled, in any loop or comprehension:
+#   * an `engine.load<Family>Yaml` verb named anywhere in it (the verb table
+#     of the old `for pattern, fn in [...]`, or the verb in a loop body that
+#     walks a separately collected file list), and
+#   * an f-string that calls a formatted-in function name on a quoted,
+#     formatted-in path, `f"{fn}('{path}')"`, which is how a helper that takes the verb as an
+#     argument loads a directory one file at a time.
+# Filesystem enumeration without a per-file console load is not flagged.
+_LOAD_VERB = re.compile(r"\bload[A-Za-z]+Yaml\b")
+_QUOTED_CALL_OPEN = re.compile(r"""^\(\s*['"]$""")
+_QUOTED_CALL_CLOSE = re.compile(r"""^['"]\s*\)""")
+_LOOP_NODES = (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp, ast.DictComp,
+               ast.GeneratorExp)
+#: (file name, enclosing function) pairs allowed to keep a per-file loop:
+#: `tools/bootstrap_timing.py`'s path A is the frozen per-file BASELINE that
+#: the one-call path is measured against (#2952 kept it on purpose).
+PER_FILE_LOOP_EXEMPT = {("bootstrap_timing.py", "run_path_a")}
+
+
+def _loop_parts(loop: ast.AST) -> tuple[list[ast.AST], set[str], list[ast.AST]]:
+    """(what it iterates, the names it binds, what it runs per item)."""
+    if isinstance(loop, (ast.For, ast.AsyncFor)):
+        return [loop.iter], _bound_names(loop.target), list(loop.body)
+    gens = loop.generators
+    elts = [loop.key, loop.value] if isinstance(loop, ast.DictComp) else [loop.elt]
+    return ([g.iter for g in gens],
+            set().union(*(_bound_names(g.target) for g in gens)),
+            elts + [c for g in gens for c in g.ifs])
+
+
+def _bound_names(target: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
+
+
+def _verb_in(node: ast.AST) -> str | None:
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            found = _LOAD_VERB.search(sub.value)
+            if found:
+                return found.group(0)
+    return None
+
+
+def _loop_per_file_reason(loop: ast.AST) -> str | None:
+    iters, targets, bodies = _loop_parts(loop)
+    for node in iters:
+        verb = _verb_in(node)
+        if verb:
+            return f"iterates a table naming {verb}"
+    for body in bodies:
+        for node in ast.walk(body):
+            # A call that names a load verb AND takes the item the loop
+            # binds: the same call, repeated for each file.
+            if isinstance(node, ast.Call):
+                verb = _verb_in(node)
+                if verb and targets & {n.id for n in ast.walk(node)
+                                       if isinstance(n, ast.Name)}:
+                    return f"calls {verb} once per item"
+            if isinstance(node, ast.JoinedStr):
+                v = node.values
+                for here, after, nxt, close in zip(v, v[1:], v[2:], v[3:]):
+                    if (isinstance(here, ast.FormattedValue)
+                            and isinstance(after, ast.Constant)
+                            and isinstance(after.value, str)
+                            and _QUOTED_CALL_OPEN.match(after.value)
+                            and isinstance(nxt, ast.FormattedValue)
+                            and isinstance(close, ast.Constant)
+                            and isinstance(close.value, str)
+                            and _QUOTED_CALL_CLOSE.match(close.value)):
+                        return "calls a formatted-in function name on a path"
+    return None
+
+
+def per_file_definition_loops(root: Path = TOOLS) -> list[str]:
+    """`file:line reason` for every loop in a tools module that loads
+    definitions one console call per file."""
+    offenders: list[str] = []
+
+    def visit(node: ast.AST, rel: str, func: str | None, flagged: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node.name
+        if isinstance(node, _LOOP_NODES) and not flagged:
+            reason = _loop_per_file_reason(node)
+            if reason and (Path(rel).name, func) not in PER_FILE_LOOP_EXEMPT:
+                offenders.append(f"{rel}:{node.lineno} {reason}")
+            flagged = reason is not None
+        for child in ast.iter_child_nodes(node):
+            visit(child, rel, func, flagged)
+
+    for path in sorted(root.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if (path.name == "probelib.py" or path.name.startswith("test_")
+                or "__pycache__" in path.parts):
+            continue
+        visit(ast.parse(path.read_text(encoding="utf-8")), rel, None, False)
+    return offenders
+
+
+def test_no_per_file_definition_loop() -> None:
+    print("\n-- no tools/ module loads definitions one console call per file")
+    offenders = per_file_definition_loops()
+    expect(offenders == [],
+           f"these should call probelib.load_definitions: {offenders}")
+    expect(all((TOOLS / name).is_file() and f"def {fn}(" in (TOOLS / name).read_text()
+               for name, fn in PER_FILE_LOOP_EXEMPT),
+           "every exempt per-file loop still exists (a stale exemption hides nothing)")
+
+
+PER_FILE_TREE_LOOP = """
+import glob
+from probelib import send
+
+
+def bootstrap(port):
+    for pattern, fn in [("data/items/*.yaml", "engine.loadItemYaml")]:
+        for path in sorted(glob.glob(pattern)):
+            send(port, f"{fn}('{path}'); return 'ok'")
+"""
+
+PER_FILE_COLLECTED_LIST = """
+import glob
+from probelib import send
+
+
+def bootstrap(port):
+    shipped = sorted(glob.glob("data/flora/*.yaml"))
+    for path in shipped:
+        send(port, f"return engine.loadFloraYaml('{path}')")
+"""
+
+PER_FILE_VERB_ARGUMENT = """
+import glob
+from probelib import send
+
+
+def load_dir(port, directory, verb):
+    for path in sorted(glob.glob(directory + "/*.yaml")):
+        send(port, f"{verb}('{path}'); return 'ok'")
+"""
+
+PER_FILE_COMPREHENSION = """
+from probelib import send
+
+
+def bootstrap(port, paths):
+    return [send(port, f"engine.loadItemYaml('{p}')") for p in paths]
+"""
+
+ENUMERATION_ONLY = """
+import glob
+from probelib import load_definitions, send
+
+
+def bootstrap(port):
+    names = [p for p in sorted(glob.glob("data/units/*.yaml"))]
+    for name in names:
+        send(port, f"return unit.count('{name}')")
+    load_definitions(port)
+"""
+
+
+ONE_FIXED_FILE_PER_ITERATION = """
+from probelib import boot, send
+
+
+def run(ports, seeds):
+    for seed in seeds:
+        boot(ports[0])
+        send(ports[0], "engine.loadLocationYaml('data/locations/ruin_small.yaml')")
+        send(ports[0], f"world.init('mx', {seed}, 64, 3)")
+"""
+
+
+def _per_file_scan(source: str, name: str = "scanned_probe.py") -> list[str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / name).write_text(source, encoding="utf-8")
+        return per_file_definition_loops(Path(tmp))
+
+
+def test_a_per_file_loop_is_caught() -> None:
+    print("\n-- the per-file guard catches every spelling of the old loop")
+    for label, source in (("verb table + glob loop", PER_FILE_TREE_LOOP),
+                          ("separately collected file list", PER_FILE_COLLECTED_LIST),
+                          ("verb passed to a directory helper", PER_FILE_VERB_ARGUMENT),
+                          ("comprehension", PER_FILE_COMPREHENSION)):
+        found = _per_file_scan(source)
+        expect(len(found) == 1, f"{label}: expected one offender, got {found!r}")
+
+
+def test_enumeration_without_a_per_file_load_is_not_caught() -> None:
+    print("\n-- filesystem enumeration with no per-file console load stays allowed")
+    found = _per_file_scan(ENUMERATION_ONLY)
+    expect(found == [], f"expected no offender, got {found!r}")
+    found = _per_file_scan(ONE_FIXED_FILE_PER_ITERATION)
+    expect(found == [], "one fixed file loaded per engine is not a per-file "
+           f"loop over a directory, got {found!r}")
+
+
+def test_the_baseline_exemption_is_exact() -> None:
+    print("\n-- only the named function in the named file is exempt")
+    exempt = PER_FILE_TREE_LOOP.replace("def bootstrap", "def run_path_a")
+    expect(_per_file_scan(exempt, "bootstrap_timing.py") == [],
+           "run_path_a in bootstrap_timing.py is the frozen baseline")
+    expect(len(_per_file_scan(exempt, "other_probe.py")) == 1,
+           "the same function name in another file is still caught")
+    expect(len(_per_file_scan(PER_FILE_TREE_LOOP, "bootstrap_timing.py")) == 1,
+           "another function in bootstrap_timing.py is still caught")
+
+
 def test_definition_family_set_and_order() -> None:
     print("\n-- load_definitions: the family set and order are the probes' own")
     pl = probelib
@@ -1835,6 +2051,10 @@ def main() -> int:
     test_pause_ai_chunk_reports_each_failure_as_a_reply()
     test_a_failed_ai_pause_stops_the_engine_it_booted()
     test_a_successful_boot_pauses_the_ai_after_its_scripts()
+    test_no_per_file_definition_loop()
+    test_a_per_file_loop_is_caught()
+    test_enumeration_without_a_per_file_load_is_not_caught()
+    test_the_baseline_exemption_is_exact()
     test_definition_family_set_and_order()
     test_definition_plan()
     test_definition_lua_line()
