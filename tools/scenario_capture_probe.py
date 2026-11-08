@@ -48,7 +48,6 @@ Run:  python3 tools/scenario_capture_probe.py [--port 9231] [--retain DIR]
 from __future__ import annotations
 
 import argparse
-import glob
 import hashlib
 import os
 import shutil
@@ -57,7 +56,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, lua_string, quit_engine, send, send_json, wait_load_published
+from probelib import (boot, lua_string, quit_engine, send, send_json,
+                      wait_load_published, load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 SAVE_SLOT = "scn_capture_probe"
@@ -90,17 +90,8 @@ ground_items:
 
 # the definitions the scenario names, in the order the engine's own boot
 # loads them
-LOADERS = [
-    ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-    ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-    ("data/items/*.yaml", "engine.loadItemYaml"),
-    ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-    ("data/factions/*.yaml", "engine.loadFactionYaml"),
-    ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-    ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-    ("data/units/*.yaml", "engine.loadUnitYaml"),
-    ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-]
+FAMILIES = ("substance", "material", "item", "equipment", "faction",
+            "physiology", "infection", "unit", "building")
 SCRIPTS = [("unit_stats", 0.1), ("unit_resources", 0.2), ("unit_ai", 0.1)]
 
 FAILED: list[str] = []
@@ -126,10 +117,7 @@ def make_isolated_root(base: str) -> str:
 
 def bootstrap(port: int) -> None:
     """Register the shipped definitions the scenario names."""
-    for pattern, fn in LOADERS:
-        for path in sorted(glob.glob(str(REPO / pattern))):
-            rel = os.path.relpath(path, REPO)
-            send(port, f"{fn}('{rel}'); return 'ok'")
+    load_definitions(port, FAMILIES, root_dir=str(REPO))
     for script, dt in SCRIPTS:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
 

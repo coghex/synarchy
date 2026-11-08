@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import probe_protocol
 import argparse
-import glob
 import json
 import math
 import re
@@ -40,7 +39,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from probelib import quit_engine, boot, send, send_json
+from probelib import (quit_engine, boot, send, send_json, load_definitions)
 
 LOG = "/tmp/movement_probe_engine.log"
 
@@ -318,18 +317,9 @@ def bootstrap(port: int, with_resources: bool = False,
     from AI wander. --mode pacing needs the opposite: unit_ai's own tick is
     exactly what's under test (#999's follow_command adaptive pacing), so it
     passes False and leaves the real AI running."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     if with_resources:
         # Stat + resource ticks drive stamina drain/regen off the engine's
         # published activity + moveSpeed. unit_ai stays neutralised below so

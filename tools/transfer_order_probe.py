@@ -82,7 +82,6 @@ Exit 0 = every check passed.
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import shutil
 import sys
@@ -96,7 +95,8 @@ from transfer_probe_checks import Checks, check_boundary_log
 from probelib import (FixtureNotRegistered, boot, clear_find_water,
                       init_arena, init_world, load_fixture_yaml, poll_until,
                       quit_engine, send, send_json, wait_load_published,
-                      load_ai_stack, capture_request_id, wait_save_complete)
+                      load_ai_stack, capture_request_id, wait_save_complete,
+                      STANDARD_FAMILIES, load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_transfer_order_slot"
@@ -231,18 +231,7 @@ STAGES = [f"phase{n}" for n in range(1, 13)]
 # --------------------------------------------------------------------------
 
 def bootstrap_defs(port: int, tmp: str) -> None:
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, STANDARD_FAMILIES)
     items = os.path.join(tmp, "probe_transfer_items.yaml")
     builds = os.path.join(tmp, "probe_transfer_buildings.yaml")
     with open(items, "w", encoding="utf-8") as f:

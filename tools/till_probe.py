@@ -25,10 +25,11 @@ checks:
 Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
 import probe_evidence
-from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      wait_load_published, load_definitions)
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -52,19 +53,9 @@ TILLED_SOIL_VEG_ID = 77
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "flora",
+        "faction", "physiology", "unit"))
 
 
 def find_tillable(port, span=4):

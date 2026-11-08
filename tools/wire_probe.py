@@ -37,14 +37,14 @@ per-check output.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import socket
 import subprocess
 import sys
 import time
 import probe_protocol
-from probelib import clear_find_water, quit_engine, boot, send, send_json
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      STANDARD_FAMILIES, load_definitions)
 
 LOG = "/tmp/wire_probe_engine.log"
 LOG_NAME = "wire_probe_engine.log"
@@ -89,19 +89,7 @@ def bootstrap(port: int) -> None:
     """Load defs + the flat arena (the loading screen doesn't run headless).
     unit_ai is auto-loaded at boot and IS the machinery under test, so it
     stays live (matches construction_probe.py)."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, STANDARD_FAMILIES)
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     if not poll_until(port, 30, lambda: wid(port)):

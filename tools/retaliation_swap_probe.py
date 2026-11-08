@@ -143,7 +143,6 @@ Exit 0 = pass, 1 = a check failed, 2 = the fixture was never established.
 from __future__ import annotations
 import argparse
 import contextlib
-import glob
 import io
 import os
 import sys
@@ -151,7 +150,8 @@ import time
 
 import probe_protocol
 from probelib import (boot, clear_find_water, init_arena, load_ai_stack,
-                      poll_until, quit_engine, send, send_json, spawn_acolyte)
+                      poll_until, quit_engine, send, send_json, spawn_acolyte,
+                      load_definitions)
 
 LOG = "/tmp/retaliation_swap_probe_engine.log"
 
@@ -420,16 +420,9 @@ def lua(*statements: str) -> str:
 
 
 def bootstrap(port: int) -> None:
-    for pattern, fn in [("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-                        ("data/items/*.yaml", "engine.loadItemYaml"),
-                        ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-                        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-                        ("data/factions/*.yaml",
-                         "engine.loadFactionYaml"),
-                        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-                        ("data/units/*.yaml", "engine.loadUnitYaml")]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     load_ai_stack(port)
     init_arena(port)
     send(port, "engine.setPaused(false); return 'ok'")

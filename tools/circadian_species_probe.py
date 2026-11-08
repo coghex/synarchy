@@ -59,11 +59,11 @@ per-check output.
 """
 from __future__ import annotations
 import argparse
-import glob
 import sys
 import time
 import probe_protocol
-from probelib import boot, quit_engine, send, init_arena, spawn_acolyte, poll_until, load_ai_stack
+from probelib import (boot, quit_engine, send, init_arena, spawn_acolyte,
+                      poll_until, load_ai_stack, load_definitions)
 
 PORT = 9016
 LOG = "/tmp/circadian_species_probe_engine.log"
@@ -106,18 +106,9 @@ UNCONFIGURED_DEF = "white_tailed_deer"
 
 def bootstrap_defs(port: int) -> None:
     """Mirrors tools/circadian_probe.py / tools/sleep_probe.py."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     load_ai_stack(port)
 
 

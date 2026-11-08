@@ -45,7 +45,6 @@ Needs no GPU. Exit 0 = every check passed.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import shutil
@@ -55,7 +54,8 @@ import time
 import uuid
 from pathlib import Path
 
-from probelib import boot, quit_engine, send, send_json, wait_load_published
+from probelib import (boot, quit_engine, send, send_json, wait_load_published,
+                      load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -100,19 +100,9 @@ def make_isolated_root(base: str) -> str:
 
 
 def bootstrap_defs(port: int) -> None:
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml", "engine.loadItemYaml"),
-        ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml", "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(os.path.join(REPO, pattern))):
-            rel = os.path.relpath(path, REPO)
-            send(port, f"{fn}('{rel}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction",
+        "physiology", "unit", "building"), root_dir=str(REPO))
 
 
 def wait_active(port: int, page: str, secs: float = 20.0) -> bool:

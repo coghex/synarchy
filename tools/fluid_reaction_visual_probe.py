@@ -46,7 +46,7 @@ from pathlib import Path
 
 import probe_evidence
 from probelib import (boot, camera_state, quit_engine, poll_until, send,
-                      send_json, viewport, win_to_fb)
+                      send_json, viewport, win_to_fb, load_definitions)
 from offscreen_probe import (find_widget, png_differs, png_region_changed_pixels,
                              png_stats, screenshot)
 
@@ -122,8 +122,7 @@ def as_int(s: str):
 
 
 def bootstrap_materials(port: int) -> None:
-    for path in sorted(glob.glob("data/materials/*.yaml")):
-        send(port, f"engine.loadMaterialYaml('{path}'); return 'ok'")
+    load_definitions(port, ("material",))
 
 
 # Every world read here is PAGE-SCOPED. The offscreen session has a UI

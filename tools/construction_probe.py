@@ -61,7 +61,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import glob
 import json
 import os
 import shutil
@@ -72,7 +71,9 @@ import tempfile
 import time
 from pathlib import Path
 import probe_evidence
-from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      wait_load_published, STANDARD_FAMILIES,
+                      load_definitions)
 
 LOG = "/tmp/construction_probe_engine.log"
 REPO = Path(__file__).resolve().parent.parent
@@ -98,19 +99,7 @@ def bootstrap(port: int) -> None:
     """Load defs + the flat arena (the loading screen doesn't run headless).
     unit_ai is auto-loaded at boot and IS the machinery under test, so it
     stays live (unlike movement_probe, which neutralises it)."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, STANDARD_FAMILIES)
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     # buildCourse queues world.initArena, world.initArenaDone and

@@ -59,12 +59,12 @@ Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
          SETUP FAILURE and NO [PASS]/[FAIL] grade at all. Requirement 2
          is otherwise unobservable from a passing run.
 """
-import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
 import probe_evidence
 from probelib import (FixtureNotRegistered, clear_find_water, quit_engine,
                       boot, load_fixture_yaml, send, send_json,
-                      wait_load_published)
+                      wait_load_published, load_definitions)
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -246,19 +246,9 @@ CO_TENANT_RADIUS = 4
 
 
 def bootstrap(port, fixture_path, fixture_mode=None):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "flora",
+        "faction", "physiology", "unit"))
     # The probe's own species, LAST and before world.init: worldgen reads
     # the catalog when it generates a chunk, so a fixture registered
     # afterwards would place nothing. `load_fixture_yaml` reads the

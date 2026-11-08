@@ -35,12 +35,13 @@ just persisted a live timer for).
 Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, os, shutil, socket, stat, subprocess, sys
+import argparse, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
 import probe_evidence
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
-                      wait_load_published, wait_save_complete)
+                      wait_load_published, wait_save_complete,
+                      load_definitions)
 
 SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -299,19 +300,9 @@ STAGE5_SEP = 20
 
 
 def bootstrap(port, fixture_path):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "flora",
+        "faction", "physiology", "unit"))
     # The probe's own species, LAST and before world.init: worldgen reads
     # the catalog when it generates a chunk, so a fixture registered
     # afterwards would place nothing. `load_fixture_yaml` reads the

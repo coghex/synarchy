@@ -31,14 +31,13 @@ docstring. There is no command line here; run a scenario through
 """
 from __future__ import annotations
 
-import glob
 import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import send, send_json, clear_find_water  # noqa: E402
+from probelib import (send, send_json, clear_find_water, load_definitions)  # noqa: E402
 
 DEFAULT_PORT = 9925
 LOG = "/tmp/gameplay_scenarios_engine.log"
@@ -52,17 +51,9 @@ PLAYER_FACTION = "player"
 # walking, the first-aid pre-fall baseline and its report all read it.
 ARRIVAL_TILES = 0.8           # matches the AI's own 0.6 + a little slack
 
-YAML_LOADERS = [
-    ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-    ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-    ("data/items/*.yaml",      "engine.loadItemYaml"),
-    ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-    ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-    ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-    ("data/factions/*.yaml", "engine.loadFactionYaml"),
-    ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-    ("data/units/*.yaml",      "engine.loadUnitYaml"),
-]
+YAML_FAMILIES = (
+    "substance", "infection", "item", "equipment", "material", "flora",
+    "faction", "physiology", "unit")
 
 # Reported per checkpoint. `hunger` is the stomach meter and `calories`
 # the energy store it feeds (see scripts/unit_resource_config.lua).
@@ -86,9 +77,7 @@ def bootstrap(port: int) -> None:
     """Load the gameplay catalogs + the stat/resource/AI script stack the
     loading screen would load in the GUI. unit_ai stays ACTIVE — its
     behavior is the thing these scenarios exist to watch."""
-    for pattern, fn in YAML_LOADERS:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, YAML_FAMILIES)
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); "

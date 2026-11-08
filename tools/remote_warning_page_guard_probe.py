@@ -49,11 +49,11 @@ Usage: python3 tools/remote_warning_page_guard_probe.py [--port 9421]
 from __future__ import annotations
 
 import argparse
-import glob
 import sys
 
 import probe_protocol
-from probelib import boot, quit_engine, send, send_json, poll_until
+from probelib import (boot, quit_engine, send, send_json, poll_until,
+                      load_definitions)
 
 LOG = "/tmp/remote_warning_page_guard_probe_engine.log"
 LOG_NAME = "remote_warning_page_guard_probe_engine.log"
@@ -117,12 +117,8 @@ def check(rep, check_id: str, name: str, ok: bool,
 
 
 def load_defs(port: int) -> None:
-    for pattern, fn in [
-        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-        ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "material", "building"))
 
 
 def init_arena(port: int, name: str) -> None:

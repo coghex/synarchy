@@ -104,14 +104,14 @@ Exit 0 = every check passed.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import socket
 import subprocess
 import sys
 import time
-from probelib import clear_find_water, quit_engine, boot, send, send_json
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      load_definitions)
 
 SPROOT = "/tmp"
 TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
@@ -182,19 +182,9 @@ def as_float(s) -> float | None:
 
 
 def bootstrap_defs(port: int) -> None:
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit", "recipe", "building"))
 
 
 def wait_active(port: int, page: str, secs: float = 10.0) -> bool:

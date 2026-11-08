@@ -85,12 +85,13 @@ authored. Elapsed seconds are printed per phase (`PhaseClock`).
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, os, shutil, socket, stat, subprocess, sys, tempfile, \
+import argparse, json, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
 import probe_engine
 import probe_evidence
 from probelib import (boot, capture_request_id, clear_find_water, quit_engine,
-                      send, send_json, wait_load_published, wait_save_complete)
+                      send, send_json, wait_load_published,
+                      wait_save_complete, load_definitions)
 
 SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -239,19 +240,9 @@ def save_and_reload(port, page, slot, mark=None):
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "flora",
+        "faction", "physiology", "unit"))
 
 
 # --- The fixed tillable fixture (#2938) -------------------------------

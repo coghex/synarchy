@@ -37,13 +37,14 @@ state survives save -> load.
 Usage: python3 tools/crop_probe.py [--port 9195] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, copy, glob, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, copy, os, shutil, socket, subprocess, sys, tempfile, time
 import yaml
 from pathlib import Path
 import probe_evidence
 import probe_protocol
 from probelib import (FixtureNotRegistered, quit_engine, boot,
-                      load_fixture_yaml, send, send_json, wait_load_published)
+                      load_definitions_report, load_fixture_yaml, send, send_json,
+                      wait_load_published)
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -84,18 +85,11 @@ RELAXED_WORLDGEN = {
 
 
 def bootstrap(port):
-    checked = {}
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            r = send_json(port, f"return {fn}('{path}')")
-            if path.endswith("crops.yaml") or path.endswith(
-                    ("tomato.yaml", "wheat_grain.yaml")):
-                checked[path] = r
+    report = load_definitions_report(
+        port, ("substance", "item", "material", "flora"))
+    checked = {f.path: f.count for f in report.files
+               if f.path.endswith("crops.yaml")
+               or f.path.endswith(("tomato.yaml", "wheat_grain.yaml"))}
 
     # tomato_plant ships with worldGen density 0.0 (#334: farmed crops
     # shouldn't wild-spawn), so it can never place in an ordinary

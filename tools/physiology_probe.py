@@ -35,27 +35,17 @@ Usage: python3 tools/physiology_probe.py [--port 9170] [--seconds 30] [--count 5
 Exit 0 = all scenarios passed.
 """
 from __future__ import annotations
-import argparse, glob, json, os, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, json, os, socket, subprocess, sys, time
+from probelib import (quit_engine, boot, send, load_definitions)
 import physiology_expectations as expect
 
 LOG = "/tmp/physiology_probe_engine.log"
 
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "faction",
+        "physiology", "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
     # Neutralise the AI wander tick so units stay put — we're measuring the

@@ -33,10 +33,11 @@ Usage: python3 tools/role_probe.py [--port 9265] [--seed 42]
        [--size 64] [--plates 3]
        python3 tools/role_probe.py --describe   # no engine
 """
-import argparse, glob, socket, subprocess, sys, time
+import argparse, socket, subprocess, sys, time
 
 import probe_protocol
-from probelib import clear_find_water, quit_engine, boot, send, send_json
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      load_definitions)
 
 SPROOT = "/tmp"
 
@@ -66,19 +67,9 @@ DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "flora",
+        "faction", "physiology", "unit"))
 
 
 def find_wood(port, span=4):

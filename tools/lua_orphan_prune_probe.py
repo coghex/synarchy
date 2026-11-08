@@ -63,7 +63,6 @@ per-check output.
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import shutil
 import socket
@@ -73,7 +72,8 @@ import time
 import uuid
 import probe_evidence
 import probe_protocol
-from probelib import quit_engine, boot, send, send_json, wait_load_published
+from probelib import (quit_engine, boot, send, send_json, wait_load_published,
+                      load_definitions)
 
 LOG = "/tmp/orphan_prune_engine.log"
 LOG_NAME = "orphan_prune_engine.log"
@@ -93,21 +93,12 @@ SAVE_NAME = "probe_orphan_" + uuid.uuid4().hex[:12]
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        # #1589: a planted craftJob/repairJob persists a RECIPE id, and
-        # prepareLoad rejects the whole load if it no longer resolves.
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    # #1589: the last family, recipes, is there because a planted
+    # craftJob/repairJob persists a RECIPE id, and prepareLoad rejects the
+    # whole load if it no longer resolves.
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction",
+        "physiology", "unit", "recipe"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")

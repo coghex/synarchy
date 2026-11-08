@@ -70,27 +70,18 @@ Usage: python3 tools/mental_state_probe.py [--port 9352]
 Exit 0 = pass.
 """
 from __future__ import annotations
-import argparse, glob, json, math, sys, time
+import argparse, json, math, sys, time
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
-                      quit_engine, send, send_json, spawn_acolyte)
+                      quit_engine, send, send_json, spawn_acolyte,
+                      load_definitions)
 
 LOG = "/tmp/mental_state_probe_engine.log"
 
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "faction",
+        "physiology", "unit"))
     load_ai_stack(port)
     init_arena(port)
 

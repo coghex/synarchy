@@ -103,8 +103,9 @@ machinery, then checks:
 
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send, send_json
+import argparse, json, socket, subprocess, sys, time
+from probelib import (clear_find_water, quit_engine, boot, send, send_json,
+                      load_definitions)
 
 SPROOT = "/tmp"
 # Owner tag for the identity window's temporary carrying-capacity
@@ -160,19 +161,9 @@ def bootstrap(port):
     """Load defs + the flat arena (the loading screen doesn't run
     headless). unit_ai stays live — it's half of what's under test —
     but is toggled off around the backend phase (see ai_off/ai_on)."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit", "recipe", "building"))
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     for _ in range(60):

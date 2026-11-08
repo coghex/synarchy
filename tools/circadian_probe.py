@@ -24,12 +24,12 @@ per-check output.
 """
 from __future__ import annotations
 import argparse
-import glob
 import sys
 import time
 
 import probe_protocol
-from probelib import quit_engine, boot, init_arena, send, spawn_acolyte, poll_until
+from probelib import (quit_engine, boot, init_arena, send, spawn_acolyte,
+                      poll_until, load_definitions)
 
 PORT = 9013
 LOG = "/tmp/circadian_probe_engine.log"
@@ -64,18 +64,9 @@ def bootstrap_defs(port: int) -> None:
     loading screen would normally load (it doesn't run headless) —
     unit.spawn fails without them. Mirrors tools/combat_anim_probe.py /
     tools/blood_impact_probe.py."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")

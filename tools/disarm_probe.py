@@ -44,9 +44,9 @@ Usage: python3 tools/disarm_probe.py [--port 9193]
 Exit 0 = pass.
 """
 from __future__ import annotations
-import argparse, glob, sys, time
+import argparse, sys, time
 import probe_protocol
-from probelib import quit_engine, boot, send
+from probelib import (quit_engine, boot, send, load_definitions)
 
 LOG = "/tmp/disarm_probe_engine.log"
 LOG_NAME = "disarm_probe_engine.log"
@@ -62,18 +62,9 @@ DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def bootstrap(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2), ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
     # Neutralise the AI wander/goal tick — dropDisabledHandWeapons lives

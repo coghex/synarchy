@@ -83,13 +83,12 @@ reach or hold combat).
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send, send_json
+from probelib import (quit_engine, boot, send, send_json, load_definitions)
 
 LOG = "/tmp/follow_command_priority_probe.log"
 
@@ -98,18 +97,9 @@ def bootstrap(port: int) -> None:
     """Load the YAML defs + the stat/resource ticks the loading screen would
     normally load. unit_ai is auto-loaded at boot and we deliberately leave
     its tick RUNNING — the arbitration is what we're testing."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
     send(port, "require('scripts.movement_arena'); return 'ok'")

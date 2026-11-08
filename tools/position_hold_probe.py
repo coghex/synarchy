@@ -62,13 +62,13 @@ Usage: python3 tools/position_hold_probe.py [--port 9216]
 from __future__ import annotations
 
 import argparse
-import glob
 import math
 import sys
 import time
 
 import probe_protocol
-from probelib import boot, init_arena, quit_engine, send, send_json, spawn_acolyte
+from probelib import (boot, init_arena, quit_engine, send, send_json,
+                      spawn_acolyte, load_definitions)
 
 LOG = "/tmp/position_hold_engine.log"
 PAGE = "arena"
@@ -141,17 +141,9 @@ DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
 
 
 def state(port, uid):

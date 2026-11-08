@@ -21,14 +21,13 @@ facade tells it to, and only the facade ever calls it.
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import shutil
 from dataclasses import dataclass, field
 
 import probe_evidence
-from probelib import boot, send
+from probelib import (boot, send, load_definitions)
 
 from .constants import MAX_STEP_TILES, REPO, STAGES
 from .notices import install_latch_recorder
@@ -307,18 +306,9 @@ class ExpeditionState:
 # --------------------------------------------------------------------------
 # Isolation, boot and bootstrap
 # --------------------------------------------------------------------------
-YAML_LOADERS = [
-    ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-    ("data/items/*.yaml", "engine.loadItemYaml"),
-    ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-    ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-    ("data/flora/*.yaml", "engine.loadFloraYaml"),
-    ("data/factions/*.yaml", "engine.loadFactionYaml"),
-    ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-    ("data/units/*.yaml", "engine.loadUnitYaml"),
-    ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-    ("data/loot_tables/*.yaml", "engine.loadLootTableYaml"),
-]
+YAML_FAMILIES = (
+    "substance", "item", "equipment", "material", "flora", "faction",
+    "physiology", "unit", "building", "loot_table")
 
 #: The AI stack, the portal's own spawn sequencer, and the tutorial
 #: runtime — the same modules scripts/init_loader.lua loads in a real
@@ -351,10 +341,7 @@ def bootstrap(port: int) -> None:
     """Load the content and the session scripts both engines share, then
     install the tutorial latch recorder (`notices`) before anything in
     this world can latch."""
-    for pattern, fn in YAML_LOADERS:
-        for path in sorted(glob.glob(os.path.join(REPO, pattern))):
-            send(port, f"{fn}('{os.path.relpath(path, REPO)}'); return 'ok'",
-                 timeout=20.0)
+    load_definitions(port, YAML_FAMILIES, root_dir=str(REPO), timeout=60.0)
     send(port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); "
                "return 'ok'", timeout=20.0)
     got = send(port, "return engine.loadTutorialDir('data/tutorials')",
