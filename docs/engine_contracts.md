@@ -2545,7 +2545,8 @@ every consumer relies on:
   an Unsupported (bodyless) unit keeps today's raw blood behavior and reads
   `nil` through the physiology verbs. A Nominal stored volume is serialized but
   ignored and rebuilt silently at load. Gates: hspec `--match "physiology
-  blood modes"`, `tools/bleeding_trail_probe.py`,
+  blood modes"`, hspec `--match "ongoing bleeding through the
+  production tick"` (the trail and pool under Simulated blood),
   `tools/persistence_system_cycles_probe.py` (manual-only fresh-process cycles)
   and the access audit.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
@@ -8110,9 +8111,16 @@ Architecture record: [`docs/blood_decals.md`](blood_decals.md). Six
 `--match`-able hspec groups under `test-headless/Test/Headless/Blood/`:
 `Blood.Types`, `Blood.Texture`, `Blood.Impact`, `Blood.Trail` (includes
 `Blood.Pool`), `Blood.Teardown`, and `Blood.LuaApi` (the registered-Lua
-`blood.gpuHandles` query, #1585, on its own isolated engine). Probes:
-`blood_decal_probe.py`, `blood_impact_probe.py`,
-`bleeding_trail_probe.py`, and the needs-GPU
+`blood.gpuHandles` query, #1585, on its own isolated engine), plus
+`ongoing bleeding through the production tick` (#2941,
+`Test.Headless.Blood.OngoingBleed`): the wound tick and the movement tick
+run in lockstep against a real engine environment and blood store, which
+states the emission clock (the unpaused `gameTimeRef`, never the world
+calendar) and clot progression ending the trail and the pool. No probe
+runs a wounded unit under the live unit and combat threads (the
+end-to-end bleeding-trail probe was retired, #2941; the loss is recorded in
+`docs/archive/ongoing_bleeding_probe_retirement_2941.md`). Probes:
+`blood_decal_probe.py`, `blood_impact_probe.py`, and the needs-GPU
 `blood_gpu_lifecycle_probe.py` (manual-only). **Transience contract**:
 blood is transient BY DESIGN — `wsBloodStoreRef` and every unit's
 `TrailState` are deliberately never persisted, and a loaded session
