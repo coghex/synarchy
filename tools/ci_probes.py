@@ -238,10 +238,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                               "say nothing about the slower, variable-speed "
                                               "CI runner for combat/treatment arbitration "
                                               "timing"),),
-    "repair_ai": (Reason(FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
-                                "failing-check set each run (3/3 solo runs failed, no two "
-                                "alike, #724) — not #489 (whetstone), which is long fixed "
-                                "and never implicated"),),
     "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min >= 0.75' is a probe-side "
                                  "edge, not a product fault (#2944): circulation is "
                                  "(0.5+0.5*constitution)*(1-0.7*max(0,fat/body-0.2)) for a "

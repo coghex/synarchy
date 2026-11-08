@@ -69,12 +69,12 @@ the registered key AND the registered script — `injury_log`,
 the same probe. It is NOT substring matching: a subject is tokenized and
 scanned left to right, taking the LONGEST registered identity at each
 position and then advancing past it, so registered prefix families stay
-distinct (`repair` / `repair_ai` / `repair_item`, `power` /
+distinct (`repair` / `repair_item`, `power` /
 `power_workshop`, `persistence_contract` / `persistence_contract_sweep`).
 
 That longest-match rule is per OCCURRENCE, not per subject. One mention
-of `repair_ai` never also credits `repair`; a subject mentioning
-`repair_ai` in one place and a standalone `repair` probe in another
+of `repair_item` never also credits `repair`; a subject mentioning
+`repair_item` in one place and a standalone `repair` probe in another
 credits both. The distinction is only visible on the two-mention case,
 which is why the gate covers both shapes.
 
@@ -350,8 +350,8 @@ def find_occurrences(subject: object, index) -> list[dict]:
 
     At each token position the LONGEST registered form wins and the scan
     advances past it, which is what keeps a registered prefix family
-    distinct: one mention of `repair_ai` never also credits `repair`,
-    while a subject naming `repair_ai` in one place and `repair` in
+    distinct: one mention of `repair_item` never also credits `repair`,
+    while a subject naming `repair_item` in one place and `repair` in
     another credits both. When two or more DISTINCT probes tie at the
     same position for the same maximal length, every one of them is
     credited and the occurrence is marked ambiguous — exclusion is

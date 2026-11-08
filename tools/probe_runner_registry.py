@@ -285,8 +285,6 @@ PROBES = [
      "entry points all opening ONE panel, morpheme rows whose surface tokens "
      "reproduce the stored name, bound/free and recurrence presentation, the "
      "honest unavailable state, and resize/close/teardown (#1104)"),
-    ("repair_ai", "repair_ai_probe.py",
-     "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
     ("resource_root", "resource_root_probe.py",
      "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
     ("river_naming", "river_naming_probe.py",
