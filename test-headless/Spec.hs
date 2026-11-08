@@ -95,6 +95,7 @@ import qualified Test.Headless.Lua.FoodHarvestTarget as LuaFoodHarvestTarget
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
 import qualified Test.Headless.Lua.UnitAiPickupPending as LuaUnitAiPickupPending
 import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
+import qualified Test.Headless.Lua.UnitAiRepairSourcing as LuaUnitAiRepairSourcing
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -882,6 +883,12 @@ restLane = do
     -- unit_ai_repair_target.lua over the engine's real ground,
     -- inventory and page APIs.
     aroundAll withHeadlessEngine LuaUnitAiRepairGround.spec
+    -- Own engine for the same reason (#2939): the claim-order, sourcing
+    -- and claim-lifecycle groups that replaced tools/repair_ai_probe.py
+    -- install their own two-page world manager and unit table per
+    -- example and drive the production repair modules over the engine's
+    -- real ground, inventory, equipment and transfer verbs.
+    aroundAll withHeadlessEngine LuaUnitAiRepairSourcing.spec
     -- Own engine for the same reason (#1599): the pause-speed gate
     -- installs its own two-page world manager, rewrites wmVisible
     -- mid-example, and drives the real scripts/pause.lua against the

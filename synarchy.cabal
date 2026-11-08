@@ -2149,6 +2149,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiPickupPage
                    Test.Headless.Lua.UnitAiPickupPending
                    Test.Headless.Lua.UnitAiRepairGround
+                   Test.Headless.Lua.UnitAiRepairFixture
+                   Test.Headless.Lua.UnitAiRepairSourcing
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity
