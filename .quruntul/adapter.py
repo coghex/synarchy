@@ -53,7 +53,11 @@ DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which 
 # and runnable on demand with `python3 tools/run_probes.py --only KEY --exact`.
 # A set here, not a census deferral: a deferral is owner-policy state the census
 # tools write and a targeted run could clear, and this policy must not depend on it.
-OPT_IN_ONLY = {}
+# `expedition_loop` (#2934, owner decision 2026-11-07): about 19 minutes of
+# the lab's rotation for one probe. It stays the expedition arc's final
+# integrated gate, which changes to that arc run on request with
+# `python3 tools/run_probes.py --only expedition_loop --exact`.
+OPT_IN_ONLY = {"expedition_loop": "about 19 minutes; run on request as the expedition arc's final integrated gate"}
 # The run-level outcome of a protocol probe, beside its declared checks: a probe
 # can report every check PASS and still exit nonzero, which probe_flake records
 # as a failed run.

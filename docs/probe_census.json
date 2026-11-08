@@ -229,23 +229,6 @@
         "history": [],
         "outcomes": []
       },
-      "classification": "manual-only",
-      "key": "bleeding_trail",
-      "protocol": "probe-result/v1",
-      "script": "bleeding_trail_probe.py"
-    },
-    {
-      "census": {
-        "acceptable_failures": 0,
-        "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
-        "deferred": null,
-        "estimated_worst_case_seconds": null,
-        "history": [],
-        "outcomes": []
-      },
       "classification": "ci-eligible",
       "key": "canteen_instance",
       "protocol": "legacy",
