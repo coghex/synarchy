@@ -37,8 +37,16 @@ The retired probe was the only gate that drove REAL right-clicks on REAL rendere
 
 - Gesture `setup`: 1 (the 12 leg item defs register).
 - Gesture `modeB`: 14 per leg × 6 = 84 (the 12 `unique` rows below, plus `the contract refuses … for RANGE alone` and `cancelling the order retires it and still moves nothing`).
-- Gesture `modeA`: 98 (1 camera band + 3 spawn-beside + 6 seeds + 6 direct-create + 3 await + 3 stack + 1 roles + 2 session-open reveals + 66 legs + 7 teardown).
+- Gesture `modeA`: 97 (1 camera band + 3 spawn-beside + 6 seeds + 6 direct-create + 3 await + 3 stack + 1 roles + 1 session-open reveal + 66 legs + 7 teardown).
 - `TO` phase 9: `the in-flight order names both exact instances`, `the order survives with its EXACT identity`, `the carrier still holds exactly the instances it names`, `it completed EXACTLY ONCE across the process boundary`, and the four boundary-log checks (`engine B (save)`, `engine C (load, then a second save)`: process gone, no diagnostic); the four inline `log_lines` assertions they replace are gone. Every phase is now a stage, so a failure names its phase.
+
+## Validation of the replacement
+
+One focused offscreen/engine run of each changed probe, on the pull request's final probe code (each waited for the `cabal-build` and `gpu-desktop` locks; no whole suite, no sweep):
+
+- `python3 tools/run_probes.py --only transfer_context_menu --exact`: PASS, 367.8 s (`setup` 1, `modeB` 84, `modeA` 97 checks, all pass). Two earlier runs on earlier revisions of the new stages are kept honest here: the first passed every real-gesture check and failed only the new `cancelling the order retires it` check, because it used the raw `unit.cancelTransferOrder` verb, which marks entries cancelled without pruning, instead of the player's own `unit_ai.cancelTransferOrder`; the second failed only the session-open reveal on the SECOND hold session, because the world is paused between sessions and the game clock had not advanced since the previous commit's reveal, so the check is now made once, before any session has touched the hold.
+- `python3 tools/run_probes.py --only transfer_order --exact`: PASS, 520.8 s (phase 9 included: exact identity, exactly-once, both boundary logs).
+- Self-tests: `tools/test_run_probes.py`, `tools/ci_probes.py --self-test`, `.quruntul/checks.py`, `tools/test_probe_census.py`, `tools/test_readme_registry_count.py`, `tools/test_probe_evidence.py`, `tools/test_persistence_contract_sweep.py`, `tools/test_transfer_context_menu_probe.py`, `tools/ci_parity_audit.py`.
 
 
 ## Per-stage tallies
