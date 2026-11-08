@@ -11,16 +11,25 @@ on PATH and bindings-GLFW would not build; no trial ran and it was rerun unchang
 
 ## Batches
 
+Protocol batches (sizes 20 and 20, fixed in advance):
+
 | Batch | Commit | What the commit contains | Trials | Exit 0 | Exit 1 | Other |
 |---|---|---|---|---|---|---|
 | Before | `ef2a42682` | requirement 2 evidence capture only; E's move kind, fixture and every assertion unchanged | 20 | 0 | 20 | 0 |
-| Intermediate | `0bdd3b56f` | + narrowed E, committed-attack staging, E setup/arbitration split, pair teardown | 20 | 18 | 2 | 0 |
-| After (final) | `25d9b1f4f` | + attacker placed beside the victim at order time, E's move kept pending | 20 | 20 | 0 | 0 |
+| After | `c1bc96116` (final probe file) | narrowed E, committed-attack staging, attacker placed at order time, E's move kept pending and verified before the first hit, pair isolation on evidence, hand-back counted only while the fight is on | 20 | 20 | 0 | 0 |
 
-The final PR commit differs from `25d9b1f4f` only in `tools/ci_probes.py` (the FLAKY reason text); the probe file is
-byte-identical (`git diff 25d9b1f4f HEAD -- tools/follow_command_priority_probe.py` is empty). The intermediate batch is
-reported because the 2 failures it found were a real second staging defect that the first fix did not cover; the final
-batch is the one the issue calls "after".
+Development batches (NOT part of the protocol; each ran at a non-final commit while a defect was found and fixed; all
+reported, none hidden; the review of round 1 asked for this to be explicit and an owner exception was requested in
+the channel):
+
+| Commit | Trials | Exit 0 | Exit 1 | What it showed |
+|---|---|---|---|---|
+| `0bdd3b56f` | 20 | 18 | 2 | both failures: check D, no hit landed (attacker chased a walking victim); fixed by placing the attacker at order time |
+| `25d9b1f4f` | 20 | 20 | 0 | clean, but measured before the review's findings and before the leftover-patient effect below was exposed (the pair teardown it contained was later removed on review as speculative) |
+| `e9da94adc` | 20 | 14 | 6 | teardown removed, staging repaired: every failure had `treat_ally` selected (see below) |
+
+The final PR commit differs from `c1bc96116` only in `tools/ci_probes.py` (the FLAKY reason text); the probe file is
+byte-identical (`git diff c1bc96116 HEAD -- tools/follow_command_priority_probe.py` is empty).
 
 ## Before batch: per-check tally (20 trials, from each trial's own complete stdout)
 
@@ -51,26 +60,44 @@ every D and E snapshot of every trial).
 - Cause: the probe ordered the attack with `commandAttack(atk, victim)` and no `committed` flag. That opens an
   autonomous, non-exempt attack occurrence, which #2521's combat policy ends before any swing for two same-faction
   acolytes (not hostile, no last attacker, no fixture authorization), as the issue review predicted. The old
-  `treat_ally` reports (runs A and C, 2026-10-04 and 10-19) predate #2521 and are not reproduced on current master.
+  `treat_ally` reports (runs A and C, 2026-10-04 and 10-19) are not reproduced by THIS fixture on the evidence commit (no wounded patient
+  existed to treat), but were reproduced once the staging repair let hits land and the combat pairs were left on the arena (below).
 - E asserted the superseded #306 rule against a player move (#916 scores it 9.0 and lets the player withdraw), a
   second probe-side defect. Narrowed per the owner's 2026-11-07 decision.
-- A game defect is not indicated: no `treat_ally` over eligible combat or a non-player move was ever observed. No
-  speculative game change was made. E and F did not fail with `treat_ally` in any measured trial, so no separate cause
-  is claimed for them.
+- A game defect is not indicated by the before batch (no `treat_ally` at all). Later development batches reproduced
+  `treat_ally`; every such trial is a leftover-patient fixture fault (below), E and F alike, with the same cause.
 
-## Intermediate batch (`0bdd3b56f`), the 2 failures
+## Development batch `0bdd3b56f` (2 failures)
 
-Trials 3 and 17 (`intermediate-0bdd3b56f/20261108T023218Z.stdout.txt`, `...T024816Z.stdout.txt`): check D failed, `D staged
-attacker landed a qualifying hit: False`, victim timeline `search_for_water`; every other check passed and E's hit landed
-(`True`). The attacker was alive, standing and chasing but ended the poll window several tiles behind the walking victim.
-Fix: place the attacker beside the victim in the same console transaction as the committed attack order
-(`stage_committed_attack`), spawn E's subject nine tiles from its move target (it was two, and a smoke run showed the
-move finishing before the attack) and report a missing pending move as an E setup failure.
+Trials 3 and 17 (`intermediate-0bdd3b56f/`): check D failed, `D staged attacker landed a qualifying hit: False`, victim
+timeline `search_for_water`; every other check passed and E's hit landed. The attacker was alive and standing but ended
+the poll window several tiles behind the walking victim. Fixed by placing the attacker beside the victim in the same
+console transaction as the committed attack order.
 
-## Final batch (`25d9b1f4f`)
+## Development batch `e9da94adc` (6 failures, all `treat_ally`): the original flake, reproduced
 
-20/20 exit 0. A passing run prints nothing through `run_probes`, so a clean trial is evidenced by its exit status: every
-check PASS and no E setup failure (exit 3) is the only path to exit 0. Smoke runs printed the evidence lines; for
+Per-check tally over 20 trials: A, B, C, D, F-false, F-no-order pass 20/20; E combat reached pass 18, fail 2; E no
+hand-back pass 19, fail 1; F refused-pickup-keeps-move pass 15, fail 5. Full stdout of the 6 failing trials is in
+`dev-e9da94adc/`. With D's and E's combat pairs left on the arena (as in the original probe), the same-transaction
+snapshots show the cause:
+
+- Trials `c761fb` and `8650c5` (E reached fails): E's subject was already `treat_ally` **before** its attack was
+  ordered (`[E pre-attack] ... action=treat_ally`), claiming uid 5, D's attacker, whose wounds were left over from check D
+  3.4 tiles away; a treatment claim scores 8.0 over its pending 7.0 move, the documented ladder. The subject then
+  collapsed (and in `c761fb` died) after one hit, so the AI was suspended on a stale `treat_ally`.
+- `62730d`, `faaab3`, `296d6c`, `e8070c` (F keeps-move fails, 5 in all): F's subject claimed a wounded D/E survivor
+  1.3-7 tiles away (`treatClaim` 5/6/7, phases D, D-attacker, E, E-attacker) and treated it over the 7.0 move.
+- Trial `faaab3` also failed E's no-hand-back: the staged attacker died (`attackerPose: dead`) mid-tail, the fight was
+  over, and the pending move resumed. A sample after the opponent has died is not "while the fight is on".
+
+Verdict for this batch: probe-side. A medic with a wounded ally in reach treating it at 8.0 over a 7.0 move is the
+documented ladder, not a defect; the probe left patients in reach that the check did not intend. Eligible combat was
+never out-scored: where combat was eligible and the unit was alive, it won.
+
+## Final batch (`c1bc96116`)
+
+20/20 exit 0 (lab run `20674d0a-c24b-472f-940c-75e7ba1667b2`): every check PASS and no E setup failure (exit 3) is the
+only path to exit 0, and a passing run prints nothing through `run_probes`. Smoke runs printed the evidence lines; for
 example D `search_for_water -> attack_target` with `incomingHitBasis: self_defense`, E `follow_command -> engage ->
 attack_target` with `movePending: true, movePlayer: false` at the order.
 
