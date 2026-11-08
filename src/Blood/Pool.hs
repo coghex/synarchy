@@ -64,8 +64,8 @@ import Blood.Types
 -- ----- Thresholds -----
 
 -- | Every numeric bound the pool obeys, named so both the hspec math
---   tests and @tools/bleeding_trail_probe.py@ can assert against the
---   SAME documented contract instead of magic coordinates (issue #883
+--   tests and the engine-level @Test.Headless.Blood.OngoingBleed@
+--   examples can assert against the SAME documented contract instead of magic coordinates (issue #883
 --   spec addition).
 data PoolThresholds = PoolThresholds
     { ptClusterRadius ∷ !Float

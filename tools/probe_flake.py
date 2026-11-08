@@ -77,7 +77,6 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 # harness works on a checkout with no docs worktree. Later migration
 # issues add one key each.
 PROTOCOL_PROBES: dict[str, str] = {
-    "bleeding_trail": probe_protocol.PROTOCOL_VERSION,
     "blood_decal": probe_protocol.PROTOCOL_VERSION,
     "blood_impact": probe_protocol.PROTOCOL_VERSION,
     "circadian": probe_protocol.PROTOCOL_VERSION,
