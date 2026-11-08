@@ -41,9 +41,9 @@ run writes structured events while a standalone run keeps its human-readable
 per-check output.
 """
 from __future__ import annotations
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, json, socket, subprocess, sys, time
 import probe_protocol
-from probelib import quit_engine, boot, send
+from probelib import (quit_engine, boot, send, load_definitions)
 
 LOG = "/tmp/collapse_crawl_probe_engine.log"
 LOG_NAME = "collapse_crawl_probe_engine.log"
@@ -59,19 +59,9 @@ UNCONSCIOUS_BELOW = 0.15  # brain.lua collapse trigger
 
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "faction",
+        "physiology", "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
     send(port, "pcall(function() require('scripts.unit_ai').update = "

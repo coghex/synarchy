@@ -61,7 +61,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import glob
 import io
 import json
 import math
@@ -76,7 +75,7 @@ from unittest.mock import patch as mock_patch
 import yaml
 
 from probelib import (quit_engine, boot, init_arena, poll_until, send,
-                      spawn_acolyte)
+                      spawn_acolyte, load_definitions)
 
 UNITS_ROOT = Path("assets/textures/units")
 DATA_UNITS = Path("data/units")
@@ -128,18 +127,9 @@ def report_setup_failure(cause: str) -> int:
 
 def bootstrap_defs(port: int) -> None:
     # The loading screen doesn't run headless — load defs + AI scripts by hand.
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")

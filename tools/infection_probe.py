@@ -26,26 +26,16 @@ skip path — a run of this probe always exercises all four checks.
 Usage: python3 tools/infection_probe.py [--port 9147]
 """
 from __future__ import annotations
-import argparse, glob, os, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, os, socket, subprocess, sys, time
+from probelib import (quit_engine, boot, send, load_definitions)
 
 LOG = "/tmp/infection_probe_engine.log"
 
 
 def bootstrap(port):
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "infection", "item", "equipment", "material", "faction",
+        "physiology", "unit"))
     send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
     send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
     # Neutralise the AI wander/auto-treat tick — this probe drives the APIs

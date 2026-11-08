@@ -42,12 +42,11 @@ Exit code 0 = every check passed.
 from __future__ import annotations
 
 import argparse
-import glob
 import sys
 import time
 
-from probelib import (boot, quit_engine, send, send_json,
-                      clear_find_water, poll_until)
+from probelib import (boot, quit_engine, send, send_json, clear_find_water,
+                      poll_until, load_definitions)
 
 LOG = "/tmp/wander_hazard_probe_engine.log"
 
@@ -62,18 +61,9 @@ def bootstrap(port: int) -> None:
     """Load the defs + the AI stack the loading screen would load in a GUI
     session, plus the arena module. Unlike movement_probe, the AI is left
     LIVE — its ambient wander is exactly what stage A is testing."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     for path, z in (("scripts/unit_stats.lua", 0.1),
                     ("scripts/unit_resources.lua", 0.2),
                     ("scripts/unit_ai.lua", 0.1)):
