@@ -49,6 +49,7 @@ import Engine.Scripting.Lua.API.Units.CommitPhysio (unitCommitPhysioFn, unitPrev
 import Engine.Scripting.Lua.API.Units.Physiology
     ( unitGetPhysioModeFn, unitGetPhysioOverrideFn, unitGetPhysioDefaultFn
     , unitReadPhysioFn, unitReadPhysioBaseFn, unitReadBloodViewFn
+    , unitPeekStatFn
     , unitSetPhysioModeFn, unitClearPhysioModeFn
     , unitApplyCombatEngagementFn )
 import Engine.Core.State (EngineEnv)
@@ -101,6 +102,7 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "readPhysio"        (unitReadPhysioFn env)
   registerLuaFunction callStats "unit" "readPhysioBase"    (unitReadPhysioBaseFn env)
   registerLuaFunction callStats "unit" "readBloodView"     (unitReadBloodViewFn env)
+  registerLuaFunction callStats "unit" "peekStat"          (unitPeekStatFn env)
   registerLuaFunction callStats "unit" "setPhysioMode"     (unitSetPhysioModeFn env)
   registerLuaFunction callStats "unit" "clearPhysioMode"   (unitClearPhysioModeFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)

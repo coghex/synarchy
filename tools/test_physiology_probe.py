@@ -443,6 +443,38 @@ def circulation_cases():
     says([dict(u1, bloodFraction="nonfinite")], [1], "blood_fraction", "a non-finite input")
     says([dict(u1, core=None)], [1], "core", "an unreadable core temperature")
     says([{"circ": 1.0}], [1], "no unit id", "a record with no id")
+    # Incomplete records are refused, never defaulted to a healthy unit
+    # (round 1 of #2968): the rule's fallbacks cover only what a COMPLETE
+    # observation may lack.
+    says([{"id": 1, "circ": 1.0, "bloodFraction": 1.0, "core": 37.0}], [1],
+         "carries no modes", "the minimal record (no modes, stats, heart rate)")
+    says([{"id": 1, "circ": 1.0, "bloodFraction": 1.0, "core": 37.0}], [1],
+         "carries no stats", "the minimal record (no stats)")
+    says([dict(u1, modes=None)], [1], "no modes", "modes removed")
+    says([dict(u1, stats=None)], [1], "no stats", "stats removed")
+    says([dict(u1, stats=[])], [1], "no stats", "stats of the wrong type")
+    says([dict(u1, modes={"cardio": "simulated"})], [1], "mode of thermo",
+         "thermo mode absent")
+    says([dict(u1, modes={"thermo": "simulated"})], [1], "mode of cardio",
+         "cardio mode absent")
+    says([dict(u1, modes={"cardio": "weird", "thermo": "simulated"})], [1],
+         "mode of cardio is 'weird'", "an unknown mode word")
+    says([dict(u1, heartRate=None)], [1], "heart rate", "no heart rate under a Simulated cardio")
+    says([dict(u1, heartRate="nonfinite")], [1], "heart rate", "a non-finite heart rate")
+    says([dict(u1, core=None)], [1], "input core", "no core under a Simulated thermo")
+    says([dict(u1, core="nonfinite")], [1], "input core", "a non-finite core")
+    says([dict(u1, stats={"constitution": "nonfinite", "fat_mass": 1, "body_mass": 70,
+                          "sepsis": 0})], [1], "constitution", "a non-finite stat")
+    says([dict(u1, bloodFraction=None)], [1], "blood_fraction", "no blood fraction")
+    # ... while what a complete observation may legitimately lack still reads
+    # through the rule's fallbacks: an absent stat, a Nominal cardio's heart
+    # rate, a Nominal thermo's core.
+    legit = dict(u1, stats={}, modes={"cardio": "nominal", "thermo": "nominal"},
+                 heartRate=None, core=None)
+    want, why = pe.expected_circulation(legit, CONSTANTS)
+    expect(want is not None and abs(want - pe.circulation_rule(
+        70.0, 1.0, 1.0, 0.0, 70.0, 0.0, 37.0, None)) < 1e-12,
+        f"the rule's fallbacks still apply to a complete record: {want} {why}")
     # one bad unit among good ones fails the batch, and names the unit
     got = pe.circulation_problems([u1, dict(u2, circ=u2["circ"] - 0.1), u3],
                                   [1, 2, 3], CONSTANTS)

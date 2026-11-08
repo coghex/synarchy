@@ -132,20 +132,47 @@ def observation_problems(units, expected_ids: Iterable[int]) -> list:
 
 
 def _stat(rec: dict, key: str, fallback: float):
-    """An effective stat with the rule's fallback, or 'bad' for a present
-    value that is not a finite number (the observation marks those)."""
-    stats = rec.get("stats") or {}
+    """An effective stat with the rule's fallback when the (valid) stats
+    container simply lacks it, or None for a present value that is not a
+    finite number (the observation marks those)."""
+    stats = rec.get("stats")
+    stats = stats if isinstance(stats, dict) else {}
     if key not in stats or stats[key] is None:
         return fallback
     v = stats[key]
     return v if finite(v) else None
 
 
+#: The mode words the observation reports (`unit.getPhysioMode`, nil -> 'none').
+MODE_WORDS = ("simulated", "nominal", "none")
+
+
 def circulation_inputs(rec: dict, constants: dict) -> tuple:
     """(inputs dict, problems) for one unit record: the arguments the Haskell
-    `circulationFor` gathers, read from the observation of that same unit."""
+    `circulationFor` gathers, read from the observation of that same unit.
+
+    The observation's containers and mode words are validated FIRST. The rule's
+    own fallbacks (an absent constitution reads 1.0, fat 0, body mass 70, sepsis
+    0; a Nominal or Unsupported thermo reads the baseline; a Nominal cardio has
+    no heart-rate factor) apply only to what a complete observation can
+    legitimately lack, never to a record that is itself incomplete: a record with
+    no `stats`, no `modes`, an unknown mode word, an unreadable core under a
+    Simulated thermo or an unreadable heart rate under a Simulated cardio is
+    refused rather than defaulted to a healthy unit."""
     bad = []
-    modes = rec.get("modes") or {}
+    modes = rec.get("modes")
+    stats = rec.get("stats")
+    if not isinstance(modes, dict):
+        bad.append("observation carries no modes")
+        modes = {}
+    if not isinstance(stats, dict):
+        bad.append("observation carries no stats")
+        stats = {}
+    if modes:
+        for system in ("cardio", "thermo"):
+            word = modes.get(system)
+            if word not in MODE_WORDS:
+                bad.append(f"mode of {system} is {word!r}, not one of {MODE_WORDS}")
     inputs = {
         "blood_fraction": rec.get("bloodFraction"),
         "constitution": _stat(rec, "constitution", 1.0),
@@ -155,16 +182,15 @@ def circulation_inputs(rec: dict, constants: dict) -> tuple:
         "core": rec.get("core"),
         "heart_rate": None,
     }
-    # A Nominal (or unsupported) cardio has no heart-rate factor; only a
-    # Simulated one feeds its stored rate to the rule.
     if modes.get("cardio") == "simulated":
         inputs["heart_rate"] = rec.get("heartRate")
         if not finite(inputs["heart_rate"]):
-            bad.append(f"heart rate {inputs['heart_rate']!r} is not finite")
-    if inputs["core"] is None and modes.get("thermo") != "simulated":
+            bad.append(f"heart rate {inputs['heart_rate']!r} is not finite "
+                       "under a Simulated cardio")
+    if modes.get("thermo") in ("nominal", "none") and inputs["core"] is None:
         inputs["core"] = constants["THERMO_BASELINE"]
     for k, v in inputs.items():
-        if k == "heart_rate" and v is None:
+        if k == "heart_rate" and modes.get("cardio") != "simulated":
             continue
         if not finite(v):
             bad.append(f"input {k} {v!r} is not a finite number")

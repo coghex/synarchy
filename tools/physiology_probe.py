@@ -141,7 +141,7 @@ DIAG = (
     "fatM=f(hi.fatM),bodyM=f(hi.bodyM),clothing=f(hi.clothing),"
     "calFrac=f(hi.calFrac),moving=hi.moving,feverOffset=f(hi.feverOffset),"
     "sweatFactor=f(hi.sweatFactor)} "
-    "elseif not okh then heatErr=tostring(hb) end "
+    "elseif not okh then heatErr=tostring(hb) elseif hi then heatErr=tostring(hi) end "
     "local l=lg[u] local ledger=l and {n=l.n,t=f(l.t),delta=f(l.delta),"
     "applied=f(l.applied)} or nil "
     "out[#out+1]={id=u,pose=unit.getPose(u),modes=modes,stats=stats,"

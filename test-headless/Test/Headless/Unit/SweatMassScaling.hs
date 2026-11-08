@@ -24,6 +24,7 @@ import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Data.IORef (modifyIORef', readIORef, writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
@@ -558,6 +559,61 @@ heatBalanceSpec = describe "the heat-balance read and the tick it shares (#2960)
             \  return b end); \
             \return tostring(ok) .. '|' .. string.format('%.7f', r.rate)"
             `shouldReturn` "true|-0.0036214"
+
+    it "never rolls, caches or advances the stat RNG for a unit whose inputs \
+       \are templated but unrolled: the read reports it unobservable, \
+       \unit.peekStat says why, and only the tick initializes the unit" $ \env → do
+        let hot = head' heatCases
+            lazyStats = foldr HM.delete (hcStats hot)
+                            ["metabolism", "fat_mass", "body_mass"]
+            def' = (minimalDef "acolyte" "Acolyte")
+                { udStatTemplates = HM.fromList
+                    [ ("metabolism", (1, 0.1)), ("fat_mass", (14, 1))
+                    , ("body_mass", (70, 5)) ] }
+        heatScene env hot { hcStats = lazyStats }
+        modifyIORef' (unitManagerRef env) $ \um → um
+            { umDefs = HM.insert "acolyte" def' (umDefs um) }
+        ls ← heatLua env hot
+        let rng = show <$> readIORef (ucStatRNGRef (toUnitCombatCapability env))
+            statsNow = fmap uiStats ∘ HM.lookup (UnitId 1) ∘ umInstances
+                         <$> readIORef (unitManagerRef env)
+        rng0 ← rng
+        stats0 ← statsNow
+        verbs ← luaText ls
+            "local a, ar = unit.peekStat(1, 'metabolism'); \
+            \local b, br = unit.peekStat(1, 'no_such_stat'); \
+            \local c, cr = unit.peekStat(99, 'metabolism'); \
+            \local d, dr = unit.peekStat('1', 'metabolism'); \
+            \local e = unit.peekStat(1, 'core_temp'); \
+            \local bal, why = __thermo.readHeatBalance(1); \
+            \return tostring(a) .. ',' .. ar .. '|' .. tostring(b) .. ',' .. br \
+            \.. '|' .. tostring(c) .. ',' .. cr .. '|' .. tostring(d) .. ',' .. dr \
+            \.. '|' .. tostring(e ~= nil) .. '|' .. tostring(bal) .. ',' .. why"
+        verbs `shouldBe` T.intercalate "|"
+            [ "nil,unrolled", "nil,undefined", "nil,nounit", "nil,badargs"
+            , "true", "nil,unrolled:metabolism" ]
+        rng1 ← rng
+        stats1 ← statsNow
+        rng1 `shouldBe` rng0
+        stats1 `shouldBe` stats0
+        -- The tick still initializes the unit, as it always did.
+        _ ← luaText ls "return __real(4)"
+        stats2 ← statsNow
+        fmap (\st → all (`HM.member` st) ["metabolism", "fat_mass", "body_mass"])
+            stats2 `shouldBe` Just True
+        rng2 ← rng
+        rng2 `shouldSatisfy` (≢ rng0)
+        -- Once rolled, the read answers.
+        luaText ls "local b = __thermo.readHeatBalance(1); \
+                   \return tostring(b ~= nil)"
+            `shouldReturn` "true"
+
+    it "peeks the value of a stat the unit already holds" $ \env → do
+        let hot = head' heatCases
+        heatScene env hot
+        ls ← heatLua env hot
+        luaText ls "return string.format('%.4f', unit.peekStat(1, 'body_mass'))"
+            `shouldReturn` "70.0000"
   where
     head' (c : _) = c
     head' []      = error "no heat cases"

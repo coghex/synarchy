@@ -128,25 +128,69 @@ end
 --   thermo.tick(uid, info, dt)    = gather -> rule -> apply (the only writer).
 --
 -- `thermo.readHeatBalance(uid)` is the read verb: gather + rule for a unit's
--- current state, with no mutation (no setStat, debit, frostbite or cache). The
--- physiology probe reads it to judge a unit against what the rule predicts
--- from that unit's own state. thermo.tick calls the same two functions, so
--- the expectation and the simulation cannot drift apart.
+-- current state, with no mutation (no setStat, debit, frostbite, stat roll or
+-- cache). The physiology probe reads it to judge a unit against what the rule
+-- predicts from that unit's own state. thermo.tick calls the same two
+-- functions, so the expectation and the simulation cannot drift apart.
+--
+-- The gather reads unowned stats through a READER: the tick's reader
+-- (thermo.TICK) uses unit.getStat, which lazily rolls and caches a templated
+-- stat that has not been rolled yet, as the tick always did (that is how a
+-- unit's first pass initializes it); the read verb's reader (thermo.OBSERVE)
+-- uses unit.peekStat, which never rolls, advances the stat RNG or caches, and
+-- so reports a unit with an unrolled input as not observable instead of
+-- changing it. The physiology access audit holds the observe side to that.
 
 local function feverOffsetOf(uid)
     return math.min(FEVER_MAX_OFFSET,
                     FEVER_OFFSET_K * injuries.infectionLoad(uid))
 end
 
--- Gather the state one tick's heat balance reads. Reads only: it never
--- writes and never mutates. Returns nil when there is nothing to balance (no
--- grid position, no active world climate, or no stored core temperature).
--- `info` is unit.getInfo(uid) (for gridX/gridY).
+-- The tick's reader: the stat getters roll an unrolled templated stat and
+-- cache it, which is the tick's own initialization of a unit and so exactly
+-- what it always did. NEVER used by the read verb.
+function thermo.tickStat(uid, name)
+    return unit.getStat(uid, name)
+end
+
+function thermo.tickCalFrac(uid)
+    return physiology.fraction(uid, "calories", "max_calories")
+end
+
+-- The read verb's reader: it observes and changes nothing. A stat the unit
+-- holds is returned as the getter would return it; an unrolled one answers
+-- nil and WHY ("unrolled"), and a stat the unit does not define answers nil,
+-- "undefined" (the gather then takes its defaults, as the tick does).
+function thermo.observeStat(uid, name)
+    return unit.peekStat(uid, name)
+end
+
+-- The calorie STORE fraction from the owned pool (a pure registry read) and
+-- the peeked maximum, in physiology.fraction's order: nil without a usable
+-- maximum or a pool; or nil, "unrolled" when the maximum is not rolled yet.
+function thermo.observeCalFrac(uid)
+    local mx, why = unit.peekStat(uid, "max_calories")
+    if mx == nil and why == "unrolled" then return nil, why end
+    if not mx or mx <= 0 then return nil end
+    local cur = physiology.get(uid, "calories")
+    if not cur then return nil end
+    return cur / mx
+end
+
+thermo.TICK    = { stat = thermo.tickStat,    calFrac = thermo.tickCalFrac }
+thermo.OBSERVE = { stat = thermo.observeStat, calFrac = thermo.observeCalFrac }
+
+-- Gather the state one tick's heat balance reads, through `reader`
+-- (thermo.TICK or thermo.OBSERVE). Returns nil when there is nothing to
+-- balance (no grid position, no active world climate, or no stored core
+-- temperature), and nil, "unrolled:<stat>" when the OBSERVE reader meets an
+-- input the unit has not rolled yet. `info` is unit.getInfo(uid) (for
+-- gridX/gridY).
 --
 -- The sweat factor is read only for a unit past its sweat onset, exactly as
 -- the tick always did, so a unit that is not sweating never reads the salt
 -- concentration.
-function thermo.heatInputs(uid, info)
+function thermo.heatInputs(uid, info, reader)
     local gx, gy = info.gridX, info.gridY
     if not gx or not gy then return nil end
     local clim = world.getClimateAt(gx, gy)
@@ -179,9 +223,15 @@ function thermo.heatInputs(uid, info)
     if thermo.debugAmbient then ambient = thermo.debugAmbient end
     if thermo.debugHumidity then humidity = thermo.debugHumidity end
 
-    local metab = unit.getStat(uid, "metabolism") or 1.0
-    local fatM  = unit.getStat(uid, "fat_mass") or 0.0
-    local bodyM = unit.getStat(uid, "body_mass") or 70.0
+    local unrolled = nil
+    local function stat(name)
+        local v, why = reader.stat(uid, name)
+        if v == nil and why == "unrolled" and not unrolled then unrolled = name end
+        return v
+    end
+    local metab = stat("metabolism") or 1.0
+    local fatM  = stat("fat_mass") or 0.0
+    local bodyM = stat("body_mass") or 70.0
     -- Insulation inputs: body fat and WORN CLOTHING (unit.getInsulation sums
     -- the equipped/accessory gear's insulation). Clothing is the difference
     -- between freezing naked and being comfortable — dress for the climate.
@@ -190,7 +240,9 @@ function thermo.heatInputs(uid, info)
     -- Starvation input: a low calorie STORE (not the stomach meter — a unit
     -- with an empty stomach but a fed store keeps full output) throttles
     -- metabolic heat. nil for a unit with no calorie store.
-    local calFrac = physiology.fraction(uid, "calories", "max_calories")
+    local calFrac, calWhy = reader.calFrac(uid)
+    if calWhy == "unrolled" and not unrolled then unrolled = "max_calories" end
+    if unrolled then return nil, "unrolled:" .. unrolled end
 
     local feverOffset = feverOffsetOf(uid)
     local sweatFactor = nil
@@ -302,13 +354,15 @@ end
 
 -- READ VERB (#2960): a unit's current heat balance, with no side effects, or
 -- nil when there is nothing to balance. Returns the balance table and the
--- inputs table it was evaluated from. Honors the same climate selection and
--- debug overrides the tick does, because it gathers through the same function.
+-- inputs table it was evaluated from; nil, "unrolled:<stat>" for a unit that
+-- holds an input the read would have to roll to know (a read never rolls).
+-- Honors the same climate selection and debug overrides the tick does,
+-- because it gathers through the same function.
 function thermo.readHeatBalance(uid)
     local info = unit.getInfo(uid)
     if not info then return nil end
-    local inputs = thermo.heatInputs(uid, info)
-    if not inputs then return nil end
+    local inputs, why = thermo.heatInputs(uid, info, thermo.OBSERVE)
+    if not inputs then return nil, why end
     return thermo.heatBalance(inputs), inputs
 end
 
@@ -323,7 +377,7 @@ end
 -- account executed simulated time (the physiology probe's ledger, #2960) wraps
 -- this function and sums the receipts. The production caller ignores it.
 function thermo.tick(uid, info, dt)
-    local inputs = thermo.heatInputs(uid, info)
+    local inputs = thermo.heatInputs(uid, info, thermo.TICK)
     if not inputs then return nil end
     local bal = thermo.heatBalance(inputs)
 

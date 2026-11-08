@@ -108,18 +108,29 @@ LEGACY_NEUTRALIZE = (
 
 THERMO_BASE = (
     'local t = {}\nlocal thermo = t\n'
+    'local physiology = require("scripts.physiology")\n'
     'local function feverOffsetOf(uid) return 0 end\n'
-    'function thermo.heatInputs(uid, info)\n'
+    'function thermo.tickStat(uid, name) return unit.getStat(uid, name) end\n'
+    'function thermo.tickCalFrac(uid)\n'
+    '  return physiology.fraction(uid, "calories", "hunger")\nend\n'
+    'function thermo.observeStat(uid, name) return unit.peekStat(uid, name) end\n'
+    'function thermo.observeCalFrac(uid)\n'
+    '  return physiology.get(uid, "calories")\nend\n'
+    'thermo.TICK = { stat = thermo.tickStat, calFrac = thermo.tickCalFrac }\n'
+    'thermo.OBSERVE = { stat = thermo.observeStat,\n'
+    '                   calFrac = thermo.observeCalFrac }\n'
+    'function thermo.heatInputs(uid, info, reader)\n'
     '  return { core = unit.readPhysio(uid, "core_temp"),\n'
+    '           m = reader.stat(uid, "metabolism"),\n'
     '           fever = feverOffsetOf(uid) }\nend\n'
     'function thermo.heatBalance(inputs) return { net = 0, inertia = 1 } end\n'
     'function thermo.coreDelta(balance, dt)\n'
     '  return balance.net * dt * balance.inertia\nend\n'
     'function thermo.readHeatBalance(uid)\n'
-    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n'
+    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid), thermo.OBSERVE)\n'
     '  return thermo.heatBalance(inputs), inputs\nend\n'
     'function thermo.tick(uid)\n'
-    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n'
+    '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid), thermo.TICK)\n'
     '  local bal = thermo.heatBalance(inputs)\n'
     '  local c = unit.getStat(uid, "core_temp") or 37\n'
     '  unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))\nend\n'
@@ -860,7 +871,15 @@ def case_pure_heat_read():
     expect_clean("the baseline thermo module")
 
     def with_body(fn_old, fn_new):
+        assert fn_old in THERMO_BASE, fn_old
         return {"scripts/thermo.lua": THERMO_BASE.replace(fn_old, fn_new, 1)}
+
+    HB = 'function thermo.heatBalance(inputs) return { net = 0, inertia = 1 } end'
+
+    def in_rule(call):
+        return with_body(HB, 'local fx = require("scripts.unit_effects")\n'
+                         'function thermo.heatBalance(inputs)\n  ' + call +
+                         '\n  return { net = 0, inertia = 1 }\nend')
 
     # Every write family is refused inside a pure read.
     for label, call in (
@@ -874,25 +893,51 @@ def case_pure_heat_read():
             ("a random draw", 'math.random()'),
             ("the effects seam", 'effects.recomputeBody(uid)'),
             ("an effects alias", 'fx.setStat(uid, "core_temp", 1)'),
-            ("a non-getter unit verb", 'unit.feed(uid, "rations")')):
-        src = THERMO_BASE.replace(
-            'function thermo.heatBalance(inputs) return { net = 0, inertia = 1 } end',
-            'local fx = require("scripts.unit_effects")\n'
-            'function thermo.heatBalance(inputs)\n  ' + call +
-            '\n  return { net = 0, inertia = 1 }\nend', 1)
-        f = expect(label, "pure read thermo.heatBalance() calls", files={
-            "scripts/thermo.lua": src})
+            ("a non-read unit verb", 'unit.feed(uid, "rations")')):
+        f = expect(label, "pure read thermo.heatBalance() calls",
+                   files=in_rule(call))
         assert any("change nothing" in x for x in f), (label, f)
-    # The same write in the tick (its job) is fine.
-    expect_clean("the tick writes", files=with_body(
+
+    # The stat getters that lazily roll and cache are refused (round 1 of #2968).
+    for label, call in (
+            ("unit.getStat", 'local v = unit.getStat(uid, "metabolism")'),
+            ("unit.getStatBase", 'local v = unit.getStatBase(uid, "metabolism")'),
+            ("unit.getAllStats", 'local v = unit.getAllStats(uid)'),
+            ("physiology.fraction", 'local v = physiology.fraction(uid, "calories", "hunger")'),
+            ("stats.get", 'local v = stats.get(uid, "metabolism")')):
+        expect(label, "lazily rolls", files=in_rule(call))
+    # physiology.get of an unowned or non-literal key falls through to the
+    # rolling getter; of a registry key it does not.
+    expect("unowned key", "not a literal registry key",
+           files=in_rule('local v = physiology.get(uid, "metabolism")'))
+    expect("dynamic key", "not a literal registry key",
+           files=in_rule('local v = physiology.get(uid, inputs.key)'))
+    expect_clean("a registry key", files=in_rule(
+        'local v = physiology.get(uid, "core_temp")'))
+    # The tick's rolling reader may not be reached from a pure read.
+    expect("reader reference", "references thermo.TICK",
+           files=with_body('(uid, unit.getInfo(uid), thermo.OBSERVE)',
+                           '(uid, unit.getInfo(uid), thermo.TICK)'))
+    expect("reader function", "references thermo.tickStat",
+           files=in_rule('local f = thermo.tickStat'))
+    # The observe reader itself is held to the rule.
+    expect("observe reader rolls", "pure read thermo.observeStat() calls unit.getStat",
+           files=with_body('function thermo.observeStat(uid, name) return unit.peekStat(uid, name) end',
+                           'function thermo.observeStat(uid, name) return unit.getStat(uid, name) end'))
+    expect("observe fraction rolls", "pure read thermo.observeCalFrac() calls physiology.fraction",
+           files=with_body('  return physiology.get(uid, "calories")\nend\nthermo.TICK',
+                           '  return physiology.fraction(uid, "calories", "hunger")\nend\nthermo.TICK'))
+
+    # The same writes and rolls in the tick (its job) are fine.
+    expect_clean("the tick writes and rolls", files=with_body(
         'unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))',
         'unit.setStat(uid, "core_temp", c + thermo.coreDelta(bal, 1))\n'
-        '  physiology.debit(uid, "hydration", 1)'))
-    # Getters and pure helpers are fine in a read.
-    expect_clean("getters in a read", files=with_body(
-        'return { core = unit.readPhysio(uid, "core_temp"),',
+        '  physiology.debit(uid, "hydration", 1)\n'
+        '  local v = unit.getStat(uid, "metabolism")'))
+    # Non-rolling reads and pure helpers are fine in a read.
+    expect_clean("non-rolling reads", files=in_rule(
         'local a = unit.getActivity(uid) or unit.getInsulation(uid)\n'
-        '  return { core = unit.readPhysio(uid, "core_temp"), act = a,'))
+        '  local b = unit.peekStat(uid, "metabolism") or unit.getWounds(uid)'))
     # A write reached through the local helper is caught as well.
     expect("a helper that writes", "pure read feverOffsetOf() calls",
            files=with_body('local function feverOffsetOf(uid) return 0 end',
@@ -905,16 +950,24 @@ def case_pure_heat_read():
     expect("renamed rule", "pure read thermo.heatBalance() is missing",
            files=with_body('function thermo.heatBalance(inputs)',
                            'function thermo.balanceOf(inputs)'))
-    # The tick must run the shared rule.
-    expect("tick forks the rule", "thermo.tick() no longer calls thermo.heatBalance()",
+    expect("renamed observe reader", "pure read thermo.observeStat() is missing",
+           files=with_body('function thermo.observeStat(',
+                           'function thermo.seeStat('))
+    # The tick and the read must share the rule and use their own readers.
+    expect("tick forks the rule", "thermo.tick() no longer reaches thermo.heatBalance",
            files=with_body('  local bal = thermo.heatBalance(inputs)\n',
                            '  local bal = { net = 0, inertia = 1 }\n'))
-    expect("tick gathers its own", "no longer calls thermo.heatInputs()",
-           files=with_body('function thermo.tick(uid)\n'
-                           '  local inputs = thermo.heatInputs(uid, unit.getInfo(uid))\n',
-                           'function thermo.tick(uid)\n  local inputs = {}\n'))
-    expect("tick forks the clamp", "no longer calls thermo.coreDelta()",
+    expect("tick gathers its own", "no longer reaches thermo.heatInputs",
+           files=with_body('  local inputs = thermo.heatInputs(uid, unit.getInfo(uid), thermo.TICK)\n',
+                           '  local inputs = {}\n'))
+    expect("tick forks the clamp", "no longer reaches thermo.coreDelta",
            files=with_body('c + thermo.coreDelta(bal, 1)', 'c + bal.net'))
+    expect("tick drops its reader", "thermo.tick() no longer reaches thermo.TICK",
+           files=with_body('unit.getInfo(uid), thermo.TICK)',
+                           'unit.getInfo(uid), nil)'))
+    expect("read drops its reader", "thermo.readHeatBalance() no longer reaches thermo.OBSERVE",
+           files=with_body('unit.getInfo(uid), thermo.OBSERVE)',
+                           'unit.getInfo(uid), nil)'))
     expect("tick missing", "thermo.tick() is missing",
            files=with_body('function thermo.tick(uid)', 'function thermo.step(uid)'))
     # Calls in strings and comments are not calls.
@@ -924,7 +977,6 @@ def case_pure_heat_read():
     # The probe may read it: nothing about the read is a write.
     expect_clean("the probe reads the balance", probe=PROBE_PY + (
         '    send(port, "return require(\'scripts.thermo\').readHeatBalance(1)")\n'))
-
 
 
 def case_tokenizer():
