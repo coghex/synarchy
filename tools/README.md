@@ -93,6 +93,13 @@ costs one round trip.
 stub `engine` when a `lua` is on `PATH`), the reply parser and a real-socket
 one-call exchange, with no engine.
 
+- **No per-file loops (#2953).** Its source guard, `per_file_definition_loops`,
+  scans every `tools/*.py` and fails when a file loads definitions with one
+  console call per YAML file, whether it iterates the glob directly or a
+  separately collected list. Enumerating files without a per-file console load is
+  allowed. The only exemption is `bootstrap_timing.py`'s `run_path_a`, the frozen
+  baseline the timing comparison measures against.
+
 ## Manual map-page codec measurement (#2303)
 
 `python3 tools/map_page_codec_measure.py --corpus-only` generates and verifies
