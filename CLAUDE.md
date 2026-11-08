@@ -143,8 +143,9 @@ another owner's processes. User cancellation still ends the wait immediately.
   `$assess-tests`) runs through the external
   [quruntul](https://github.com/coghex/quruntul) lab, which reads
   `.quruntul/adapter.py`. Both Hspec suites are in it, the headless one measured
-  in 400-example slices, and so is every registered probe: CI-eligible probes
-  as CI suites, manual-only ones as probes. Protocol probes run through
+  in 400-example slices, and so is every registered probe except the opt-in
+  ones (`OPT_IN_ONLY`, such as `expedition_loop`, run on request): CI-eligible
+  probes as CI suites, manual-only ones as probes. Protocol probes run through
   `tools/probe_flake.py --runs 1`, the rest through
   `tools/run_probes.py --only KEY --exact`, so the `cabal-build` lock, resource
   holds and port spans keep applying. The probe census stays authoritative for

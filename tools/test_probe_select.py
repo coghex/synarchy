@@ -32,8 +32,8 @@ Two contracts are proved MECHANICALLY rather than inferred:
 * DETERMINISM. Registration order, script filenames and census array
   order are all varied while the numbers stay fixed, and the selection
   must not move. The tie fixture registers `blood_gpu_lifecycle` ahead
-  of `bleeding_trail` because the two orders genuinely disagree there —
-  lexicographically `bleeding_trail` sorts first — so an implementation
+  of `autosave` because the two orders genuinely disagree there —
+  lexicographically `autosave` sorts first — so an implementation
   that iterated the registry would pass a census-order-only test and
   still be wrong. The two keys are used as FIXTURE strings; nothing
   reads the live registry to find them.
@@ -701,7 +701,7 @@ def test_ties_break_on_the_registered_key_not_registration_order() -> None:
     """The one fixture where registration order and key order disagree.
 
     `probe_runner_registry.PROBES` registers `blood_gpu_lifecycle` before
-    `bleeding_trail` while `bleeding_trail` sorts first, so iterating the
+    `autosave` while `autosave` sorts first, so iterating the
     registry would pass a census-order-only test and still be wrong.
     Both keys are supplied as fixture strings; nothing reads the live
     registry.
@@ -718,21 +718,21 @@ def test_ties_break_on_the_registered_key_not_registration_order() -> None:
     ]
     for label, rung, shape in rungs:
         rows = (entry("blood_gpu_lifecycle", **shape),
-                entry("bleeding_trail", **shape))
+                entry("autosave", **shape))
         registered_first = decide(
-            keys=registry("blood_gpu_lifecycle", "bleeding_trail"),
+            keys=registry("blood_gpu_lifecycle", "autosave"),
             census_document=census(*rows))
         check_equal(registered_first.rung, rung, f"{label}: the tie is in it")
-        check_equal(registered_first.probe, "bleeding_trail",
+        check_equal(registered_first.probe, "autosave",
                     f"{label}: the lexicographically first key wins the tie")
         reversed_registry = decide(
-            keys=registry("bleeding_trail", "blood_gpu_lifecycle"),
+            keys=registry("autosave", "blood_gpu_lifecycle"),
             census_document=census(*rows))
         check_equal(ranked_keys(reversed_registry),
                     ranked_keys(registered_first),
                     f"{label}: reversing registration order changes nothing")
         reversed_census = decide(
-            keys=registry("blood_gpu_lifecycle", "bleeding_trail"),
+            keys=registry("blood_gpu_lifecycle", "autosave"),
             census_document=census(*reversed(rows)))
         check_equal(ranked_keys(reversed_census),
                     ranked_keys(registered_first),

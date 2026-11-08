@@ -37,6 +37,7 @@ module Test.Headless.Unit.SimPageOwnership
     , minimalDef
     , mkUnit
     , baseSimState
+    , tilesAt
     ) where
 
 import UPrelude

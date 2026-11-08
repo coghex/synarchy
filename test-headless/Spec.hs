@@ -270,6 +270,7 @@ import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
 import qualified Test.Headless.Blood.Trail as BloodTrail
+import qualified Test.Headless.Blood.OngoingBleed as BloodOngoingBleed
 import qualified Test.Headless.Blood.Teardown as BloodTeardown
 import qualified Test.Headless.Blood.LuaApi as BloodLuaApi
 import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
@@ -1250,6 +1251,7 @@ restLane = do
     describe "Blood.Texture" BloodTexture.spec
     describe "Blood.Impact" BloodImpact.spec
     describe "Blood.Trail" BloodTrail.spec
+    BloodOngoingBleed.spec
     describe "Blood.Teardown" BloodTeardown.spec
     describe "Create World player-facing controls" CreateWorldControls.spec
     describe "UI.Tooltip" UITooltip.spec

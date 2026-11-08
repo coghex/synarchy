@@ -110,7 +110,7 @@ four rows (60 and 90) did exactly that. Every scenario now sits on a row
 inside the footprint, every fixture spawn asserts its own tile resolves
 a surface BEFORE spawning, and the run refuses to report success unless
 the engine's own log agrees no spawn took the fallback. Same shape as
-#1395's fix in `tools/bleeding_trail_probe.py`, and like it, local to
+#1395's fix in the (since retired, #2941) bleeding-trail probe, and like it, local to
 this probe: `probelib.spawn_acolyte` and the engine are untouched.
 
 Exit codes: 0 = every declared check passed, 1 = a behavioural failure,
@@ -141,7 +141,7 @@ LOG = "/tmp/lunge_probe_engine.log"
 #: `World.Generate.Arena` generates `(2 * arenaRadius + 1)^2` chunks
 #: centred on the origin with `arenaRadius = 2` -- chunks -2..2 -- and
 #: `chunkSize` is 16 (`World.Chunk.Types`), so tiles -32..47 inclusive.
-#: Mirrored by hand, exactly as `bleeding_trail_probe.py` does. A run
+#: Mirrored by hand, exactly as the (since retired) bleeding-trail probe did. A run
 #: never TRUSTS these numbers: it asks the engine per tile
 #: (`require_loaded_surface`) and then reads the engine's own log
 #: (`unloaded_spawn_failure`). They document the layout and drive the

@@ -52,9 +52,6 @@ PROBES = [
      "wound-kind/severity -> impact-blood style/volume mapping (#607)"),
     ("blood_gpu_lifecycle", "blood_gpu_lifecycle_probe.py",
      "blood GPU textures disposed on world destroy/replace teardown paths (#788; offscreen, needs a GPU)"),
-    ("bleeding_trail", "bleeding_trail_probe.py",
-     "ongoing bleeding-trail emission: distance/cadence-gated marks, timescale invariance, "
-     "clot/internal-wound/death cutoffs (#882)"),
     ("canteen_instance", "canteen_instance_probe.py",
      "the water AI drains/fills the exact canteen instance it selected, not the "
      "first same-def match (#1220)"),
