@@ -68,11 +68,11 @@ per-check output.
 from __future__ import annotations
 
 import argparse
-import glob
 import sys
 
 import probe_protocol
-from probelib import boot, quit_engine, send, send_json, init_arena, poll_until
+from probelib import (boot, quit_engine, send, send_json, init_arena,
+                      poll_until, load_definitions)
 
 PAGE = "machine_shop_probe"
 LOG = "/tmp/machine_shop_probe_9391.log"
@@ -141,19 +141,9 @@ def check(passed: bool, ok: bool, label: str, detail="") -> bool:
 
 
 def bootstrap_defs(port: int) -> None:
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit", "recipe", "building"))
 
 
 # unit_ai's update() ticks automatically from engine boot (no opt-in

@@ -99,7 +99,6 @@ Exit 0 = every check passed.
 from __future__ import annotations
 
 import argparse
-import glob
 import math
 import os
 import shutil
@@ -111,7 +110,8 @@ import time
 import uuid
 from pathlib import Path
 import probe_evidence
-from probelib import quit_engine, boot, send, send_json, wait_load_published
+from probelib import (quit_engine, boot, send, send_json, wait_load_published,
+                      STANDARD_FAMILIES, load_definitions)
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
 REPO = Path(__file__).resolve().parent.parent
@@ -144,18 +144,7 @@ def bootstrap_defs(port: int) -> None:
     """Load the defs needed to spawn AND to re-resolve saved buildings on
     load (fromBuildingSnapshot drops any entity whose def isn't
     registered — the load side needs these too)."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, STANDARD_FAMILIES)
 
 
 def wait_active(port: int, page: str, secs: float = 10.0) -> bool:
