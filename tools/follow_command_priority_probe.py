@@ -53,9 +53,16 @@ other, the attacker has no last attacker, and the production fixture inputs
 authorize nothing), so on a plain ``commandAttack`` the staged attacker
 never landed a hit (#2945 before-batch: 0 of 20 trials). The victim is still
 graded on its OWN arbitration: it reacts through self-defense once hits land.
-No phase destroys any unit, so a combat pair's wounded survivors stay on the
-arena for later phases; the printed ``wounded`` list is what shows whether
-that ever mattered (#2945 makes no isolation change without such evidence).
+Each combat pair is destroyed when its check is done (``destroy_units``).
+This is evidence-backed, not speculative (#2945): with the pairs left on the
+arena, 6 of 20 trials at e9da94adc failed with ``treat_ally`` selected, and the
+same-transaction snapshots show why - D's wounded survivors sat 3-4 tiles from
+E's subject (which was already ``treat_ally`` BEFORE its attack was ordered in
+3 trials), and D's/E's survivors were within a few tiles of F's subject in 5.
+A medic treating an adjacent wounded ally at 8.0 over a 7.0 move order is the
+documented ladder, so those were probe fixtures leaving patients the checks do
+not intend, not arbitration faults. The ``wounded`` list stays in the output
+so a patient that survives anyway is visible.
 
 Each check prints an ``observe`` snapshot (goal, pending move, treatment
 state, last attacker, wounded units, combat eligibility) read in the same
@@ -260,6 +267,13 @@ def stage_committed_attack(port: int, attacker: int, victim: int,
          f"unit.setPos({int(attacker)}, v.gridX+{beside}, v.gridY); "
          f"require('scripts.unit_ai').commandAttack({int(attacker)},"
          f"{int(victim)},true); return 'fight'")
+
+
+def destroy_units(port: int, *uids: int) -> None:
+    """Remove a finished phase's units so nothing they wounded is left on
+    the arena for a later phase's acolytes to treat (see the docstring)."""
+    for u in uids:
+        send(port, f"unit.destroy({int(u)}); return 'ok'")
 
 
 def print_obs(tag: str, snaps: list, last: dict) -> None:
@@ -480,6 +494,7 @@ def main() -> int:
         print_obs("D", snapd, lastd)
         print(f"  [D staged attacker landed a qualifying hit: "
               f"{any(o.get('hitByStaged') for o in sampd)}]")
+        destroy_units(args.port, ud, atk)
         checks.append(("a struck goal-bound unit reacts with combat, not search",
                        hitd))
 
@@ -522,7 +537,16 @@ def main() -> int:
             sampe.append(o)
             tail_obs.append(o)
             tail.append(o.get("action", "nil"))
-        reverted = "follow_command" in tail
+        # "While the fight is on": a sample taken after the staged attacker
+        # died is not a hand-back (the fight ended on its own, and the
+        # pending move legitimately resumes). At e9da94adc one trial's
+        # victim killed its attacker mid-tail and read as a hand-back.
+        over = sum(1 for o in tail_obs if o.get("attackerPose") == "dead")
+        reverted = any(a == "follow_command" and o.get("attackerPose") != "dead"
+                       for a, o in zip(tail, tail_obs))
+        if over:
+            print(f"  [E tail: {over} of {len(tail_obs)} samples taken after "
+                  f"the staged attacker died are not counted as hand-back]")
         print(f"\n[E combat-commits-over-move] timeline: {' -> '.join(seene)}"
               f"  | tail: {' '.join(tail)}")
         print_obs("E", snape, laste)
@@ -567,6 +591,7 @@ def main() -> int:
             print(f"  [E SETUP FAILURE] {why}; check E's arbitration was not "
                   "exercised, so its two assertions are NOT graded and NOT "
                   "passed", file=sys.stderr)
+        destroy_units(args.port, ue, atk2)
 
         # --- Check F: the command-time capacity refusal, asserted rather
         # than observed. A's mirror image (#1736): commandPickup gates
