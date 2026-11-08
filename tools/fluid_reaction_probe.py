@@ -60,7 +60,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import math
 import os
 import sys
@@ -70,7 +69,8 @@ from pathlib import Path
 
 import probe_evidence
 from probelib import (boot, quit_engine, send, send_json, capture_request_id,
-                      wait_load_published, wait_save_complete)
+                      wait_load_published, wait_save_complete,
+                      load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -144,18 +144,9 @@ def bootstrap_content(port: int) -> None:
     the occupant off the cell before the lava arrived. Both are the
     neutralisations ``tools/injury_log_probe.py`` already documents.
     """
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     send(port, "local ok,m = pcall(require, 'scripts.injury_log_panel'); "
                "if ok and type(m) == 'table' then m.update = function() end end; "
                "return 'ok'")

@@ -76,6 +76,7 @@ import hashlib
 import inspect
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -857,14 +858,38 @@ def stand_in_data_tree(flora_names: list[str]):
         shutil.rmtree(home, ignore_errors=True)
 
 
+class _Calls(list):
+    """The ordered console calls, plus the raw request lines behind them."""
+    console_lines: list
+
+
+_DEFS_ROW = re.compile(r'\{"(load[A-Za-z]+Yaml)", "([^"]*)"\}')
+
+
 @contextlib.contextmanager
-def recorded_console(fixture_reply: str = "3"):
+def recorded_console(fixture_reply: str = "3", shipped_count: str = "7"):
     """`probe.send` and `probelib.send` both replaced by one recorder, so
     the calls `bootstrap` makes directly and the ones the REAL
-    `load_fixture_yaml` makes on its behalf land in one ordered list."""
-    calls: list[str] = []
+    `load_fixture_yaml` makes on its behalf land in one ordered list.
+
+    The shipped definitions go through ONE `load_definitions` console line
+    (#2953). The recorder answers it with a well-formed load report for the
+    files named in it, and lists each of them in order as the console call
+    the old loop would have made for it (`return engine.loadXYaml('path')`),
+    so the ordering assertions below read the same. `console_lines` counts
+    the raw console requests."""
+    calls = _Calls()
+    console_lines: list[str] = []
+    calls.console_lines = console_lines
 
     def recorder(_port, lua, timeout=None, expect_result=True):
+        console_lines.append(lua)
+        if lua.startswith("local f = {"):
+            rows = _DEFS_ROW.findall(lua)
+            for verb, path in rows:
+                calls.append(f"return engine.{verb}('{path}')")
+            return f"defs|{len(rows)}|" + ";".join(
+                f"{shipped_count},true,false,," for _ in rows)
         calls.append(lua)
         if "probe_berry" in lua or "probe_clover" in lua:
             return fixture_reply
@@ -889,6 +914,18 @@ def test_bootstrap_loads_real_flora_then_berry_then_clover() -> None:
             fresh_run() as art:
         with recorded_console() as calls:
             probe.bootstrap(9186, art)
+        defs_lines = [c for c in calls.console_lines
+                      if c.startswith("local f = {")]
+        expect(len(defs_lines) == 1,
+               f"the four shipped families load in ONE console line "
+               f"(got {len(defs_lines)})")
+        families = [m.group(1) for m in _DEFS_ROW.finditer(defs_lines[0])] \
+            if defs_lines else []
+        expect([v for i, v in enumerate(families)
+                if i == 0 or v != families[i - 1]]
+               == ["loadSubstanceYaml", "loadItemYaml", "loadMaterialYaml",
+                   "loadFloraYaml"],
+               f"in the probe's own family order (got {families})")
         flora = [c for c in calls if "loadFloraYaml" in c]
         expect(flora[:2] == ["return engine.loadFloraYaml('data/flora/aa_early.yaml')",
                              "return engine.loadFloraYaml('data/flora/zz_late.yaml')"],
@@ -932,6 +969,26 @@ def test_a_rejected_fixture_still_stops_the_probe_at_setup() -> None:
                f"and the failure names the fixture (got {raised!r})")
 
 
+def test_a_shipped_flora_file_that_registers_nothing_stops_setup() -> None:
+    print("\ntest_a_shipped_flora_file_that_registers_nothing_stops_setup")
+    # #1711: a shipped flora file the loader rejects answers 0. The old
+    # loop read that per file; the one-call report must keep the check, and
+    # stop at setup before either fixture is registered.
+    with stand_in_data_tree(["only.yaml"]), fresh_run() as art:
+        stopped = None
+        with recorded_console(shipped_count="0") as calls:
+            try:
+                probe.bootstrap(9186, art)
+            except SystemExit as exc:
+                stopped = str(exc)
+        expect(stopped is not None and "SETUP FAILURE" in stopped
+               and "data/flora/only.yaml" in stopped,
+               f"a zero-count shipped flora file stops setup, naming it "
+               f"(got {stopped!r})")
+        expect(not any("probe_berry" in c for c in calls),
+               "and no fixture was registered after it")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_two_invocations_share_no_path()
@@ -958,6 +1015,7 @@ def main() -> int:
     test_the_fixture_bodies_are_byte_for_byte_unchanged()
     test_bootstrap_loads_real_flora_then_berry_then_clover()
     test_a_rejected_fixture_still_stops_the_probe_at_setup()
+    test_a_shipped_flora_file_that_registers_nothing_stops_setup()
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:

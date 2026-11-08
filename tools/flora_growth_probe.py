@@ -46,12 +46,14 @@ retains the directory instead, and names it, for diagnosing a failure.
 Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
        [--size 64] [--plates 3] [--keep-artifacts]
 """
-import argparse, glob, os, shutil, socket, stat, subprocess, sys, tempfile, \
+import argparse, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
 import probe_evidence
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
-                      wait_load_published, wait_save_complete)
+                      wait_load_published, wait_save_complete,
+                      DefinitionLoadError, load_definitions_report,
+                      require_positive_files)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -414,13 +416,6 @@ PROBE_CLOVER_YAML = """flora:
 
 
 def bootstrap(port, art):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
     # The SHIPPED flora is loaded with its result read, unlike the three
     # families above (#1342 deliberately leaves shipped bulk loads
     # unasserted, and this is the documented exception to that): #1711
@@ -433,23 +428,15 @@ def bootstrap(port, art):
     # Engine.Asset loader returns 0 and nothing else when it registered
     # nothing. The species COUNT per file is pinned in hspec
     # (Asset.FloraRegrowthSchema), where it can be read from
-    # loadFloraYaml's own list.
-    shipped = sorted(glob.glob("data/flora/*.yaml"))
-    if not shipped:
-        sys.exit("SETUP FAILURE: no data/flora/*.yaml found — the probe "
-                 "cannot show that the shipped flora still registers")
-    rejected = []
-    for path in shipped:
-        raw = send(port, f"return engine.loadFloraYaml('{path}')")
-        try:
-            queued = float(raw)
-        except (TypeError, ValueError):
-            queued = 0.0
-        if queued <= 0:
-            rejected.append(f"{path} (returned {raw!r})")
-    if rejected:
-        sys.exit("SETUP FAILURE: shipped flora rejected by the loader — "
-                 + ", ".join(rejected))
+    # loadFloraYaml's own list. One console call loads all four families,
+    # flora last, and its per-file report is what that check reads.
+    try:
+        report = load_definitions_report(
+            port, ("substance", "item", "material", "flora"))
+        require_positive_files(report, ("flora",))
+    except DefinitionLoadError as e:
+        sys.exit("SETUP FAILURE: shipped flora did not register — " + str(e))
+    shipped = [f.path for f in report.files if f.family == "flora"]
     print(f"  [PASS] all {len(shipped)} shipped data/flora/*.yaml files "
           f"still register")
     # The probe's own fruiting species, registered after the shipped

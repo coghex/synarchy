@@ -28,7 +28,7 @@ import socket
 import subprocess
 import time
 
-from probelib import GUI_PORT, boot, send_json, poll_until
+from probelib import (GUI_PORT, boot, send_json, poll_until, load_definitions)
 
 REPO = Path(__file__).resolve().parent.parent
 PAGE = "river_runtime_lab"
@@ -194,10 +194,8 @@ def main() -> int:
              on_launch=own)
         lua("engine.setPaused(true); return true")
         # Content setup only; no gameplay script or scenario-system dependency.
-        for family, loader in (("substances", "loadSubstanceYaml"),
-                               ("materials", "loadMaterialYaml")):
-            for path in sorted((REPO / "data" / family).glob("*.yaml")):
-                lua(f"engine.{loader}({json.dumps(str(path.relative_to(REPO)))}); return true")
+        load_definitions(args.port, ("substance", "material"),
+                         root_dir=str(REPO))
         lua(f"world.initArena('{PAGE}'); return true")
         result = lua("return world.waitForInit(30)")
         if not isinstance(result, str) or "done" not in result.lower():

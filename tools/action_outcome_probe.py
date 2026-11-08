@@ -43,23 +43,17 @@ Exit:  0 = every check passed
            contract went unverified; takes precedence over 1
 """
 import argparse
-import glob
 import sys
 import time
 
-from probelib import boot, quit_engine, send, send_json
+from probelib import (boot, quit_engine, send, send_json, load_definitions)
 
 SPROOT = "/tmp"
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",     "engine.loadFloraYaml"),
-        ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "material", "flora", "building"))
 
 
 def find_mixed_box(port, span=6):
