@@ -714,6 +714,11 @@ python3 tools/test_ci_deps_image.py
 step "map-page codec measurement self-test"
 python3 tools/test_map_page_codec_measure.py
 
+# #2947: the generator's synthetic-ledger self-test and the registry-
+# consistency check on docs/probe_costs.json; no ledger, no timings.
+step "probe cost table self-test"
+python3 tools/test_probe_cost_table.py
+
 # The gate that keeps this file honest (#1355, generalized to CI's two
 # audited workers in #2272): fails if a `python3 tools/*.py` check runs in
 # ci.yml's test-and-audits or static-audits worker and not here, or here and
