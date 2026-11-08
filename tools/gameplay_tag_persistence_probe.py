@@ -129,16 +129,24 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
+# Where the engine looks scenarios up by name: `<resource root>/scenarios/`,
+# `.yaml` only (`src/Scenario/Path.hs` scenarioFolderName / scenarioExtension).
+SCENARIO_FOLDER = "scenarios"
+SCENARIO_EXTENSION = ".yaml"
+
+
 def scenario_files(root: str) -> list[str]:
-    """Every file under the root whose name says it is a scenario. The
-    probe requires none: restored tags must come from the save alone."""
+    """Every scenario DEFINITION under the root: each `.yaml` file anywhere
+    under `<root>/scenarios/`, whatever its name. The probe requires none:
+    restored tags must come from the save alone. Code that merely mentions
+    scenarios (`scripts/scenario_startup.lua`, #2715) is not a definition
+    and is never matched by name. A missing or empty folder holds none."""
     found = []
-    for dirpath, _dirs, files in os.walk(root, followlinks=True):
-        if "saves" in Path(dirpath).relative_to(root).parts[:1]:
-            continue
+    for dirpath, _dirs, files in os.walk(os.path.join(root, SCENARIO_FOLDER),
+                                         followlinks=True):
         found += [os.path.join(dirpath, f) for f in files
-                  if "scenario" in f.lower()]
-    return found
+                  if f.endswith(SCENARIO_EXTENSION)]
+    return sorted(found)
 
 
 def bootstrap_defs(port: int) -> None:

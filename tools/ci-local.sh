@@ -654,6 +654,7 @@ python3 tools/test_movement_probe.py
 python3 tools/test_river_naming_probe.py
 python3 tools/test_follow_command_priority_probe.py
 python3 tools/test_farm_ai_probe.py
+python3 tools/test_gameplay_tag_persistence_probe.py
 python3 tools/test_probe_boot_logs.py
 python3 tools/test_item_list_widget_probe.py
 python3 tools/test_construction_probe.py
