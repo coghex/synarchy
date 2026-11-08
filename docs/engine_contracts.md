@@ -4102,13 +4102,15 @@ reveal is gated on commandability under the local controller
 reveals nothing; knowledge is player-global, never per-unit.
 
 Beyond the gates listed below, the reveal rule is pinned by hspec
-`--match "Container knowledge"`, and the arc's INTEGRATED gate is
-`tools/unified_transfer_probe.py` (#1255, manual-only `needs-gpu`): one
-fixed-seed session proving an exact instance moves both ways between
-all three endpoint classes through BOTH modes, plus the partial batch,
-the reveal rule, one widget rendering every container view, and a Mode
-B order surviving a fresh-process reload while a Mode A session does
-not.
+`--match "Container knowledge"`. The arc has no single integrated probe:
+the end-to-end probe of #1255 was replaced by focused coverage (#2935,
+map in `docs/archive/transfer_end_to_end_probe_coverage_map.md`). What no
+Hspec group can state, real right-clicks on rendered item rows moving or
+queueing one exact instance across all six ordered pairs of the three
+endpoint classes in both player modes, is the `modeB` / `modeA` gesture
+stages of `tools/transfer_context_menu_probe.py` (manual-only
+`needs-gpu`); a Mode B order surviving a fresh-process reload with its
+exact durable identity is phase 9 of `tools/transfer_order_probe.py`.
 
 
 Design authority for the *decisions* is
