@@ -1497,6 +1497,13 @@ jobs:
       - name: Map-page codec measurement self-test
         run: python3 tools/test_map_page_codec_measure.py
 
+      # #2947: engine-free. The synthetic-ledger self-test and the check that
+      # docs/probe_costs.json has a row for every registered probe (and no
+      # other); the table itself is generated from the local lab ledger, which
+      # CI does not have, so nothing here reads timings.
+      - name: Probe cost table self-test
+        run: python3 tools/test_probe_cost_table.py
+
       # Validate the probe-runner harness itself on every run (cheap, no
       # engine, no GPU). ci_probes/ci_expensive_gates cover the
       # path->probe mapping, which would otherwise only surface as a PR
