@@ -24,12 +24,13 @@ iiTemp / cooling-tick stack end-to-end:
 Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, math, os, shutil, socket, stat, subprocess, sys
+import argparse, math, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
 import probe_evidence
 import probe_protocol
 from probelib import (boot, capture_request_id, quit_engine, send,
-                      wait_load_published, wait_save_complete)
+                      wait_load_published, wait_save_complete,
+                      load_definitions)
 
 SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -301,17 +302,9 @@ def rate_fixture_failure(amb, near_want, far_want,
 
 
 def bootstrap(port):
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
 
 
 PROBE_CHECKS = [

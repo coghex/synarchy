@@ -19,27 +19,17 @@ engine is already listening on.
 """
 from __future__ import annotations
 
-import glob
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import (send, capture_request_id, wait_load_published,
-                      wait_save_complete)
+                      wait_save_complete, load_definitions)
 from tutorial_probe_contracts import (PAGE, REPO_ROOT, Checks, ProbeError)
 
-YAML_LOADERS = [
-    ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-    ("data/infections/*.yaml", "engine.loadInfectionYaml"),
-    ("data/items/*.yaml", "engine.loadItemYaml"),
-    ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-    ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-    ("data/flora/*.yaml", "engine.loadFloraYaml"),
-    ("data/factions/*.yaml", "engine.loadFactionYaml"),
-    ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-    ("data/units/*.yaml", "engine.loadUnitYaml"),
-    ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
-]
+YAML_FAMILIES = (
+    "substance", "infection", "item", "equipment", "material", "flora",
+    "faction", "physiology", "unit", "building")
 
 #: The AI stack plus the tutorial runtime. scripts/init_loader.lua loads
 #: the tutorial trio at these same z-orders in a real session; headless
@@ -57,15 +47,8 @@ SCRIPTS = [
 # --------------------------------------------------------------------------
 # Engine bootstrap
 # --------------------------------------------------------------------------
-def load_yaml_dir(port: int, pattern: str, fn: str) -> None:
-    for path in sorted(glob.glob(os.path.join(REPO_ROOT, pattern))):
-        rel = os.path.relpath(path, REPO_ROOT)
-        send(port, f"{fn}('{rel}'); return 'ok'", timeout=20.0)
-
-
 def load_content(port: int) -> None:
-    for pattern, fn in YAML_LOADERS:
-        load_yaml_dir(port, pattern, fn)
+    load_definitions(port, YAML_FAMILIES, root_dir=REPO_ROOT, timeout=60.0)
     got = send(port, "return engine.loadTutorialDir('data/tutorials')", timeout=20.0)
     if got.strip() in ("", "nil", "false"):
         raise ProbeError(f"engine.loadTutorialDir failed: {got!r}")

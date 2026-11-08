@@ -75,11 +75,11 @@ per-check output.
 from __future__ import annotations
 
 import argparse
-import glob
 import sys
 
 import probe_protocol
-from probelib import boot, init_arena, quit_engine, send, send_json
+from probelib import (boot, init_arena, quit_engine, send, send_json,
+                      load_definitions)
 
 LOG = "/tmp/meal_waste_engine.log"
 LOG_NAME = "meal_waste_engine.log"
@@ -161,17 +161,9 @@ def expected_feeds(max_hunger: float, start: float, rations: int) -> int:
 
 
 def bootstrap(port: int) -> None:
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml", "engine.loadItemYaml"),
-        ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml", "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
 
 
 def spawn(port: int, x: float, y: float) -> int:

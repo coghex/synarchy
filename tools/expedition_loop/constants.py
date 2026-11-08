@@ -8,7 +8,7 @@ objective ids each exist exactly once and every owner reads them from
 here.
 
 What is deliberately NOT here: a table that belongs to exactly one
-function and is documented as part of it — `harness.YAML_LOADERS` and
+function and is documented as part of it — `harness.YAML_FAMILIES` and
 `harness.SCRIPTS` (the bootstrap sequence), `readers.PROP_KEYS` (the
 round-trip comparison), `readers.PROGRESS_LUA` (the tutorial read) and
 `prepare.SHEDDABLE` (the shed order). Those are one function's

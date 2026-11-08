@@ -42,7 +42,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import shutil
@@ -54,7 +53,8 @@ import tempfile
 import time
 import probe_evidence
 from probelib import (boot, capture_request_id, quit_engine, send,
-                      wait_load_published, wait_save_complete)
+                      wait_load_published, wait_save_complete,
+                      load_definitions)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG = "/tmp/item_instance_engine.log"
@@ -160,18 +160,9 @@ def remove_run_root(base: str) -> bool:
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "faction", "physiology",
+        "unit"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
