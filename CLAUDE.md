@@ -134,6 +134,11 @@ another owner's processes. User cancellation still ends the wait immediately.
   print its path; a passing run leaves nothing. Read it before repeating a run,
   and copy anything you report under `~/.local/state` first. See
   [tools/README.md](tools/README.md) §Failing-probe evidence.
+- **Name the probe that found a defect (#2947).** A pull request or issue that
+  fixes a defect a probe found puts `Found by probe: <key>` on its own line, so
+  a later review can count catches per probe (`rg "Found by probe:"`). Per-probe
+  wall time is in the generated `docs/probe_costs.json`
+  ([tools/README.md](tools/README.md) §Probe cost table).
 - **Local lab.** Coordinated local testing (`$flake`, `$deflake`, `$test`,
   `$assess-tests`) runs through the external
   [quruntul](https://github.com/coghex/quruntul) lab, which reads
