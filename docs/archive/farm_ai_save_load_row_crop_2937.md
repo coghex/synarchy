@@ -100,9 +100,13 @@ Two different causes, so a single cause is **ruled out**:
     reconcile runs once the world thread admits the chunk, so the post-load read
     follows the resume, as a player's load does.
   * `growth_read` keeps a failed query apart from "nothing grows here".
-  * check 10 asserts the worker holds the `wheat` job and the tile is still empty,
-    makes the swap and reads the tomato designation back, and completes on the tomato
-    instance appearing, with no wheat plot and the designation cleared.
+  * check 10 holds the worker instead of racing it: the simulation is paused the
+    moment the `wheat` claim is seen; under the pause the probe reads the job
+    (progress below 1), no plot and no flora on the tile, makes the swap, and polls
+    until the world thread has committed the tomato designation (`plant.designate`
+    only queues it), re-reads that the wheat job is still unfinished, then resumes. It
+    completes on the tomato instance appearing, with no wheat plot and the
+    designation cleared.
 
 ## Evidence kept
 
@@ -113,6 +117,11 @@ Under `~/.local/state/synarchy-2937/` (outside the repository):
   post-load reads are `[]`.
 * `probe_fixed_run1.log`: same probe on the fixed engine, `ALL FARM AI CHECKS PASSED`,
   the same two instance ids present after the load with the same ages.
+* `probe_fixed_run2_hold.log`: the final probe (check 10 holding the worker) on the
+  fixed engine, `ALL FARM AI CHECKS PASSED`; the swap was committed with
+  `plantJob='-64,-40,wheat,0'`, no plot, no flora.
+* `persistence_contract_run1.log`: `run_probes.py --only persistence_contract --exact`
+  on the fixed tree, PASS (262.4 s).
 * `probe_fixed_paused_read_run0.log`: the first draft (post-load read while paused)
   passing on the fixed engine; it is not evidence about the unfixed one.
 

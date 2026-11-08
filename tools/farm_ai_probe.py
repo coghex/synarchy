@@ -58,8 +58,17 @@ Checks:
  10. Re-designating a tile the AI has already claimed with a DIFFERENT
      crop makes it plant the NEW crop, not the stale one it originally
      walked over for (plant.designate replaces in place, HM.insert).
- 11. Save/load: the row-crop instance (WePlaceFlora, save v79) survives
-     save → loadSave. The engine runs on a throwaway resource root,
+     The simulation is paused the moment the worker's claim is seen, the
+     swap is made and read back as COMMITTED while the wheat job is still
+     unfinished, and the check completes on the tomato INSTANCE appearing
+     after the resume — never on the designation vanishing (#2937).
+ 11. Save/load: the AI-planted row-crop instances (WePlaceFlora, save
+     v79) survive save → loadSave as the SAME instance. With the
+     simulation paused, each is read right before the save (by instanceId);
+     after the load the session resumes, its chunks are admitted and each is
+     read again. A failed query is reported as a failure,
+     never as an absent plant (#2937). The engine runs on a throwaway
+     resource root,
      so that slot lands in this run's own saves/ and is deleted with
      it — the developer's saves/ is never read, written or rotated
      (#1616).
@@ -67,7 +76,7 @@ Checks:
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, os, shutil, socket, stat, subprocess, sys, tempfile, \
+import argparse, glob, json, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
 import probe_evidence
 from probelib import (boot, capture_request_id, clear_find_water, quit_engine,
@@ -294,6 +303,28 @@ def growth_entries(port, gx, gy, species):
     if isinstance(t, list):
         return [e for e in t if e.get("id") == species]
     return []
+
+
+def growth_read(port, gx, gy, species):
+    """`growth_entries` that keeps a failed query apart from an absent plant.
+
+    `world.getFloraGrowthAt` answers nil when the tile has no flora (or its
+    chunk is not loaded) and a list otherwise; anything else is the query
+    itself failing (a console error string, a closed connection). Returns
+    `(entries, raw_failure)`: `raw_failure` is None for a real answer (a list,
+    or nil meaning "no flora here") and the unexpected raw value otherwise, so
+    a check can report "the read failed" instead of "the crop is gone" (#2937).
+    """
+    raw = send(port, f"return world.getFloraGrowthAt({gx},{gy})")
+    try:
+        t = json.loads(raw) if raw else raw
+    except (ValueError, TypeError):
+        return [], raw
+    if isinstance(t, list):
+        return [e for e in t if e.get("id") == species], None
+    if raw and t is None:
+        return [], None          # the literal `null`: nothing grows here
+    return [], raw               # empty reply, or text that is not an answer
 
 
 def spawn_worker(port, x, y):
@@ -885,6 +916,7 @@ def main():
 
         deadline = time.time() + 120.0
         planted_a = planted_b = False
+        b_iid = None
         while time.time() < deadline:
             time.sleep(2.0)
             if not planted_a:
@@ -895,6 +927,7 @@ def main():
                 eb = growth_entries(port, bx, by, "tomato_plant")
                 if eb:
                     planted_b = True
+                    b_iid = eb[0].get("instanceId")
             if planted_a and planted_b:
                 break
         ok6 = planted_a
@@ -1058,56 +1091,142 @@ def main():
         till_and_wait(port, "probe", ex, ey, ez)
         send(port, f"plant.designate('probe',{ex},{ey},'wheat'); return 'ok'")
 
+        # Hold the worker, do not race it (#2937). Three things must be true
+        # when the crop is swapped, and each is READ, none assumed: the worker
+        # holds the wheat job, that job is unfinished (nothing planted on E,
+        # progress below 1), and the tomato designation has been COMMITTED by
+        # the world thread (plant.designate only queues it, so a single read
+        # right after the call can still see wheat). Pausing the simulation
+        # the moment the matching claim is seen freezes the worker's AI and
+        # clock while the world thread still services commands, so the state
+        # read after the pause is the state the swap lands in.
+        plant_job_lua = (f"local ai=require('scripts.unit_ai'); "
+                         f"local s=ai.getState({uid}); "
+                         f"if s and s.plantJob then return s.plantJob.x..','.."
+                         f"s.plantJob.y..','..tostring(s.plantJob.crop)..','.."
+                         f"tostring(s.plantProgress or 0) "
+                         f"else return 'none' end")
         deadline = time.time() + 30.0
-        claimed = False
+        job = "none"
         while time.time() < deadline:
-            time.sleep(0.5)
-            job = send(port,
-                       f"local ai=require('scripts.unit_ai'); "
-                       f"local s=ai.getState({uid}); "
-                       f"if s and s.plantJob then return s.plantJob.x..','.."
-                       f"s.plantJob.y else return 'none' end").strip('"')
-            if job == f"{ex},{ey}":
-                claimed = True
+            time.sleep(0.2)
+            job = send(port, plant_job_lua).strip('"')
+            if job.startswith(f"{ex},{ey},wheat,"):
                 break
-        if not claimed:
-            print("  [FAIL] acolyte never claimed the re-designation test job")
+        else:
+            print(f"  [FAIL] acolyte never claimed the re-designation test "
+                  f"wheat job (last plantJob={job!r})")
             return 1
-        send(port, f"plant.designate('probe',{ex},{ey},'tomato_plant'); "
-                   f"return 'ok'")
+        send(port, "engine.setPaused(true); return 'ok'")
+        try:
+            held = send(port, plant_job_lua).strip('"')
+            held_plot = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
+            held_flora, held_fail = growth_read(port, ex, ey, "tomato_plant")
+            try:
+                held_progress = float(held.split(",")[3])
+            except (IndexError, ValueError):
+                held_progress = None
+            if not (held.startswith(f"{ex},{ey},wheat,")
+                    and held_progress is not None and held_progress < 1.0
+                    and held_plot is None and not held_flora
+                    and held_fail is None):
+                print(f"  [FAIL] re-designation test is invalid: the wheat "
+                      f"job was not held and unfinished when the swap was "
+                      f"made (plantJob={held!r} plot={held_plot!r} "
+                      f"flora={held_flora} read_failure={held_fail!r})")
+                return 1
+            send(port, f"plant.designate('probe',{ex},{ey},'tomato_plant'); "
+                       f"return 'ok'")
+            swapped = None
+            commit_deadline = time.time() + 10.0
+            while time.time() < commit_deadline:
+                swapped = send_json(
+                    port, f"return plant.getDesignationAt('probe',{ex},{ey})")
+                if isinstance(swapped, dict) \
+                   and swapped.get("crop") == "tomato_plant":
+                    break
+                time.sleep(0.2)
+            after_swap = send(port, plant_job_lua).strip('"')
+            swap_plot = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
+            swap_flora, swap_fail = growth_read(port, ex, ey, "tomato_plant")
+        finally:
+            send(port, "engine.setPaused(false); return 'ok'")
+        ok10a = (isinstance(swapped, dict)
+                 and swapped.get("crop") == "tomato_plant"
+                 and after_swap.startswith(f"{ex},{ey},wheat,")
+                 and swap_plot is None and not swap_flora
+                 and swap_fail is None)
+        passed &= ok10a
+        print(f"  [{'PASS' if ok10a else 'FAIL'}] the tomato re-designation "
+              f"was committed while the worker held the unfinished wheat "
+              f"job: designation={swapped} plantJob={after_swap!r} "
+              f"plot={swap_plot!r} flora={swap_flora} "
+              f"read_failure={swap_fail!r}")
 
+        # Completion is the tomato INSTANCE itself, never the designation
+        # vanishing: the designation clears the moment the plant command is
+        # queued, and a vanished one also reads the same when a query fails.
         deadline = time.time() + 90.0
-        redesignated_done = False
+        planted_new = []
+        new_fail = None
         while time.time() < deadline:
-            time.sleep(2.0)
-            de = send_json(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
-            if not isinstance(de, dict):
-                redesignated_done = True
+            time.sleep(1.0)
+            planted_new, new_fail = growth_read(port, ex, ey, "tomato_plant")
+            if planted_new:
                 break
-        planted_new = growth_entries(port, ex, ey, "tomato_plant")
+        time.sleep(1.0)
+        de = send_json(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
         planted_stale = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
-        ok10 = (redesignated_done and len(planted_new) >= 1
-                and planted_stale is None)
+        ok10 = (len(planted_new) >= 1 and planted_stale is None
+                and not isinstance(de, dict))
         passed &= ok10
         print(f"  [{'PASS' if ok10 else 'FAIL'}] re-designating a claimed tile "
               f"plants the NEW crop, not the stale one: "
-              f"new={planted_new} stale_plot={planted_stale}")
+              f"new={planted_new} stale_plot={planted_stale} "
+              f"designation={de} read_failure={new_fail!r}")
 
-        # --- 11. Save/load: the AI-planted row crop (WePlaceFlora, v79)
-        #     survives save -> loadSave. ---
+        # --- 11. Save/load: the AI-planted row crops (WePlaceFlora, v79)
+        #     survive save -> loadSave, by identity. Two AI plantings are
+        #     followed: site B (planted early) and site E (planted by the
+        #     re-designation check just above). ---
+        e_iid = planted_new[0].get("instanceId") if planted_new else None
+        # Freeze the simulation so nothing — the calendar, the worker's AI,
+        # a harvest — can change the plants between the pre-save read and
+        # the capture (#2937). A load leaves the session paused again.
+        send(port, "engine.setPaused(true); return 'ok'")
+        followed = {"B": (bx, by, b_iid), "E": (ex, ey, e_iid)}
+        for tag, (fx, fy, fiid) in followed.items():
+            now, fail = growth_read(port, fx, fy, "tomato_plant")
+            alive = fiid is not None and any(
+                e.get("instanceId") == fiid for e in now)
+            ok11a = alive and fail is None
+            passed &= ok11a
+            print(f"  [{'PASS' if ok11a else 'FAIL'}] AI-planted row crop at "
+                  f"site {tag} still exists right before the save "
+                  f"(instanceId {fiid}): {now} read_failure={fail!r}")
+
         failure = save_and_reload(port, "probe", slot)
         if failure:
             print(f"  [FAIL] {failure}")
             return 1
         send(port, "world.show('probe'); return 'ok'")
+        # Resume BEFORE observing, as a player's load does: a chunk's flora
+        # is reconciled against the calendar when the world thread admits it,
+        # and that pass is what #2937 found killing every planted row crop.
+        # A read taken while the load left the session paused runs before it
+        # and sees a plant that is about to die.
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        eb2 = growth_entries(port, bx, by, "tomato_plant")
-        ok10 = len(eb2) >= 1
-        passed &= ok10
-        print(f"  [{'PASS' if ok10 else 'FAIL'}] AI-planted row crop survives "
-              f"save/load: {eb2}")
+        time.sleep(3.0)
+        for tag, (fx, fy, fiid) in followed.items():
+            after, fail = growth_read(port, fx, fy, "tomato_plant")
+            ok11 = fail is None and any(
+                e.get("instanceId") == fiid for e in after)
+            passed &= ok11
+            print(f"  [{'PASS' if ok11 else 'FAIL'}] AI-planted row crop at "
+                  f"site {tag} survives save/load as the same instance "
+                  f"({fiid}): {after} read_failure={fail!r}")
 
         print("\n" + ("ALL FARM AI CHECKS PASSED" if passed else "SOME FAILED"))
         rc = 0 if passed else 1

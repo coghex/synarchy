@@ -468,9 +468,21 @@ reconcileLoadedOccurrences wsc ws daysPerYear day mReferenceDay mChunks = do
         Nothing → Nothing
         Just lifespan →
             let baselineDay = fromMaybe day referenceDay
+                -- #2937: an unanchored instance is read at the first day
+                -- its total age is non-negative. Generated flora carries a
+                -- non-negative baseline, so that is day 0 and nothing
+                -- changes for it. A planting's baseline is NEGATIVE (minus
+                -- its planting day, see 'World.Edit.Apply'), so day 0 sits
+                -- in the generation BEFORE it: generation -1, inside the
+                -- dead window, and the plant would die on the very day it
+                -- was admitted (every load, for every row crop planted
+                -- after day 0). Its first generation starts on its
+                -- planting day.
+                unanchoredDay = firstCalendarDay (\d →
+                    floraTotalAgeAt (fiAge fi) (fiHealth fi) d ≥ 0)
                 current = if hasAnchor
                     then floraGrowth Nothing species baselineDay fi
-                    else floraGrowth Nothing species 0 fi
+                    else floraGrowth Nothing species unanchoredDay fi
                 threshold = fromIntegral (fgGeneration current)
                     * (lifespan + deadWindowDays) + lifespan
             in if fgDead current

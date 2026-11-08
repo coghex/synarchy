@@ -1,0 +1,33 @@
+flat arena: spawn (-2.5,0.5), far move target (6.5,0.5)
+[A staged] carried 12.10 kg + item 10.00 kg vs a staged 23.10 kg capacity; commandPickup accepted, pickupOrder live on gid 0
+
+[A pickup-beats-move] action timeline: pickup_ground
+
+[B refill-beats-move] action timeline: refill_canteen
+
+[C move-beats-goal] pre=search_for_water  timeline: follow_command
+
+[D combat-beats-goal] victim timeline: search_for_water
+  [D obs transition 1 -> search_for_water] {"action":"search_for_water","attackGoalScores":false,"attackerPos":{"page":"move_test","x":1.9602755308151,"y":-0.37006518244743},"attackerPose":"standing","attackerUid":5,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":37.102424999699,"pos":{"page":"move_test","x":3.259384393692,"y":-0.80951994657516},"pose":"standing","wounded":[]}
+  [D obs final] {"action":"search_for_water","attackGoalScores":false,"attackerPos":{"page":"move_test","x":-0.64859294891357,"y":-1.3636885881424},"attackerPose":"standing","attackerUid":5,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":61.453968999907,"pos":{"page":"move_test","x":4.6981058120728,"y":5.1856875419617},"pose":"standing","wounded":[]}
+
+[E combat-commits-over-move] timeline: follow_command -> hold_position  | tail: hold_position hold_position hold_position hold_position hold_position hold_position hold_position hold_position
+  [E obs transition 1 -> follow_command] {"action":"follow_command","attackGoalScores":false,"attackerPos":{"page":"move_test","x":5.8722848892212,"y":0.17593088746071},"attackerPose":"standing","attackerUid":7,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":66.411923999898,"pos":{"page":"move_test","x":6.102903842926,"y":0.35322770476341},"pose":"standing","wounded":[]}
+  [E obs transition 2 -> hold_position] {"action":"hold_position","attackGoalScores":false,"attackerPos":{"page":"move_test","x":5.8722848892212,"y":0.17593088746071},"attackerPose":"standing","attackerUid":7,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":67.129943999927,"pos":{"page":"move_test","x":6.1954126358032,"y":0.38742029666901},"pose":"standing","wounded":[]}
+  [E obs final] {"action":"hold_position","attackGoalScores":false,"attackerPos":{"page":"move_test","x":7.0178647041321,"y":0.95737093687057},"attackerPose":"standing","attackerUid":7,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":90.715105999727,"pos":{"page":"move_test","x":6.1954126358032,"y":0.38742029666901},"pose":"standing","wounded":[]}
+  [E obs tail last] {"action":"hold_position","attackGoalScores":false,"attackerPos":{"page":"move_test","x":7.4912838935852,"y":0.55521231889725},"attackerPose":"standing","attackerUid":7,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":false,"movePlayer":false,"now":96.827039999887,"pos":{"page":"move_test","x":6.1954126358032,"y":0.38742029666901},"pose":"standing","wounded":[]}
+
+[F staged] carried 12.10 kg + item 10.00 kg vs a staged 13.10 kg capacity
+[F refusal-keeps-move] action timeline: follow_command
+  [F obs transition 1 -> follow_command] {"action":"follow_command","attackGoalScores":false,"goal":"find_water","hitByStaged":false,"incomingHitScores":false,"movePending":true,"movePlayer":true,"now":99.904284999706,"pos":{"page":"move_test","x":-1.3293290138245,"y":6.7973289489746},"pose":"standing","wounded":[]}
+
+--- checks ---
+  [PASS] pickup_ground wins over a pending move order
+  [PASS] refill_canteen (dry) wins over a pending move order
+  [PASS] follow_command beats a routine find_water goal
+  [FAIL] a struck goal-bound unit reacts with combat, not search
+  [FAIL] combat reached over a pending move
+  [PASS] combat does NOT hand back to the stale move
+  [PASS] an over-capacity commandPickup returns false
+  [PASS] a refused pickup stores no pickupOrder
+  [PASS] a refused pickup leaves the pending move selected

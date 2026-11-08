@@ -330,6 +330,67 @@ def test_each_segment_is_named_from_the_state_that_shows_it() -> None:
            "a job with no phase was misclassified")
 
 
+def test_timing_lines_are_flushed_whole_stage_records() -> None:
+    """#2940: `timed` reports one flushed `[timing] <label>: N.N s` line per
+    stage, also when the stage raises, and never touches CHECKS."""
+    before = len(probe.CHECKS)
+    out = io.StringIO()
+    flushes = []
+    real_flush = out.flush
+    out.flush = lambda: (flushes.append(1), real_flush())[1]  # type: ignore
+    with contextlib.redirect_stdout(out):
+        with probe.timed("boot"):
+            pass
+        try:
+            with probe.timed("stake"):
+                raise RuntimeError("phase blew up")
+        except RuntimeError:
+            pass
+    lines = out.getvalue().splitlines()
+    expect(len(lines) == 2, f"expected two timing lines, got {lines!r}")
+    pat = re.compile(r"^  \[timing\] (\w+): \d+\.\d s$")
+    labels = [m.group(1) for m in (pat.match(l) for l in lines) if m]
+    expect(labels == ["boot", "stake"], f"timing labels were {labels!r}")
+    expect(len(flushes) >= 2, "a timing line was not flushed")
+    expect(len(probe.CHECKS) == before, "timing must not record a check")
+
+
+def test_main_times_boot_bootstrap_and_only_the_selected_phases() -> None:
+    """#2940: `_run` reports bootstrap plus every PHASES key in order for
+    `all`, and bootstrap plus only the one key for `--phase X`; stake stays
+    last. No engine: the console and phase bodies are replaced."""
+    import argparse
+    ran: list[str] = []
+    saved = (probe.PHASES.copy(), probe.bootstrap, probe.wid,
+             probe.quit_engine)
+    class Proc:
+        def wait(self, timeout=None):
+            return 0
+    try:
+        probe.bootstrap = lambda port: None
+        probe.wid = lambda port: "w"
+        probe.quit_engine = lambda port, proc: None
+        for key in list(probe.PHASES):
+            probe.PHASES[key] = (lambda k: lambda port: ran.append(k))(key)
+        for chosen in ("all", "cancel"):
+            ran.clear()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                probe._run(argparse.Namespace(port=PORT, phase=chosen),
+                           Proc())
+            seen = re.findall(r"\[timing\] (\w+):", out.getvalue())
+            want = list(saved[0]) if chosen == "all" else [chosen]
+            expect(seen == ["bootstrap"] + want,
+                   f"--phase {chosen} timed {seen!r}")
+            expect(ran == want, f"--phase {chosen} ran {ran!r}")
+    finally:
+        probe.PHASES.clear()
+        probe.PHASES.update(saved[0])
+        probe.bootstrap, probe.wid, probe.quit_engine = saved[1:]
+    expect(list(probe.PHASES)[-1] == "stake" and len(probe.PHASES) == 9,
+           "PHASES must stay nine, stake last")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_a_live_worker_reports_both_families()
@@ -346,6 +407,8 @@ def main() -> int:
     test_emitted_records_are_json_and_key_sorted()
     test_a_gone_worker_is_classified_gone_not_given_a_stale_phase()
     test_each_segment_is_named_from_the_state_that_shows_it()
+    test_timing_lines_are_flushed_whole_stage_records()
+    test_main_times_boot_bootstrap_and_only_the_selected_phases()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

@@ -253,9 +253,14 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     # gate too expensive. ---
     "construction": (Reason(SCENARIO_HEAVY, "long construct_job AI end-to-end scenario: "
                                             "inventory + ground sourcing, dead-claimant "
-                                            "release, blueprint staking (4 phases, "
-                                            "~123-168s solo); 14/14 checks passed all 3 "
-                                            "solo runs (#724)"),),
+                                            "release, blueprint staking, #799's paid-death, "
+                                            "preemption, save/load and cancel-refund "
+                                            "(nine phases). Cost: 123-168s solo was "
+                                            "measured when it had four phases (#724, "
+                                            "2026-07-12); the nine-phase probe took "
+                                            "525-580s in three lab trials (2026-10-04, "
+                                            "2026-10-05, 2026-10-19) and 574s nested in "
+                                            "the persistence sweep (#2940)"),),
     "location_content": (Reason(SCENARIO_HEAVY, "thirteen real-engine-process scenario: ruin "
                                                 "content spawn + geometry, seed-stable "
                                                 "per-instance loot in same and reversed visit "

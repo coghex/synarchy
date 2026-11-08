@@ -180,11 +180,14 @@ is their record:
   lifecycle, registration and creation-boundary groups; `Transfer context menu`
   itself for cancellation, exactly-once outcome reporting and session creation;
   and `Unit transfer Lua API` for the request vocabulary.
-- **Probes:** `tools/unified_transfer_probe.py` is [#1255]'s end-to-end gate,
-  reporting eight stages (`setup`, `knowledge`, `modeB`, `modeA`, `batch`,
-  `widget`, `save`, `load`) across two engine processes.
-  `tools/transfer_order_probe.py` and `tools/transfer_context_menu_probe.py`
-  cover the order lifecycle and the menu surface on their own.
+- **Probes:** [#1255]'s end-to-end gate was replaced by focused coverage
+  (#2935; the check-by-check map is
+  `docs/archive/transfer_end_to_end_probe_coverage_map.md`).
+  `tools/transfer_context_menu_probe.py` carries the menu surface and the
+  `modeB` / `modeA` gesture stages (real right-clicks on rendered rows across
+  every ordered endpoint-class pair, in both modes);
+  `tools/transfer_order_probe.py` carries the order lifecycle and the
+  fresh-process durable-identity re-check.
 
 ## Desired experience
 
