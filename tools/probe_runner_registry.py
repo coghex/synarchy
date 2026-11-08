@@ -212,7 +212,7 @@ PROBES = [
      "broader persistence contract sweep: a real generated-world "
      "representative scenario (craft bill, mine designation, identity) "
      "through the same three-cycle fresh-process structural comparison "
-     "(#767)"),
+     "(#767); 1500 s timeout budget, not a measured runtime (#2940)"),
     ("persistence_integrity", "persistence_integrity_probe.py",
      "shared save/load integrity graph: a genuinely dangling Lua AI reference "
      "survives a save/restart/load round trip as a non-blocking diagnostic, "
@@ -510,6 +510,15 @@ PROBE_TIMEOUT_OVERRIDES: dict[str, float] = {
     # The documented ~30-minute, two-boot scenario (docs/engine_contracts.md,
     # "The expedition loop") gets a 3600s budget with margin, not a measured runtime.
     "expedition_loop": 3600.0,
+    # The persistence sweep nests ten probes (nine others plus `construction`,
+    # `--jobs 2`). Measured run ba00c8d8 (master 848d0e01f, 2026-11-07): the
+    # sweep's own phase 168.6s, nested `construction` 574s, and
+    # `transactional_load` (~158s) dispatched when `construction` finished,
+    # so 168.6 + 573.9 + ~158 = ~900.5s: just past the 900s default, which
+    # cut the run off. 1500s leaves ~600s of margin over that critical path.
+    # A budget, not a measured runtime, like the entry above (#2940); the
+    # nested probes keep their own default budgets.
+    "persistence_contract_sweep": 1500.0,
 }
 
 

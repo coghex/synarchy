@@ -60,6 +60,7 @@ Exit code 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import json
 import os
@@ -1283,6 +1284,25 @@ def phase_cancel_refund(port: int) -> None:
                "bt.exitPlacement(); return 'ok'")
 
 
+def timing_line(label: str, seconds: float) -> None:
+    """One flushed whole-stage duration record (#2940). `label` is `boot`,
+    `bootstrap` or a canonical PHASES key; the line is flushed so a probe
+    killed by the runner's timeout still leaves the stages it finished in
+    the output the runner keeps."""
+    print(f"  [timing] {label}: {seconds:.1f} s", flush=True)
+
+
+@contextlib.contextmanager
+def timed(label: str):
+    """Report the monotonic elapsed time of the wrapped stage, also when it
+    raises. Pure reporting: it asserts nothing and changes no wait."""
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        timing_line(label, time.monotonic() - start)
+
+
 # Order matters: the stake phase runs LAST — the staked portal spawns
 # its starting roster (building_spawn.lua auto-loads at boot), and six
 # fresh acolytes + a stocked technomule would contaminate any phase
@@ -1309,7 +1329,8 @@ def main() -> int:
     tmpdir = tempfile.mkdtemp(prefix="construction_probe_")
     try:
         root = make_isolated_root(tmpdir)
-        proc = boot(args.port, log=LOG, args=["--resource-root", root])
+        with timed("boot"):
+            proc = boot(args.port, log=LOG, args=["--resource-root", root])
         return _run(args, proc)
     finally:
         probe_evidence.discard_scratch(tmpdir)
@@ -1317,13 +1338,15 @@ def main() -> int:
 
 def _run(args, proc) -> int:
     try:
-        bootstrap(args.port)
+        with timed("bootstrap"):
+            bootstrap(args.port)
         if not wid(args.port):
             print("FAIL: no active world after arena build", file=sys.stderr)
             return 2
-        todo = PHASES.values() if args.phase == "all" else [PHASES[args.phase]]
-        for phase in todo:
-            phase(args.port)
+        todo = PHASES if args.phase == "all" else [args.phase]
+        for key in todo:
+            with timed(key):
+                PHASES[key](args.port)
     finally:
         quit_engine(args.port, proc)
         try:

@@ -95,9 +95,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 # ── Durable phase records (#1768) ─────────────────────────────────────
 #
-# This sweep spends most of its (900 s default) budget inside four long
-# phases, and until #1768 it named them with unflushed `=== ... ===`
-# prose. `tools/run_probes.py` launches it as a plain `python3` into a
+# This sweep spends most of its (1500 s `PROBE_TIMEOUT_OVERRIDES`, #2940)
+# budget inside four long phases, and until #1768 it named them with
+# unflushed `=== ... ===` prose. `tools/run_probes.py` launches it as a plain `python3` into a
 # pipe it drains only at exit, so at a timeout those lines died in this
 # process's own block buffer and the failure artifact named no phase at
 # all. Every phase entry now goes through `announce_phase` below, which
