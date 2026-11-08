@@ -907,7 +907,6 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | Probe | Gates | Boot | Purpose |
 |-------|-------|------|---------|
 | `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. The chop fixture is located with the authoritative `world.findHarvestableFlora(..., 'wood')` query from origins covering the loaded region, and exits **2** (not 1) when no wood-bearing flora is found at all, so an unestablished fixture reads differently from a broken contract (#1398). Also drives starting-portal placement through the real remote-settlement confirmation (#779/#1399): the click records `buildTool.remoteWarning`/`presented` and spawns nothing, and only `establishHere()` records `confirmed` then `buildTool.commitPlacement`/`accepted` with exactly one new building id. |
-| `bleeding_trail_probe.py` | #882, #883 | arena | Ongoing bleeding, both halves off one accumulator. Trails (`Blood.Trail`): a moving, externally-bled unit leaves distance/cadence-gated marks along its route within documented bounds, invariant to `world.setTimeScale`; clot progression and an internal-only wound stop/suppress marks; death mid-route stops the trail cleanly. Pooling (`Blood.Pool`): a stationary or collapsed bleeder instead grows a clustered pool of layered additive spawns that saturates at the documented per-cluster bound, stops early on clot, survives walk↔stop transitions, drops its cluster at death while the marks persist and age, stays independent between adjacent bleeders, and keeps the same density under `world.setTimeScale` (`blood.getTrailState`, `blood.listTextures`). |
 | `blood_decal_probe.py` | #604, #606 | arena | Blood decal model + procedural texture generation: descriptor reuse/eviction, `blood.getRenderQuads()` render records, wetness-tint aging. |
 | `blood_impact_probe.py` | #607 | arena | Wound-kind/severity -> impact-blood mapping (`Blood.Impact`) driven through the debug `unit.injure` path. |
 | `canteen_instance_probe.py` | #1220 | arena | The two water AI actions mutate the canteen INSTANCE they selected, not the first same-def match: `drinkExecute` drains the chosen full canteen (leaving an earlier empty one alone, credit == water removed), `refillExecute` fills the chosen empty canteen (leaving an earlier full one alone). Opposite inventory orderings — each reproduces one bug and would mask the other. |
@@ -1881,7 +1880,7 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-The 36 migrated probes are `bleeding_trail`, `blood_decal`, `blood_impact`, `circadian`,
+The 35 migrated probes are `blood_decal`, `blood_impact`, `circadian`,
 `circadian_species`, `collapse_crawl`, `concussion_revive`, `config_migration`,
 `config_state`, `crop`, `disarm`, `injury_log`, `item_temp`, `lua_orphan_prune`,
 `machine_shop`, `meal_waste`, `mental_efficiency`, `movement`, `multiworld_save`,
@@ -1901,15 +1900,13 @@ checks if continuing would jump over an unobserved check. Teardown failures
 are diagnostics plus a nonzero exit, never an out-of-order check. Focused
 migration tests cover these paths without an engine.
 
-The latest five are `movement`, `bleeding_trail`, `multiworld_save`,
-`persistence_integrity`, and `plant`. `movement` declares the registry's default
+The latest batch added `movement`, `multiworld_save`, `persistence_integrity`
+and `plant` (and one probe since retired). `movement` declares the registry's default
 `--mode move --course corner_trap` invocation; its other course, stamina, and
 pacing modes retain their standalone CLI and are refused before boot in protocol
 mode. `--list` remains a no-engine query for every mode. `multiworld_save
 --describe --arena` declares the arena variant's own ordered checks; the lab's
-registered default continues to test two generated worlds. Blood-trail checks
-aggregate each existing scenario's fail-fast assertions under one stable ID;
-its final spawn-surface log guard is a separate check. The save and planting
+registered default continues to test two generated worlds. The save and planting
 probes retain their existing fixtures, isolated roots where present, and
 cleanup behavior. No CI classifications or census tolerances change.
 
