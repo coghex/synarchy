@@ -109,6 +109,14 @@ class AdapterChecks(unittest.TestCase):
         self.assertEqual(set(self.probes()), expected)
         self.assertEqual(len(self.suites), len(set(self.suites)))
 
+    def test_expedition_loop_is_registered_but_opt_in_only(self):
+        # #2934: the lab never offers it, yet it stays registered with its long timeout.
+        key = "expedition_loop"
+        self.assertIn(key, self.module.OPT_IN_ONLY)
+        self.assertNotIn(key, self.probes())
+        self.assertIn(key, {name for name, _, _ in probe_runner_registry.PROBES})
+        self.assertEqual(probe_runner_registry.effective_timeout(key), 3600)
+
     def test_retired_migration_key_is_unknown_before_engine_launch(self):
         key = "save_compat_migration"
         self.assertNotIn(key, self.probes())
