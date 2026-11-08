@@ -73,11 +73,21 @@ Checks:
      it — the developer's saves/ is never read, written or rotated
      (#1616).
 
+The six sites (A, B, E near the origin; C, D, F far away) are a FIXED,
+deterministic fixture, not a search over natural terrain (#2938): before
+the first check the probe raises two small plateaus with ordinary
+`world.addTile` edits (see `SITES`, `NEAR_PATCH`, `FAR_PATCH`) and
+verifies, by reading them back, that every patch tile is flat, dry and
+flora-free at one uniform height. The till, plant, grow and auto-harvest
+chain below is still the real acolyte AI; only the ground it works on is
+authored. Elapsed seconds are printed per phase (`PhaseClock`).
+
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, os, shutil, socket, stat, subprocess, sys, tempfile, \
        time, uuid
+import probe_engine
 import probe_evidence
 from probelib import (boot, capture_request_id, clear_find_water, quit_engine,
                       send, send_json, wait_load_published, wait_save_complete)
@@ -134,7 +144,7 @@ def make_isolated_root(base: str) -> str:
     personal `config/save.local.yaml` out of the run: `scripts/init.lua`
     loads the autosave scheduler, so a local autosave interval could
     otherwise fire a competing save partway through this probe's
-    eleven-minute run and rotate slots underneath it.
+    long run and rotate slots underneath it.
     """
     root = os.path.join(base, "root")
     os.makedirs(root, exist_ok=True)
@@ -175,7 +185,7 @@ def remove_run_root(base: str) -> bool:
     return True
 
 
-def save_and_reload(port, page, slot):
+def save_and_reload(port, page, slot, mark=None):
     """The persistence round trip, tied at every step to THIS run's own
     requests (#1616).
 
@@ -206,6 +216,8 @@ def save_and_reload(port, page, slot):
     if not isinstance(save_status, dict) or save_status.get("id") != save_id:
         return (f"save '{slot}' reported terminal status {save_status!r}, "
                 f"which does not carry this run's request id {save_id}")
+    if mark:
+        mark("save")
 
     loaded = send(port, f"return engine.loadSave('{slot}')")
     if loaded.strip() != "true":
@@ -221,6 +233,8 @@ def save_and_reload(port, page, slot):
     if not isinstance(load_status, dict) or load_status.get("id") != load_id:
         return (f"load '{slot}' reported terminal status {load_status!r}, "
                 f"which does not carry this run's request id {load_id}")
+    if mark:
+        mark("load_publish")
     return None
 
 
@@ -240,38 +254,232 @@ def bootstrap(port):
             send(port, f"{fn}('{path}'); return 'ok'")
 
 
-def find_tillable(port, cx=0, cy=0, span=4, exclude=None):
-    """Scan sample points around (cx,cy) for a flat, dry, flora-free
-    tile not already in `exclude`; returns (gx, gy) or None.
+# --- The fixed tillable fixture (#2938) -------------------------------
+#
+# This probe used to FIND six tillable sites by scanning natural terrain
+# over the console (step 4 over a 33 x 33 window, up to three queries per
+# point), which cost about 546 of a 660 s run on one measured seed and
+# scaled with however few flat dry tiles the world happened to place near
+# the origin. The sites are now authored: two plateaus raised with the
+# ordinary player edit `world.addTile` (`WeAddTile`), whose replay
+# persists them through save/load exactly like the AI's plantings.
+#
+# `WeAddTile` raises a column's terrain top by ONE z, gives the new top
+# cell slope 0 (flat), removes any flora rooted on the tile and displaces
+# any fluid the fill reaches (`World.Edit.Apply`). Raising every tile of a
+# patch to ONE height above the highest surface under it (fluid
+# included) therefore yields flat, dry, flora-free ground that is also
+# one contiguous walkable level. There is no fallback to a natural-terrain
+# search: a patch that does not read back as specified fails the run with
+# a diagnostic, because a silently different fixture would change what
+# the checks mean.
+PAGE = "probe"
+PATCH_MATERIAL = "loam"
+# Extra z above the highest existing surface under a patch; one is enough
+# to touch every tile, the second clears a fluid ceiling that sits above
+# the rendered surface.
+PATCH_MARGIN = 2
 
-    ``world.getFluidAt`` is a MULTI-RETURN query whose ARITY is the
-    contract (`Engine.Scripting.Lua.API.WorldQuery.Fluid`): a fluid tile
-    pushes TWO values — the type string and the fluid surface z — while a
-    dry tile, and one whose chunk is not loaded, pushes a single nil. The
-    debug console joins several return values with tabs, so asking for
-    both back yields text like ``river\t12``, never anything JSON-shaped.
-    Bind the first return alone: a nonempty first value IS the fluid type,
-    and means WET. ``getFloraAt`` really is table-or-nil
-    (`Engine.Scripting.Lua.API.Forage.Query`), so its dict test below is
-    correct as written.
+#: (x0, y0, x1, y1), inclusive tile bounds. Both lie inside the chunks
+#: `world.loadChunksInRegion(-4, -4, 4, 4)` loads (tiles -64..79).
+NEAR_PATCH = (0, 0, 10, 10)
+FAR_PATCH = (-62, -62, -52, -52)
+
+#: Site -> tile. A (groundcover, full AI loop), B (row crop, AI-planted)
+#: and E (mid-job re-designation) are on the near patch where the worker
+#: operates; C (direct-primitive checks), D (rot timeline) and F (category
+#: field) are on the far patch, beyond the worker's harvest scan range, so
+#: the acolyte working A/B/E can never find them and confound the
+#: "ignored crop rots" check.
+SITES = {
+    "A": (2, 2), "B": (8, 2), "E": (2, 8),
+    "C": (-60, -60), "D": (-54, -60), "F": (-60, -54),
+}
+NEAR_SITES = ("A", "B", "E")
+FAR_SITES = ("C", "D", "F")
+
+#: Where the worker is spawned: `spawn_worker(ax + 2, ay)`.
+WORKER_SPAWN = (SITES["A"][0] + 2, SITES["A"][1])
+
+#: `till_scan_range` / `plant_scan_range` and `harvest_scan_range` in
+#: scripts/unit_ai_tunables.lua.
+WORK_SCAN_RANGE = 30.0
+HARVEST_SCAN_RANGE = 24.0
+LOADED_TILES = (-64, 79)
+
+
+def _in_rect(rect, xy):
+    x0, y0, x1, y1 = rect
+    return x0 <= xy[0] <= x1 and y0 <= xy[1] <= y1
+
+
+def _dist_to_rect(rect, xy):
+    x0, y0, x1, y1 = rect
+    dx = max(x0 - xy[0], 0, xy[0] - x1)
+    dy = max(y0 - xy[1], 0, xy[1] - y1)
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def validate_layout(sites=None, near=NEAR_PATCH, far=FAR_PATCH,
+                    spawn=WORKER_SPAWN):
+    """Geometry the fixture promises, checked without an engine.
+
+    Returns a list of problems (empty when sound): six distinct sites;
+    near sites on the near patch and within the worker's work-search range
+    of its spawn; far sites on the far patch and farther than the harvest
+    scan range from every tile of the near patch and from the spawn; both
+    patches inside the tiles the probe loads.
     """
-    exclude = exclude or set()
-    for sx in range(cx - span * 16, cx + span * 16 + 1, 4):
-        for sy in range(cy - span * 16, cy + span * 16 + 1, 4):
-            if (sx, sy) in exclude:
-                continue
-            slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
-            if slope != 0:
-                continue
-            fluid = send_json(port, f"local t = world.getFluidAt({sx},{sy}); "
-                                    f"return t")
-            if isinstance(fluid, str) and fluid:
-                continue
-            flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
-            if isinstance(flora, dict):
-                continue
-            return sx, sy
-    return None
+    sites = SITES if sites is None else sites
+    problems = []
+    if len(set(sites.values())) != len(sites):
+        problems.append("sites are not all distinct tiles")
+    lo, hi = LOADED_TILES
+    for name, rect in (("near", near), ("far", far)):
+        if min(rect) < lo or max(rect) > hi:
+            problems.append(f"{name} patch {rect} leaves the loaded "
+                            f"tiles {lo}..{hi}")
+    if not _in_rect(near, spawn):
+        problems.append(f"worker spawn {spawn} is off the near patch")
+    for name in NEAR_SITES:
+        xy = sites[name]
+        if not _in_rect(near, xy):
+            problems.append(f"site {name} {xy} is off the near patch")
+        d = ((xy[0] - spawn[0]) ** 2 + (xy[1] - spawn[1]) ** 2) ** 0.5
+        if d >= WORK_SCAN_RANGE:
+            problems.append(f"site {name} is {d:.1f} tiles from the worker, "
+                            f"outside its {WORK_SCAN_RANGE:.0f}-tile work "
+                            f"search")
+    for name in FAR_SITES:
+        xy = sites[name]
+        if not _in_rect(far, xy):
+            problems.append(f"site {name} {xy} is off the far patch")
+        for what, d in (("near patch", _dist_to_rect(near, xy)),
+                        ("worker spawn",
+                         ((xy[0] - spawn[0]) ** 2
+                          + (xy[1] - spawn[1]) ** 2) ** 0.5)):
+            if d <= HARVEST_SCAN_RANGE:
+                problems.append(f"site {name} is {d:.1f} tiles from the "
+                                f"{what}, inside the {HARVEST_SCAN_RANGE:.0f}"
+                                f"-tile harvest scan")
+    return problems
+
+
+def build_flat_patch(port, rect, timeout=90.0):
+    """Raise every tile of `rect` to one height and wait for it to land.
+
+    Returns `(target_z, None)` on success, or `(None, diagnostic)`.
+    `world.addTile` only ENQUEUES its edit, so success is judged by
+    reading every tile back (terrain top and rendered surface equal to the
+    target, slope 0, no fluid, no flora), never by the call returning.
+    """
+    x0, y0, x1, y1 = rect
+    plan = send_json(port, (
+        f"local top=nil local bad=0 "
+        f"for x={x0},{x1} do for y={y0},{y1} do "
+        f"local s=world.getTerrainAt(x,y,'{PAGE}') "
+        f"if s==nil then return {{unloaded=x..','..y}} end "
+        f"if top==nil or s>top then top=s end end end "
+        f"local target=top+{PATCH_MARGIN} local n=0 "
+        f"for x={x0},{x1} do for y={y0},{y1} do "
+        f"local s,t=world.getTerrainAt(x,y,'{PAGE}') "
+        f"for i=t+1,target do "
+        f"if world.addTile('{PAGE}',x,y,'{PATCH_MATERIAL}') then n=n+1 "
+        f"else bad=bad+1 end end end end "
+        f"return {{target=target,edits=n,refused=bad}}"), timeout=60.0)
+    if not isinstance(plan, dict) or "target" not in plan:
+        return None, f"patch {rect} could not be planned: {plan!r}"
+    if plan.get("refused"):
+        return None, (f"patch {rect}: world.addTile refused "
+                      f"{plan['refused']} edit(s) for material "
+                      f"'{PATCH_MATERIAL}'")
+    target = plan["target"]
+    total = (x1 - x0 + 1) * (y1 - y0 + 1)
+    check = (f"local ok=0 local first=nil "
+             f"for x={x0},{x1} do for y={y0},{y1} do "
+             f"local s,t=world.getTerrainAt(x,y,'{PAGE}') "
+             f"local sl=world.getSlopeAt(x,y) local f=world.getFluidAt(x,y) "
+             f"local fl=world.getFloraAt(x,y) "
+             f"if t=={target} and s=={target} and sl==0 and f==nil "
+             f"and fl==nil then ok=ok+1 elseif first==nil then "
+             f"first={{x=x,y=y,surface=s,terrain=t,slope=sl,fluid=f,"
+             f"flora=(fl~=nil)}} end end end "
+             f"return {{ok=ok,first_bad=first}}")
+    deadline = time.monotonic() + timeout
+    state = None
+    while time.monotonic() < deadline:
+        state = send_json(port, check, timeout=30.0)
+        if isinstance(state, dict) and state.get("ok") == total:
+            return target, None
+        time.sleep(0.5)
+    return None, (f"patch {rect} did not settle to a flat, dry, flora-free "
+                  f"level at z={target} within {timeout:.0f}s "
+                  f"({plan['edits']} edits queued): {state!r}")
+
+
+def build_fixture(port):
+    """Build both plateaus and verify all six sites; `(ok, message)`."""
+    problems = validate_layout()
+    if problems:
+        return False, "fixture layout is unsound: " + "; ".join(problems)
+    heights = {}
+    for label, rect in (("near", NEAR_PATCH), ("far", FAR_PATCH)):
+        z, why = build_flat_patch(port, rect)
+        if z is None:
+            return False, why
+        heights[label] = z
+        print(f"  fixture: {label} patch {rect} flat, dry and flora-free "
+              f"at z={z}")
+    for name, (gx, gy) in SITES.items():
+        want = heights["near" if name in NEAR_SITES else "far"]
+        st = send_json(port, f"local s,t=world.getTerrainAt({gx},{gy},"
+                             f"'{PAGE}') return {{s=s,t=t}}")
+        s = st.get("s") if isinstance(st, dict) else None
+        t = st.get("t") if isinstance(st, dict) else None
+        slope = send_json(port, f"return world.getSlopeAt({gx},{gy})")
+        fluid = send_json(port, f"local t=world.getFluidAt({gx},{gy}) "
+                                f"return t")
+        flora = send_json(port, f"return world.getFloraAt({gx},{gy})")
+        tilled = send_json(port, f"return world.isPlantable({gx},{gy})")
+        if not (s == want and t == want and slope == 0
+                and not fluid and not isinstance(flora, dict)
+                and tilled is not True):
+            return False, (f"site {name} ({gx},{gy}) is not a flat, dry, "
+                           f"flora-free, untilled tile at z={want}: "
+                           f"surface={s} terrain={t} slope={slope!r} "
+                           f"fluid={fluid!r} flora={flora!r} "
+                           f"plantable={tilled!r}")
+    return True, "all six sites verified"
+
+
+class PhaseClock:
+    """Monotonic per-phase elapsed seconds (#2938).
+
+    `mark(name)` closes the phase that began at the previous mark (or at
+    construction) and prints it, so a long run reports as it goes and the
+    table at the end needs no stamping wrapper. `time.monotonic` never
+    jumps with the wall clock.
+    """
+
+    def __init__(self, now=time.monotonic):
+        self._now = now
+        self.start = self.last = now()
+        self.rows = []
+
+    def mark(self, name):
+        t = self._now()
+        self.rows.append((name, t - self.last))
+        self.last = t
+        print(f"  [phase] {name}: {self.rows[-1][1]:.1f}s "
+              f"(t+{t - self.start:.1f}s)", flush=True)
+
+    def table(self):
+        total = self._now() - self.start
+        width = max([len(n) for n, _ in self.rows] + [len("total")])
+        lines = ["", "PHASE TIMES (seconds)"]
+        lines += [f"  {n:<{width}}  {d:8.1f}" for n, d in self.rows]
+        lines.append(f"  {'total':<{width}}  {total:8.1f}")
+        return "\n".join(lines)
 
 
 def till_and_wait(port, page, gx, gy, z):
@@ -699,6 +907,7 @@ def main():
     # try, so a staging failure — which happens before any boot — sends
     # no `engine.quit()` at an engine that is somebody else's.
     proc = None
+    clock = None
     try:
         root = make_isolated_root(base)
         # Unique per invocation as well as per root, so the slot NAME alone
@@ -707,56 +916,49 @@ def main():
         print(f"isolated resource root: {root}", flush=True)
         print(f"save slot: {slot}", flush=True)
 
+        clock = PhaseClock()
+        prepared = os.environ.get(probe_engine.ENV_ENGINE_EXE, "").strip()
+        print("  boot phase "
+              + ("excludes the engine build (runner-prepared "
+                 f"${probe_engine.ENV_ENGINE_EXE})" if prepared else
+                 "INCLUDES any engine build preparation (no prebuilt "
+                 "executable supplied; a warm build is a no-op)"),
+              flush=True)
         proc = boot(port, f"{SPROOT}/farm_ai_probe_engine.log",
                     args=["--resource-root", root])
         bootstrap(port)
+        clock.mark("boot_and_content")
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
                    f"{args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
         send(port, "world.show('probe'); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
+        clock.mark("world_init_and_chunks")
 
-        # Four distinct tiles: A (groundcover, full till+plant+harvest AI
-        # loop) and B (row crop, AI-planted) near the origin; C and D
-        # (direct-primitive checks: refusal + a single real plant, and
-        # the rot timeline, respectively — a planted tile now refuses a
-        # second planting, so the rot check needs its OWN fresh tile
-        # rather than replanting C) far enough away (>24 tiles, past
-        # harvest_scan_range) that the acolyte working A/B can never
-        # stumble onto them and confound the "ignored crop rots" check.
-        used = set()
-        tA = find_tillable(port)
-        if not tA:
-            print("  [FAIL] no tillable tile found for site A (try another seed)")
+        # Six fixed sites on two authored plateaus (#2938): A (groundcover,
+        # full till+plant+harvest AI loop), B (row crop, AI-planted) and E
+        # (mid-job re-designation) near the origin; C (direct-primitive
+        # checks: refusal + a single real plant), D (the rot timeline) and
+        # F (category field) far enough away (>24 tiles, past
+        # harvest_scan_range) that the acolyte working A/B/E can never
+        # stumble onto them and confound the "ignored crop rots" check. A
+        # planted tile refuses a second planting, so the rot check needs
+        # its OWN fresh tile rather than replanting C.
+        built, why = build_fixture(port)
+        if not built:
+            print(f"  [FAIL] fixture setup failed: {why}")
             return 1
-        used.add(tA)
-        tB = find_tillable(port, exclude=used)
-        if not tB:
-            print("  [FAIL] no tillable tile found for site B (try another seed)")
-            return 1
-        used.add(tB)
-        tC = find_tillable(port, cx=-60, cy=-60, exclude=used)
-        if not tC:
-            print("  [FAIL] no tillable tile found for site C (try another seed)")
-            return 1
-        used.add(tC)
-        tD = find_tillable(port, cx=-60, cy=-60, exclude=used)
-        if not tD:
-            print("  [FAIL] no tillable tile found for site D (try another seed)")
-            return 1
-        used.add(tD)
-        tF = find_tillable(port, cx=-60, cy=-60, exclude=used)
-        if not tF:
-            print("  [FAIL] no tillable tile found for site F (try another seed)")
-            return 1
+        clock.mark("fixture")
+        tA, tB, tE = (SITES[k] for k in NEAR_SITES)
+        tC, tD, tF = (SITES[k] for k in FAR_SITES)
         ax, ay = tA
         bx, by = tB
         cx, cy = tC
         dx, dy = tD
         fx, fy = tF
         print(f"  site A={tA} (groundcover) B={tB} (row, AI) C={tC} (row, direct) "
-              f"D={tD} (row, rot) F={tF} (category field)")
+              f"D={tD} (row, rot) F={tF} (category field) E={tE} (re-designation)")
 
         # --- 1/2/3. Direct-primitive plantRowCropAt checks (tile C) ---
         refused0 = growth_entries(port, cx, cy, "tomato_plant")
@@ -876,6 +1078,8 @@ def main():
               f"category: row={dcat_row} ground={dcat_ground}")
         send(port, f"plant.cancelDesignation({fx},{fy}); return 'ok'")
 
+        clock.mark("direct_primitive_checks")
+
         # --- 6/7/8. Full AI loop: till (A) -> plant (A, wheat) ->
         #     plant (B, tomato_plant, pre-tilled) ---
         send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); "
@@ -897,6 +1101,7 @@ def main():
         send(port, f"plant.designate('probe',{bx},{by},'tomato_plant'); "
                    f"return 'ok'")
 
+        clock.mark("ai_setup")
         deadline = time.time() + 90.0
         tilled = False
         while time.time() < deadline:
@@ -904,6 +1109,7 @@ def main():
             if send_json(port, f"return world.isPlantable({ax},{ay})") is True:
                 tilled = True
                 break
+        clock.mark("ai_till_wait")
         ok6a = tilled
         passed &= ok6a
         print(f"  [{'PASS' if ok6a else 'FAIL'}] acolyte tills site A "
@@ -930,6 +1136,7 @@ def main():
                     b_iid = eb[0].get("instanceId")
             if planted_a and planted_b:
                 break
+        clock.mark("ai_plant_wait")
         ok6 = planted_a
         passed &= ok6
         print(f"  [{'PASS' if ok6 else 'FAIL'}] acolyte plants wheat at site A "
@@ -1044,6 +1251,7 @@ def main():
                 break
             time.sleep(0.5)
 
+        clock.mark("auto_harvest")
         farming_after_harvest = get_skill(port, uid, "farming")
         xp_grew = farming_after_harvest > farming_after_plant
 
@@ -1081,11 +1289,6 @@ def main():
         #     plant.designate replaces in place (HM.insert), so a player
         #     can swap the crop mid-job; the AI must notice and plant
         #     whatever's there NOW, not what it walked over for. ---
-        tE = find_tillable(port, exclude=used)
-        if not tE:
-            print("  [FAIL] no tillable tile found for site E (try another seed)")
-            return 1
-        used.add(tE)
         ex, ey = tE
         ez = send_json(port, f"local sz=world.getSurfaceAt({ex},{ey}); return sz")
         till_and_wait(port, "probe", ex, ey, ez)
@@ -1117,6 +1320,7 @@ def main():
             print(f"  [FAIL] acolyte never claimed the re-designation test "
                   f"wheat job (last plantJob={job!r})")
             return 1
+        clock.mark("redesignation_setup_and_claim")
         send(port, "engine.setPaused(true); return 'ok'")
         try:
             held = send(port, plant_job_lua).strip('"')
@@ -1174,6 +1378,7 @@ def main():
             planted_new, new_fail = growth_read(port, ex, ey, "tomato_plant")
             if planted_new:
                 break
+        clock.mark("redesignation_swap_and_plant")
         time.sleep(1.0)
         de = send_json(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
         planted_stale = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
@@ -1205,7 +1410,8 @@ def main():
                   f"site {tag} still exists right before the save "
                   f"(instanceId {fiid}): {now} read_failure={fail!r}")
 
-        failure = save_and_reload(port, "probe", slot)
+        clock.mark("pre_save_reads")
+        failure = save_and_reload(port, "probe", slot, mark=clock.mark)
         if failure:
             print(f"  [FAIL] {failure}")
             return 1
@@ -1219,6 +1425,7 @@ def main():
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
         time.sleep(3.0)
+        clock.mark("reload_chunks_and_settle")
         for tag, (fx, fy, fiid) in followed.items():
             after, fail = growth_read(port, fx, fy, "tomato_plant")
             ok11 = fail is None and any(
@@ -1243,6 +1450,8 @@ def main():
         # listening is exactly why a boot fails on a busy port), and
         # `engine.quit()` would be aimed at their engine. Cleanup of the
         # root stays unconditional: that directory is ours either way.
+        if clock is not None:
+            print(clock.table(), flush=True)
         if proc is not None:
             quit_engine(port, proc)
         cleaned = remove_run_root(base)
