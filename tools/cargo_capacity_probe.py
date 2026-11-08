@@ -12,8 +12,8 @@ PASS  = final stored weight <= capacity (fix).
 FAIL  = final stored weight  > capacity (bug overfilled the cargo).
 """
 from __future__ import annotations
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, json, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, load_definitions
 
 PORT = 9009
 LOG = "/tmp/cargo_capacity_probe_engine.log"
@@ -28,19 +28,7 @@ def num(lua: str):
 
 
 def bootstrap():
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(PORT, f"{fn}('{path}'); return 'ok'")
+    load_definitions(PORT)
     send(PORT, "pcall(function() require('scripts.unit_ai').update=function() end end); "
          "return 'ai-off'")
     send(PORT, "require('scripts.movement_arena'); return 'ok'")

@@ -3,7 +3,7 @@
 
 ENGINE-FREE, and deliberately so: `tools/farm_ai_probe.py` boots a real
 headless engine and generates a world, so its phase-9 capstone is only
-ever exercised by an eleven-minute manual run. Nothing here boots an
+ever exercised by a long manual run. Nothing here boots an
 engine, opens a TCP console or generates a world.
 
 The defect (#1760): phase 9 scored the auto-harvest by catching
@@ -318,6 +318,69 @@ def test_diagnostics_distinguish_the_two_failures() -> None:
           "nowhere -- never observed" in empty, empty)
     check("a never-produced run records no harvest gids",
           "world.harvestFlora: none" in empty, empty)
+
+
+# ---------------------------------------------------------------------
+# The fixed fixture's geometry and the phase clock (#2938)
+# ---------------------------------------------------------------------
+
+def test_fixture_layout_is_sound() -> None:
+    problems = probe.validate_layout()
+    check("the shipped fixture layout has no geometry problems",
+          problems == [], "; ".join(problems))
+    check("six distinct named sites",
+          sorted(probe.SITES) == ["A", "B", "C", "D", "E", "F"]
+          and len(set(probe.SITES.values())) == 6)
+
+
+def test_layout_rejects_unsound_geometry() -> None:
+    near_bad = dict(probe.SITES, C=(probe.SITES["A"][0] + 5,
+                                    probe.SITES["A"][1]))
+    check("a far site inside the harvest scan range is rejected",
+          any("harvest scan" in m
+              for m in probe.validate_layout(near_bad)))
+    same = dict(probe.SITES, B=probe.SITES["A"])
+    check("duplicate site tiles are rejected",
+          any("distinct" in m for m in probe.validate_layout(same)))
+    off = dict(probe.SITES, E=(40, 40))
+    check("a near site off the near patch is rejected",
+          any("off the near patch" in m for m in probe.validate_layout(off)))
+    check("a patch outside the loaded tiles is rejected",
+          any("loaded" in m for m in probe.validate_layout(
+              near=(0, 0, 200, 10))))
+    far_spawn = (60, 60)
+    check("a spawn too far from a near site is rejected",
+          any("work" in m for m in probe.validate_layout(
+              spawn=far_spawn, near=(0, 0, 70, 70))))
+
+
+def test_far_sites_clear_of_everything_the_worker_reaches() -> None:
+    near, spawn = probe.NEAR_PATCH, probe.WORKER_SPAWN
+    for name in probe.FAR_SITES:
+        xy = probe.SITES[name]
+        check(f"site {name} is beyond the harvest scan range of every near "
+              f"tile and the spawn",
+              probe._dist_to_rect(near, xy) > probe.HARVEST_SCAN_RANGE
+              and ((xy[0] - spawn[0]) ** 2 + (xy[1] - spawn[1]) ** 2) ** 0.5
+              > probe.HARVEST_SCAN_RANGE)
+    for name in probe.NEAR_SITES:
+        xy = probe.SITES[name]
+        check(f"site {name} is inside the worker's work-search range",
+              ((xy[0] - spawn[0]) ** 2 + (xy[1] - spawn[1]) ** 2) ** 0.5
+              < probe.WORK_SCAN_RANGE)
+
+
+def test_phase_clock_reports_each_phase_and_the_total() -> None:
+    ticks = iter([100.0, 103.5, 110.0, 111.0])
+    clock = probe.PhaseClock(now=lambda: next(ticks))
+    clock.mark("boot")
+    clock.mark("fixture")
+    table = clock.table()
+    check("phase durations are differences of consecutive marks",
+          clock.rows == [("boot", 3.5), ("fixture", 6.5)], repr(clock.rows))
+    check("the table lists every phase and the monotonic total",
+          "boot" in table and "fixture" in table and "total" in table
+          and "11.0" in table, table)
 
 
 def main() -> int:

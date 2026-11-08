@@ -81,7 +81,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import shutil
@@ -91,7 +90,8 @@ import time
 from pathlib import Path
 
 import probe_evidence
-from probelib import (boot, quit_engine, send, send_json, wait_load_published,
+from probelib import (STANDARD_FAMILIES, boot, load_definitions, quit_engine,
+                      send, send_json, wait_load_published,
                       wait_save_complete, capture_request_id)
 from persistence_snapshot import prepare_decoder
 from save_compat_audit_codec import dump_canonical_summary, seed_fixture_tags
@@ -129,41 +129,33 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
+# Where the engine looks scenarios up by name: `<resource root>/scenarios/`,
+# `.yaml` only (`src/Scenario/Path.hs` scenarioFolderName / scenarioExtension).
+SCENARIO_FOLDER = "scenarios"
+SCENARIO_EXTENSION = ".yaml"
+
+
 def scenario_files(root: str) -> list[str]:
-    """Every file under the root whose name says it is a scenario. The
-    probe requires none: restored tags must come from the save alone."""
+    """Every scenario DEFINITION under the root: each `.yaml` file anywhere
+    under `<root>/scenarios/`, whatever its name. The probe requires none:
+    restored tags must come from the save alone. Code that merely mentions
+    scenarios (`scripts/scenario_startup.lua`, #2715) is not a definition
+    and is never matched by name. A missing or empty folder holds none."""
     found = []
-    for dirpath, _dirs, files in os.walk(root, followlinks=True):
-        if "saves" in Path(dirpath).relative_to(root).parts[:1]:
-            continue
+    for dirpath, _dirs, files in os.walk(os.path.join(root, SCENARIO_FOLDER),
+                                         followlinks=True):
         found += [os.path.join(dirpath, f) for f in files
-                  if "scenario" in f.lower()]
-    return found
+                  if f.endswith(SCENARIO_EXTENSION)]
+    return sorted(found)
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml",   "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-        # #2705: the place leg tags real flora and plants a real crop.
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(str(REPO / pattern))):
-            rel = os.path.relpath(path, REPO)
-            send(port, f"{fn}('{rel}'); return 'ok'")
-    # Locations are placed AT world.init from the registry, so they must
-    # be registered first or the generated page carries no location to
-    # tag (mirrors save_compat_audit_generate's _bootstrap_gen_defs).
-    for path in sorted(glob.glob(str(REPO / "data/locations/*.yaml"))):
-        rel = os.path.relpath(path, REPO)
-        send(port, f"engine.loadLocationYaml('{rel}'); return 'ok'")
+    # #2705: the place leg tags real flora and plants a real crop. Locations
+    # are placed AT world.init from the registry, so they must be registered
+    # first or the generated page carries no location to tag (mirrors
+    # save_compat_audit_generate's _bootstrap_gen_defs).
+    load_definitions(port, STANDARD_FAMILIES + ("flora", "location"),
+                     root_dir=str(REPO))
 
 
 def as_int(s: str):

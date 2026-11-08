@@ -16,7 +16,7 @@ Only probes that implement the shared `probe-result/v1` protocol
 `legacy` and is REJECTED before execution, by name, without running the
 probe at all — heuristically parsing free-form stdout is exactly the
 guesswork a reliability harness must not do, and invoking a legacy probe
-to find out would boot a real engine (~11 minutes for `farm_ai`).
+to find out would boot a real engine (many minutes for `farm_ai`).
 
 What this owns, and what it deliberately does not:
 

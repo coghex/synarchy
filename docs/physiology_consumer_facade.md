@@ -207,6 +207,21 @@ authorized.
    Nominal substitute.
 4. **Templating**: no unit definition templates a registry key in `stats:`
    or `skills:`.
+5. **Pure heat read** (#2960): `thermo.readHeatBalance` and the functions it is
+   built from (`heatInputs`, `heatBalance`, `coreDelta`, `feverOffsetOf`,
+   `observeStat`, `observeCalFrac`) call nothing that writes, mutates or draws
+   randomness, no `unit.*` verb outside the audit's `PURE_UNIT_READS` (so not
+   `unit.getStat` / `getStatBase` / `getAllStats`, which lazily roll and cache
+   an unrolled stat; `unit.peekStat` is the non-rolling read), no
+   `physiology.get` of a key that is not a literal registry key, nothing
+   through the effects seam and no reference to the tick's rolling reader
+   `thermo.TICK`. `thermo.tick` must reach `heatInputs`, `heatBalance`,
+   `coreDelta` and `thermo.TICK` itself, and `readHeatBalance` `heatInputs`,
+   `heatBalance` and `thermo.OBSERVE`. The read is how the physiology probe
+   judges a unit against the engine's own rule; the tick running the same
+   functions is what keeps the two from drifting, and a unit holding an
+   unrolled input is reported unobservable (`nil, "unrolled:<stat>"`) rather
+   than rolled.
 
 Scope: all `scripts/**/*.lua` and the Lua embedded in
 `tools/physiology_probe.py` (extracted from its Python string literals; an

@@ -16,14 +16,14 @@ through ``probe_evidence`` (so a failing run keeps its saves and logs), and
 """
 from __future__ import annotations
 
-import glob
 import os
 import re
 import time
 from pathlib import Path
 
-from probelib import (boot, pause_ai, quit_engine, send, wait_load_published,
-                       wait_save_complete, capture_request_id)
+from probelib import (boot, load_definitions, pause_ai, quit_engine, send,
+                      wait_load_published, wait_save_complete,
+                      capture_request_id)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -108,19 +108,7 @@ def make_legacy_root(base: str) -> str:
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port)
 
 
 def boot_probe(root: str, port: int, log: str):

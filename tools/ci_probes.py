@@ -604,8 +604,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "till": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
                                    "exercise the tillable-tile filter; slow AI loop (~7 min observed)"),),
     "farm_ai": (Reason(SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
-                                      "loop across 5 distinct tillable sites; slowest registered "
-                                      "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),),
+                                      "loop across 6 fixed sites on two authored world.addTile plateaus "
+                                      "(#2938); long AI waits, a re-designation and a save/reload "
+                                      "(prints per-phase times)"),),
     # #1440: #922's description already recorded two independent counts.
     "tutorial": (Reason(SLOW_WORLDGEN, "needs TWO real generated worlds for a natural "
                         "lake or river to discover and a water-free camp far from "
