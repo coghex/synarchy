@@ -53,7 +53,7 @@ def test_humanized_aliases_all_name_one_probe() -> None:
 def test_prefix_families_stay_distinct() -> None:
     """Longest-registered-identity wins, PER OCCURRENCE, not per subject."""
     index = inflight.build_identity_index()
-    families = (("repair", "repair_ai"), ("repair", "repair_item"),
+    families = (("repair", "repair_item"),
                 ("power", "power_workshop"),
                 ("persistence_contract", "persistence_contract_sweep"))
     for shorter, longer in families:
@@ -65,20 +65,20 @@ def test_prefix_families_stay_distinct() -> None:
 
     # The two-mention shape is the ONLY place a per-subject suppression
     # rule and a per-occurrence rule differ, so it is pinned explicitly.
-    both = "repair_ai probe regressed after the repair probe changed"
-    check_equal(len(inflight.subject_matches(both, "repair_ai", index)), 1,
+    both = "repair_item probe regressed after the repair probe changed"
+    check_equal(len(inflight.subject_matches(both, "repair_item", index)), 1,
                 "the longer identity matches its own occurrence")
     check_equal(len(inflight.subject_matches(both, "repair", index)), 1,
                 "and a separate standalone repair occurrence matches too")
-    check_equal(inflight.subject_matches(both, "repair_item", index), [],
+    check_equal(inflight.subject_matches(both, "power_workshop", index), [],
                 "an unmentioned family member still does not match")
 
     # Longest-match is positional, so order does not rescue the prefix.
-    reversed_order = "the repair probe and then repair_ai probe"
+    reversed_order = "the repair probe and then repair_item probe"
     check_equal(len(inflight.subject_matches(reversed_order, "repair", index)), 1,
                 "prefix first still yields exactly one repair occurrence")
-    check_equal(len(inflight.subject_matches(reversed_order, "repair_ai", index)), 1,
-                "and one repair_ai occurrence")
+    check_equal(len(inflight.subject_matches(reversed_order, "repair_item", index)), 1,
+                "and one repair_item occurrence")
 
 
 def test_substring_matching_is_not_used() -> None:

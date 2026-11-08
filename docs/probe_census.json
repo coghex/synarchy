@@ -1914,23 +1914,6 @@
         "outcomes": []
       },
       "classification": "manual-only",
-      "key": "repair_ai",
-      "protocol": "legacy",
-      "script": "repair_ai_probe.py"
-    },
-    {
-      "census": {
-        "acceptable_failures": 0,
-        "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
-        "deferred": null,
-        "estimated_worst_case_seconds": null,
-        "history": [],
-        "outcomes": []
-      },
-      "classification": "manual-only",
       "key": "resource_root",
       "protocol": "probe-result/v1",
       "script": "resource_root_probe.py"
