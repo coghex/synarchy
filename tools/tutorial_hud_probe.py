@@ -72,6 +72,12 @@ in-game HUD, then:
      the player already watched retire, across the evaluation tick that
      re-checks both subobjectives against the loaded world.
 
+The world beneath the HUD is held still before any pixel comparison
+(#2942): `hold_world_still` pauses the simulation, clears popups, and
+checks that two captures of the unchanged frame are identical. Without
+it the live world flickers by one luma level across the whole frame and
+every "two captures of an unchanged state" measurement below is unstable.
+
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
 
@@ -100,7 +106,8 @@ from probelib import (boot, capture_request_id, poll_until, quit_engine,
                       send, send_json, wait_load_published,
                       wait_save_complete)
 from offscreen_probe import (screenshot, png_stats, png_differs,
-                             find_widget, click_widget, center_on)
+                             find_widget, click_widget, center_on,
+                             dismiss_popups)
 
 LOG = "/tmp/tutorial_hud_engine.log"
 #: This probe's own save slot, for the #1941 reload check.
@@ -259,6 +266,83 @@ def reach_hud(port: int, shots: str) -> bool:
     # branch), which is where terrain click-through is meaningful.
     center_on(port, 0, 0)
     time.sleep(3.0)
+    return hold_world_still(port, shots)
+
+
+def frame_diff_bbox(a, b):
+    """Bounding box of every RGB difference between two frames, or None.
+
+    Compared as RGB on purpose: `Image.getbbox()` on an RGBA difference
+    inspects the ALPHA channel only, and the engine forces every screenshot's
+    alpha to 255, so the difference is all-zero alpha and an RGBA comparison
+    reports "identical" for any colour change at all."""
+    from PIL import ImageChops
+    return ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox()
+
+
+def frame_diff_negative_control() -> bool:
+    """The still-frame gate's own oracle must be able to FAIL: two opaque
+    frames that differ by one luma level in one pixel must report a
+    difference, and identical frames must not."""
+    from PIL import Image
+    base = Image.new("RGBA", (16, 16), (100, 100, 100, 255))
+    nudged = base.copy()
+    nudged.putpixel((7, 9), (101, 101, 101, 255))
+    return (frame_diff_bbox(base, nudged) == (7, 9, 8, 10)
+            and frame_diff_bbox(base, base.copy()) is None)
+
+
+def hold_world_still(port: int, shots: str) -> bool:
+    """Freeze the live world beneath the HUD before any pixel comparison (#2942).
+
+    Every measurement below compares captures of an UNCHANGED HUD state, so
+    the frame beneath the HUD must not move. It does while the simulation
+    runs: kept consecutive offscreen captures of the same state differed
+    across the whole frame (bounding box = the full framebuffer, max luma
+    1, about a fifth of all pixels) and were bit-identical once the engine
+    was paused. That sub-visible flicker made `opening the list changes only
+    part of its own rect` read a changed fraction of 1.000 and every
+    `_differing_columns` stability check see hundreds of drifting columns.
+
+    `engine.setPaused` stops unit movement and the page clock only; UI
+    ticks, tutorial evaluation and the HUD's presentation acknowledgement
+    keep running, so the checks that drive the tutorial model are
+    unaffected. No comparison threshold is touched: the frame is made still,
+    not the oracle looser. Pending notification popups are cleared too,
+    since a screen-centred card appearing between captures would also move
+    pixels (#1765)."""
+    send(port, "engine.setPaused(true); return 'ok'", timeout=10.0)
+    if not check("the simulation is paused so the world beneath the HUD "
+                 "holds still between captures (#2942)",
+                 poll_until(10.0, lambda: send(
+                     port, "return tostring(engine.isPaused())",
+                     timeout=5.0).strip().strip('"') == "true")):
+        return False
+    active, queued = dismiss_popups(port)
+    check("no notification popup is up or queued to move pixels between "
+          "captures", (active, queued) == (0, 0), f"{(active, queued)}")
+    # Let the frame already in flight, and the presentation of the pause,
+    # land before the first comparison.
+    time.sleep(1.0)
+    # The gate for the whole class (#2942): with the world held, two captures
+    # of an unchanged frame must be IDENTICAL over the whole framebuffer. This
+    # is the exact property every measurement below leans on, stated once and
+    # unthresholded, so a world that moves again fails here and says why
+    # instead of surfacing as an unstable glyph measurement phases later.
+    still_a = os.path.join(shots, "still_a.png")
+    still_b = os.path.join(shots, "still_b.png")
+    check("the still-frame oracle detects a one-level RGB difference on "
+          "opaque frames and accepts identical ones",
+          frame_diff_negative_control())
+    if not check("held-world frame captures answer",
+                 screenshot(port, still_a) and screenshot(port, still_b)):
+        return False
+    from PIL import Image
+    with Image.open(still_a) as a, Image.open(still_b) as b:
+        bbox = frame_diff_bbox(a, b)
+    check("two captures of the held world are pixel-identical "
+          "(the frame beneath the HUD is still, #2942)",
+          bbox is None, f"differing region {bbox}")
     return True
 
 
