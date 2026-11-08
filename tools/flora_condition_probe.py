@@ -43,12 +43,14 @@ every handled exit; the developer's `saves/` is never read or written.
 Usage: python3 tools/flora_condition_probe.py [--port 9211]
        [--keep-artifacts]
 """
-import argparse, copy, glob, os, sys, tempfile, time, uuid
+import argparse, copy, os, sys, tempfile, time, uuid
 import yaml
 import probe_evidence
-from probelib import (FixtureNotRegistered, boot, capture_request_id,
-                      init_arena, load_fixture_yaml, quit_engine, send,
-                      send_json, wait_load_published, wait_save_complete)
+from probelib import (DefinitionLoadError, FixtureNotRegistered, boot,
+                      capture_request_id, init_arena, load_definitions_report,
+                      load_fixture_yaml, quit_engine, require_positive_files,
+                      send, send_json, wait_load_published,
+                      wait_save_complete)
 from flora_growth_probe import (RunArtifacts, abandon_engine,
                                 release_artifacts, set_date)
 
@@ -323,21 +325,12 @@ def bootstrap(port, art):
     crop and the groundcover plot), then this probe's three fixtures. The
     shipped flora is loaded with its result read: a file that stopped
     registering is exactly the regression this probe must not miss."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
-    for path in sorted(glob.glob("data/flora/*.yaml")):
-        raw = send(port, f"return engine.loadFloraYaml('{path}')")
-        try:
-            queued = float(raw)
-        except (TypeError, ValueError):
-            queued = 0.0
-        if queued <= 0:
-            sys.exit(f"SETUP FAILURE: shipped flora {path} rejected ({raw!r})")
+    report = load_definitions_report(
+        port, ("substance", "item", "material", "flora"))
+    try:
+        require_positive_files(report, ("flora",))
+    except DefinitionLoadError as exc:
+        sys.exit(f"SETUP FAILURE: shipped flora rejected: {exc}")
     path = art.fixture("condition_species")
     with open(path, "w") as f:
         yaml.safe_dump({"flora": fixture_species()}, f)

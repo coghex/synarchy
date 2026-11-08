@@ -38,13 +38,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+
+from probelib import quit_engine, boot, load_definitions, send
 
 LOG = "/tmp/repair_item_engine.log"
 WEAPON = "pick_steel"   # kind: weapon — matches the humanoid right_hand slot
@@ -52,18 +52,9 @@ SLOT = "right_hand"
 
 
 def bootstrap_defs(port: int) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material",
+        "faction", "physiology", "unit"))
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")

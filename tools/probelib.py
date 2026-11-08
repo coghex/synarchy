@@ -28,13 +28,17 @@ Design notes / gotchas handled here so probes don't each rediscover them:
 """
 from __future__ import annotations
 
+import glob
 import json
+import math
+import os
 import re
 import socket
 import subprocess
 import sys
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import probe_engine
 import probe_evidence
@@ -611,6 +615,277 @@ def pause_ai(port: int, timeout: float = 10.0) -> int:
     if m is None:
         raise ProbeSetupError(f"pause_ai: the unit_ai script was not paused (reply {reply!r})")
     return int(m.group(1))
+
+
+# --------------------------------------------------------------------------
+# One-call definition loading (#2952)
+# --------------------------------------------------------------------------
+# A probe that boots an engine loads the game's definitions into it first.
+# Doing that with one console round trip per YAML file costs a median 25 s per
+# engine (#2948, tools/bootstrap_timing.py): 75 files at ~0.31 s each, mostly
+# `send`'s idle wait. `load_definitions` sends the whole file list in ONE
+# console call and has Lua iterate it, with the same per-file verbs, the same
+# families and the same order the probes' own loops used.
+class DefinitionLoadError(ProbeSetupError):
+    """A definition load that cannot be called a success: a file the loader
+    could not parse or refused, a Lua error, a reply that states no outcome,
+    a family with no files, or a refused port. Nothing downstream of a partly
+    loaded registry can pass, so the probe stops here."""
+
+
+class DefFamily(NamedTuple):
+    """One definition family: its YAML glob and the ``engine.load*Yaml`` verb
+    that registers one file of it."""
+    name: str
+    pattern: str
+    verb: str
+    recursive: bool = False
+
+
+DEFINITION_FAMILIES: dict[str, DefFamily] = {f.name: f for f in (
+    DefFamily("substance", "data/substances/*.yaml", "engine.loadSubstanceYaml"),
+    DefFamily("item", "data/items/*.yaml", "engine.loadItemYaml"),
+    DefFamily("equipment", "data/equipment/*.yaml", "engine.loadEquipmentYaml"),
+    DefFamily("material", "data/materials/*.yaml", "engine.loadMaterialYaml"),
+    DefFamily("vegetation", "data/vegetation/*.yaml", "engine.loadVegetationYaml"),
+    DefFamily("faction", "data/factions/*.yaml", "engine.loadFactionYaml"),
+    DefFamily("physiology", "data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
+    DefFamily("unit", "data/units/*.yaml", "engine.loadUnitYaml"),
+    DefFamily("recipe", "data/recipes/*.yaml", "engine.loadRecipeYaml"),
+    DefFamily("building", "data/buildings/*.yaml", "engine.loadBuildingYaml"),
+    DefFamily("flora", "data/flora/*.yaml", "engine.loadFloraYaml"),
+    DefFamily("infection", "data/infections/*.yaml", "engine.loadInfectionYaml"),
+    DefFamily("location", "data/locations/*.yaml", "engine.loadLocationYaml"),
+    DefFamily("loot_table", "data/loot_tables/*.yaml", "engine.loadLootTableYaml"),
+    DefFamily("loot_profile", "data/loot_profiles/*.yaml",
+              "engine.loadLootProfileYaml"),
+)}
+
+#: The family set and order `tools/cargo_capacity_probe.py` loads, and the
+#: default. NOT the arena profile of `scripts/startup_loader.lua`: that one
+#: also registers vegetation, infections, recipes, loot and locations, which
+#: would change what a probe sees.
+STANDARD_FAMILIES: tuple[str, ...] = (
+    "substance", "item", "equipment", "material",
+    "faction", "physiology", "unit", "building")
+
+#: The set the arena gameplay probes (consumable_effects, cooking, craft,
+#: repair) load: vegetation after materials, recipes before buildings.
+ARENA_GAMEPLAY_FAMILIES: tuple[str, ...] = (
+    "substance", "item", "equipment", "material", "vegetation",
+    "faction", "physiology", "unit", "recipe", "building")
+
+#: Items found at any depth under ``data/items/`` (#1232), for the probe that
+#: checks authored-item completeness; every other family is flat.
+ITEM_TREE_FAMILY = DEFINITION_FAMILIES["item"]._replace(
+    pattern="data/items/**/*.yaml", recursive=True)
+
+_VERB_RE = re.compile(r"^engine\.(load[A-Za-z]+Yaml)$")
+
+
+class DefinitionFile(NamedTuple):
+    family: str
+    verb: str
+    path: str
+
+
+class LoadedFile(NamedTuple):
+    """One file's outcome: what its loader returned. The unit varies by
+    family (definitions, textures, declarations, systems ...)."""
+    family: str
+    path: str
+    count: int
+
+
+class DefinitionLoad(NamedTuple):
+    counts: dict[str, int]
+    files: list[LoadedFile]
+
+
+def _resolve_families(families) -> list[DefFamily]:
+    if isinstance(families, (str, DefFamily)):
+        raise DefinitionLoadError(
+            "families must be a sequence of names or DefFamily rows, not one "
+            f"{type(families).__name__}")
+    resolved: list[DefFamily] = []
+    for fam in families:
+        if isinstance(fam, str):
+            if fam not in DEFINITION_FAMILIES:
+                raise DefinitionLoadError(
+                    f"unknown definition family {fam!r} "
+                    f"(known: {', '.join(DEFINITION_FAMILIES)})")
+            fam = DEFINITION_FAMILIES[fam]
+        if not _VERB_RE.match(fam.verb):
+            raise DefinitionLoadError(
+                f"family {fam.name!r}: {fam.verb!r} is not an engine.load*Yaml verb")
+        resolved.append(fam)
+    names = [f.name for f in resolved]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise DefinitionLoadError(f"definition families listed twice: {dupes}")
+    if not resolved:
+        raise DefinitionLoadError("no definition families requested")
+    return resolved
+
+
+def plan_definition_files(families=STANDARD_FAMILIES,
+                          root_dir: str | None = None) -> list[DefinitionFile]:
+    """The ordered files to load: each family's sorted glob, in family order.
+
+    Paths stay RELATIVE (``data/items/x.yaml``): the engine resolves them
+    against its own resource root, so an alternate root (the persistence
+    probes' legacy one, whose physiology differs) is honoured. ``root_dir``
+    only says where to ENUMERATE them from (default: the working directory,
+    as the probes' own ``glob.glob`` did). A family with no file is an error:
+    it is a wrong working directory or a moved data directory, and loading
+    nothing for it would be the silent partial load this helper exists to rule
+    out.
+    """
+    plan: list[DefinitionFile] = []
+    for fam in _resolve_families(families):
+        paths = sorted(glob.glob(fam.pattern, root_dir=root_dir,
+                                 recursive=fam.recursive))
+        if not paths:
+            where = os.path.abspath(root_dir or os.getcwd())
+            raise DefinitionLoadError(
+                f"family {fam.name!r}: no file matches {fam.pattern} under {where}")
+        plan.extend(DefinitionFile(fam.name, fam.verb, p) for p in paths)
+    return plan
+
+
+#: Lua that loads every file of `{{verb, path}, ...}` in order and answers ONE
+#: line, ``defs|<count>|<record>;<record>...``. Each record is the loader's
+#: ``n,parsed,refusal-detail,refusal-reason`` (the verbs answer the last three
+#: only when their second argument is truthy, which is how ``startup_loader``
+#: asks) or ``E,<message>`` when the call raised. Every field is reduced to
+#: ``[%w _.-]`` so a path or message can never break the line or its framing.
+_DEFS_LUA = (
+    "local f = {%s}; local out = {}; "
+    "local function san(v) if v == nil then return '' end; "
+    "local s = tostring(v):gsub('[^%%w _%%.%%-]', '_'); return s:sub(1, 80) end; "
+    "for i = 1, #f do "
+    "local ok, n, parsed, detail, reason = pcall(engine[f[i][1]], f[i][2], true); "
+    "if ok then out[i] = san(n) .. ',' .. san(parsed) .. ',' .. san(detail) .. "
+    "',' .. san(reason) else out[i] = 'E,' .. san(n) end end; "
+    "return 'defs|' .. #f .. '|' .. table.concat(out, ';')")
+
+
+def definition_load_lua(files: list[DefinitionFile]) -> str:
+    """The one console line that loads ``files`` (see `_DEFS_LUA`)."""
+    rows = ", ".join(
+        "{%s, %s}" % (lua_string(_VERB_RE.match(f.verb).group(1)), lua_string(f.path))
+        for f in files)
+    return _DEFS_LUA % rows
+
+
+_RECORD_RE = re.compile(r"^([^,]*),([^,]*),([^,]*),([^,]*)$")
+_ERROR_RE = re.compile(r"^E,([^,]*)$")
+
+
+def parse_definition_reply(files: list[DefinitionFile], raw: str) -> DefinitionLoad:
+    """Turn the reply into per-family counts, or raise `DefinitionLoadError`
+    naming every file that failed.
+
+    A zero count is a success when the file parsed and nothing refused it (a
+    family can legitimately hold nothing); a file the loader could not parse,
+    a semantic refusal, a Lua error, and a missing outcome are all failures.
+    A reply that is malformed, short, or states another file count is
+    refused whole: that is a transport or console failure, never a zero.
+    """
+    raw = raw or ""
+    parts = raw.split("|", 2)
+    if parts[0] != "defs" or len(parts) != 3:
+        raise DefinitionLoadError(
+            f"definition load: the console reply is not a load report: {raw[:200]!r}")
+    try:
+        claimed = int(parts[1])
+    except ValueError:
+        claimed = -1
+    records = parts[2].split(";") if parts[2] else []
+    if claimed != len(files) or len(records) != len(files):
+        raise DefinitionLoadError(
+            f"definition load: expected {len(files)} file result(s), the reply "
+            f"claims {parts[1]!r} and carries {len(records)}: {raw[:200]!r}")
+    problems: list[str] = []
+    loaded: list[LoadedFile] = []
+    counts = {name: 0 for name in dict.fromkeys(f.family for f in files)}
+    for f, rec in zip(files, records):
+        where = f"{f.family} {f.path}"
+        err = _ERROR_RE.match(rec)
+        if err:
+            problems.append(f"{where}: the loader raised a Lua error ({err.group(1)})")
+            continue
+        m = _RECORD_RE.match(rec)
+        if not m:
+            problems.append(f"{where}: malformed result {rec!r}")
+            continue
+        n_raw, parsed, detail, reason = m.groups()
+        try:
+            value = float(n_raw)
+            if not math.isfinite(value) or value < 0 or value != math.floor(value):
+                raise ValueError(n_raw)
+        except ValueError:
+            problems.append(f"{where}: the loader answered {n_raw!r}, not a whole count")
+            continue
+        if parsed != "true":
+            problems.append(
+                f"{where}: the loader did not parse the file "
+                f"(parsed={parsed or 'missing'}, count {n_raw})")
+            continue
+        if detail or reason:
+            problems.append(
+                f"{where}: the loader refused the file "
+                f"({reason + ': ' if reason else ''}{detail})")
+            continue
+        counts[f.family] += int(value)
+        loaded.append(LoadedFile(f.family, f.path, int(value)))
+    if problems:
+        shown = "; ".join(problems[:10])
+        more = f" (+{len(problems) - 10} more)" if len(problems) > 10 else ""
+        raise DefinitionLoadError(
+            f"definition load failed for {len(problems)} of {len(files)} "
+            f"file(s): {shown}{more}")
+    return DefinitionLoad(counts, loaded)
+
+
+def load_definitions_report(port: int, families=STANDARD_FAMILIES, *,
+                            root_dir: str | None = None,
+                            timeout: float = 120.0,
+                            send_fn=None) -> DefinitionLoad:
+    """Load ``families`` into the engine on ``port`` in ONE console call and
+    return per-family counts plus each file's count.
+
+    Families load in the order given, each as its sorted file list, with the
+    same per-file verbs the probes used. Raises `DefinitionLoadError` when any
+    file fails to parse or is refused, when the reply is not a complete load
+    report, or for port 8008 (the user's GUI). A caller with stronger needs
+    than "every file loaded" (a positive count from each file, an authored
+    total) checks ``.files`` / ``.counts`` after.
+    """
+    if port == GUI_PORT:
+        raise DefinitionLoadError(
+            f"refusing to load definitions on port {GUI_PORT} (the GUI port)")
+    files = plan_definition_files(families, root_dir)
+    raw = (send_fn or send)(port, definition_load_lua(files), timeout=timeout)
+    return parse_definition_reply(files, raw)
+
+
+def load_definitions(port: int, families=STANDARD_FAMILIES, **kwargs) -> dict[str, int]:
+    """`load_definitions_report`, answering just the per-family counts."""
+    return load_definitions_report(port, families, **kwargs).counts
+
+
+def require_positive_files(report: DefinitionLoad, families=None) -> None:
+    """Raise `DefinitionLoadError` unless every file of ``families`` (default:
+    all) registered something. For a family where an empty file is a broken
+    file, not a legitimate empty one: the helper itself accepts a successful
+    zero."""
+    wanted = None if families is None else set(families)
+    empty = [f"{f.family} {f.path}" for f in report.files
+             if (wanted is None or f.family in wanted) and f.count <= 0]
+    if empty:
+        raise DefinitionLoadError(
+            f"{len(empty)} file(s) registered nothing: {', '.join(empty[:10])}")
 
 
 def clear_find_water(port: int, uid: int, seconds: float = 10.0) -> bool:
