@@ -41,10 +41,10 @@ name-based mutation at either call site fails here:
 
 Usage: python3 tools/canteen_instance_probe.py [--port 9220]
 """
-import argparse, glob, sys
+import argparse, sys
 
 from probelib import boot, quit_engine, send, send_json, load_ai_stack, \
-                     poll_until, spawn_acolyte
+                     load_definitions, poll_until, spawn_acolyte
 
 SPROOT = "/tmp"
 CANTEEN = "canteen_steel_2l"
@@ -55,18 +55,9 @@ EPS = 1e-4
 
 def bootstrap(port):
     """Load the defs + flat arena the loading screen would set up in the GUI."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/vegetation/*.yaml", "engine.loadVegetationYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, (
+        "substance", "item", "equipment", "material", "vegetation",
+        "faction", "physiology", "unit"))
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     if not poll_until(30, lambda: send(

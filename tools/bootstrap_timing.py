@@ -14,9 +14,10 @@ Each measurement boots a FRESH ``--headless --arena`` engine on an isolated
 resource root and a non-8008 port, proves the authored registries are empty,
 and times exactly one path on it:
 
-* **path A** -- ``tools/cargo_capacity_probe.py`` ``bootstrap()``'s eight-family
-  loop and nothing after it (family order, sorted flat globs, one console call
-  per file). The only difference is that the call opts in to the loader's
+* **path A** -- the eight-family per-file loop ``tools/cargo_capacity_probe.py``
+  ``bootstrap()`` ran until #2952 moved it to ``probelib.load_definitions``, kept
+  here as the "before" baseline, and nothing after it (family order, sorted flat
+  globs, one console call per file). The only difference is that the call opts in to the loader's
   parse outcome (``verb(path, true)``, as ``startup_loader`` does) and returns
   the count with it instead of the constant ``'ok'``, so a successful zero is
   told from a rejected file WITHOUT adding a round trip.
@@ -80,8 +81,9 @@ PROBE_ENGINE_COST_SOURCE = (
     "docs/probe_value_findings.md PRB-15: an estimate (a probe total divided "
     "by its engine count), not a newly measured end-to-end probe total")
 
-#: Path A, exactly as ``tools/cargo_capacity_probe.py`` ``bootstrap()`` loops
-#: it. ``tools/test_bootstrap_timing.py`` compares this with that source.
+#: Path A, exactly as ``tools/cargo_capacity_probe.py`` ``bootstrap()`` looped
+#: it before #2952: the FROZEN per-file baseline. ``tools/test_bootstrap_timing.py``
+#: requires it to equal ``probelib.STANDARD_FAMILIES``' patterns and verbs.
 PATH_A_LOADERS: list[tuple[str, str]] = [
     ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
     ("data/items/*.yaml",      "engine.loadItemYaml"),

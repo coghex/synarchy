@@ -79,7 +79,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import glob
 import os
 import shutil
 import struct
@@ -89,7 +88,8 @@ import time
 import uuid
 from pathlib import Path
 import probe_evidence
-from probelib import boot, quit_engine, send, send_json, wait_load_published
+from probelib import (boot, load_definitions, quit_engine, send, send_json,
+                      wait_load_published)
 
 SAVE_PREFIX = "tload_probe_"
 REPO = Path(__file__).resolve().parent.parent
@@ -158,22 +158,12 @@ class Checks:
 
 
 def bootstrap_defs(port: int, include_units: bool = True) -> None:
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]
+    families = ["substance", "item", "equipment", "material", "building"]
     if include_units:
-        # data/factions first: unit `faction_tags:` are validated against
-        # the declared tags and an undeclared one refuses the file (#2506).
-        loaders.append(("data/factions/*.yaml", "engine.loadFactionYaml"))
-        loaders.append(("data/physiology/*.yaml", "engine.loadPhysiologyYaml"))
-        loaders.append(("data/units/*.yaml", "engine.loadUnitYaml"))
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+        # faction first: unit `faction_tags:` are validated against the
+        # declared tags and an undeclared one refuses the file (#2506).
+        families += ["faction", "physiology", "unit"]
+    load_definitions(port, families)
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2),
                        ("unit_ai", 0.1)]:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")

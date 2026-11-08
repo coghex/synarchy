@@ -64,7 +64,9 @@ import glob
 import re
 import sys
 
-from probelib import boot, init_world, poll_until, quit_engine, send, send_json
+from probelib import (ITEM_TREE_FAMILY, boot, init_world, load_definitions,
+                      load_definitions_report, poll_until, quit_engine, send,
+                      send_json)
 
 # This probe's console default. Its registry queries decode whole
 # catalogues, so they get longer than probelib.send_json's 10 s --
@@ -102,40 +104,13 @@ def num(port, lua, timeout=QUERY_TIMEOUT):
 # The one recursive family: item definitions may sit in logical
 # subdirectories (#1232). `**` with recursive=True also matches zero
 # directories, so this covers the top level too.
-ITEM_YAML_GLOB = "data/items/**/*.yaml"
+ITEM_YAML_GLOB = ITEM_TREE_FAMILY.pattern
 
 
 def check(passed, ok, label, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {label}"
           + (f"   [{detail}]" if detail and not ok else ""))
     return passed and ok
-
-
-def load_all(port, fn, pattern, recursive=False):
-    """Run `fn` over every file matching `pattern`.
-
-    `recursive` turns on `**` expansion, which only the item tree needs:
-    item definitions may be organized into subdirectories (#1232), and
-    every other family here is flat by design.
-
-    Returns `(total, rejected)`: the summed count the loader reported, and
-    the list of files that reported no answer at all or a count of zero.
-
-    Per-file accounting is the point. Summing alone made this probe blind
-    to exactly the failure it looks like it covers (#1233 review): one
-    invalid file returns 0 while its siblings still push the total above
-    zero, so a `total > 0` check passes on a partially-broken corpus. A
-    file in any of these seven directories that contributes no
-    definitions is a broken file, never a legitimate empty one.
-    """
-    total, rejected = 0, []
-    for path in sorted(glob.glob(pattern, recursive=recursive)):
-        n = num(port, f"return {fn}('{path}')")
-        if n is None or int(n) <= 0:
-            rejected.append(path)
-        else:
-            total += int(n)
-    return total, rejected
 
 
 def authored_item_defs():
@@ -169,33 +144,31 @@ def main():
     try:
         # --- Phase 1: every writer path -------------------------------
         print("\n-- phase 1: registry writers (all eight load*Yaml verbs) --")
-        writers = [
-            ("substance", "engine.loadSubstanceYaml", "data/substances/*.yaml"),
-            ("item", "engine.loadItemYaml", ITEM_YAML_GLOB),
-            ("equipment", "engine.loadEquipmentYaml", "data/equipment/*.yaml"),
-            ("infection", "engine.loadInfectionYaml", "data/infections/*.yaml"),
-            ("recipe", "engine.loadRecipeYaml", "data/recipes/*.yaml"),
-            ("location", "engine.loadLocationYaml", "data/locations/*.yaml"),
-            ("loot table", "engine.loadLootTableYaml", "data/loot_tables/*.yaml"),
-            # #2499: this is ALSO D-20's own end-to-end proof. A loot
-            # profile resolves every entry's item id against the live
-            # item registry at load and refuses the whole file on the
-            # first unresolved one, so `n > 0` here means the shipped
-            # profile's eight item ids all named real definitions in the
-            # real `data/items/` tree loaded three lines above.
-            ("loot profile", "engine.loadLootProfileYaml",
-             "data/loot_profiles/*.yaml"),
-        ]
-        item_total = None
-        for label, fn, pattern in writers:
-            n, rejected = load_all(port, fn, pattern,
-                                   recursive=pattern == ITEM_YAML_GLOB)
+        # Per-file accounting is the point (#1233 review): summing alone made
+        # this probe blind to one invalid file returning 0 while its siblings
+        # still push the total above zero. A file in any of these seven
+        # directories that contributes no definitions is a broken file, never
+        # a legitimate empty one, so each file's own count must be positive
+        # on top of the helper's parse/refusal check. Order matters: #2499's
+        # loot profile resolves every entry's item id against the live item
+        # registry at load, so `n > 0` for it is also D-20's end-to-end proof
+        # that the shipped profile's eight item ids name real definitions.
+        report = load_definitions_report(port, (
+            "substance", ITEM_TREE_FAMILY, "equipment", "infection",
+            "recipe", "location", "loot_table", "loot_profile"))
+        item_total = report.counts["item"]
+        for label, family in [
+                ("substance", "substance"), ("item", "item"),
+                ("equipment", "equipment"), ("infection", "infection"),
+                ("recipe", "recipe"), ("location", "location"),
+                ("loot table", "loot_table"), ("loot profile", "loot_profile")]:
+            n = report.counts[family]
+            rejected = [f.path for f in report.files
+                        if f.family == family and f.count <= 0]
             passed = check(passed, n > 0 and not rejected,
                            f"{label} writer loaded defs",
-                           f"{fn} over {pattern} reported {n}; "
+                           f"{family} reported {n}; "
                            f"files contributing nothing: {rejected}")
-            if label == "item":
-                item_total = n
 
         # #1233: every authored item definition must have loaded, not
         # merely "some". A definition the loader REJECTS (a missing or
@@ -441,7 +414,7 @@ def main():
 
         n_recipes_before = send_json(port, "return craft.getNames()",
                                      timeout=QUERY_TIMEOUT)
-        load_all(port, "engine.loadRecipeYaml", "data/recipes/*.yaml")  # noqa: F841
+        load_definitions(port, ("recipe",))
         n_recipes_after = send_json(port, "return craft.getNames()",
                                     timeout=QUERY_TIMEOUT)
         ok = (isinstance(n_recipes_before, list) and isinstance(n_recipes_after, list)

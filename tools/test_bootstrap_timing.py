@@ -30,6 +30,7 @@ import selftestlib
 from selftestlib import FAILURES, expect
 
 import bootstrap_timing as bt
+import probelib
 
 TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parent
@@ -443,17 +444,27 @@ def test_launch_and_ready() -> None:
 # --------------------------------------------------------------------------
 def test_source_guards() -> None:
     print("\n-- source guards")
-    # Path A is cargo_capacity_probe.bootstrap()'s loop.
+    # Path A is the per-file loop cargo_capacity_probe.bootstrap() ran until
+    # #2952 moved it to probelib.load_definitions. bootstrap_timing keeps its
+    # own frozen copy as the baseline; it must stay the helper's STANDARD
+    # family set, in order, so "before" and "after" load the same files.
+    standard = [(probelib.DEFINITION_FAMILIES[name].pattern,
+                 probelib.DEFINITION_FAMILIES[name].verb)
+                for name in probelib.STANDARD_FAMILIES]
+    expect(standard == bt.PATH_A_LOADERS,
+           "PATH_A_LOADERS is probelib.STANDARD_FAMILIES' patterns and verbs, in order")
+    expect(len(standard) == 8, "the standard loop has eight families")
     tree = ast.parse((TOOLS / "cargo_capacity_probe.py").read_text())
     func = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == "bootstrap")
-    loaders = next(n.value for n in func.body
-                   if isinstance(n, ast.Assign)
-                   and getattr(n.targets[0], "id", "") == "loaders")
-    cargo = [(a.value, b.value) for a, b in (tuple(e.elts) for e in loaders.elts)]
-    expect(cargo == bt.PATH_A_LOADERS,
-           "PATH_A_LOADERS is cargo_capacity_probe.bootstrap()'s loop, in order")
-    expect(len(cargo) == 8, "the standard loop has eight families")
+    calls = [n for n in ast.walk(func) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") == "load_definitions"]
+    expect(len(calls) == 1 and len(calls[0].args) == 1 and not calls[0].keywords,
+           "cargo_capacity_probe.bootstrap() loads the STANDARD set in one "
+           "load_definitions call")
+    expect(not any(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "glob"
+                   for n in ast.walk(func)),
+           "and no longer carries its own per-file loop")
 
     # The inventory is the loader's arena queue, in order, and the unit table
     # covers every family.

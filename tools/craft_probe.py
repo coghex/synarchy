@@ -55,8 +55,9 @@ end-to-end:
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
-import argparse, glob, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send, send_json
+import argparse, socket, subprocess, sys, time
+from probelib import (ARENA_GAMEPLAY_FAMILIES, boot, load_definitions,
+                      quit_engine, send, send_json)
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_probe_recipes.yaml"
@@ -90,20 +91,7 @@ recipes:
 
 def bootstrap(port):
     """Load defs + the flat arena (the loading screen doesn't run headless)."""
-    for pattern, fn in [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/vegetation/*.yaml", "engine.loadVegetationYaml"),
-        ("data/factions/*.yaml", "engine.loadFactionYaml"),
-        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-    ]:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    load_definitions(port, ARENA_GAMEPLAY_FAMILIES)
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
     for _ in range(60):
