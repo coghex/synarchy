@@ -58,9 +58,10 @@ Checks:
  10. Re-designating a tile the AI has already claimed with a DIFFERENT
      crop makes it plant the NEW crop, not the stale one it originally
      walked over for (plant.designate replaces in place, HM.insert).
-     The swap is made while the worker provably holds the wheat job and
-     nothing is planted yet, and the check completes on the tomato
-     INSTANCE appearing — never on the designation vanishing (#2937).
+     The simulation is paused the moment the worker's claim is seen, the
+     swap is made and read back as COMMITTED while the wheat job is still
+     unfinished, and the check completes on the tomato INSTANCE appearing
+     after the resume — never on the designation vanishing (#2937).
  11. Save/load: the AI-planted row-crop instances (WePlaceFlora, save
      v79) survive save → loadSave as the SAME instance. With the
      simulation paused, each is read right before the save (by instanceId);
@@ -1090,43 +1091,77 @@ def main():
         till_and_wait(port, "probe", ex, ey, ez)
         send(port, f"plant.designate('probe',{ex},{ey},'wheat'); return 'ok'")
 
-        # The worker must HOLD the wheat job (claimed, not yet planted) when
-        # the crop is swapped; and the swap must land while that job is
-        # still unfinished. Both boundaries are read here rather than
-        # assumed (#2937): a wheat plot or any flora already on E means the
-        # job completed first, which is a different scenario, reported as
-        # such instead of as a stale-crop failure.
+        # Hold the worker, do not race it (#2937). Three things must be true
+        # when the crop is swapped, and each is READ, none assumed: the worker
+        # holds the wheat job, that job is unfinished (nothing planted on E,
+        # progress below 1), and the tomato designation has been COMMITTED by
+        # the world thread (plant.designate only queues it, so a single read
+        # right after the call can still see wheat). Pausing the simulation
+        # the moment the matching claim is seen freezes the worker's AI and
+        # clock while the world thread still services commands, so the state
+        # read after the pause is the state the swap lands in.
+        plant_job_lua = (f"local ai=require('scripts.unit_ai'); "
+                         f"local s=ai.getState({uid}); "
+                         f"if s and s.plantJob then return s.plantJob.x..','.."
+                         f"s.plantJob.y..','..tostring(s.plantJob.crop)..','.."
+                         f"tostring(s.plantProgress or 0) "
+                         f"else return 'none' end")
         deadline = time.time() + 30.0
-        claimed = False
+        job = "none"
         while time.time() < deadline:
-            time.sleep(0.5)
-            job = send(port,
-                       f"local ai=require('scripts.unit_ai'); "
-                       f"local s=ai.getState({uid}); "
-                       f"if s and s.plantJob then return s.plantJob.x..','.."
-                       f"s.plantJob.y..','..tostring(s.plantJob.crop) "
-                       f"else return 'none' end").strip('"')
-            if job == f"{ex},{ey},wheat":
-                claimed = True
+            time.sleep(0.2)
+            job = send(port, plant_job_lua).strip('"')
+            if job.startswith(f"{ex},{ey},wheat,"):
                 break
-        if not claimed:
+        else:
             print(f"  [FAIL] acolyte never claimed the re-designation test "
                   f"wheat job (last plantJob={job!r})")
             return 1
-        pre_plot = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
-        pre_flora, pre_fail = growth_read(port, ex, ey, "tomato_plant")
-        if pre_plot is not None or pre_flora or pre_fail is not None:
-            print(f"  [FAIL] re-designation test is invalid: the wheat job "
-                  f"finished before the swap (plot={pre_plot!r} "
-                  f"flora={pre_flora} read_failure={pre_fail!r})")
-            return 1
-        send(port, f"plant.designate('probe',{ex},{ey},'tomato_plant'); "
-                   f"return 'ok'")
-        swapped = send_json(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
-        ok10a = isinstance(swapped, dict) and swapped.get("crop") == "tomato_plant"
+        send(port, "engine.setPaused(true); return 'ok'")
+        try:
+            held = send(port, plant_job_lua).strip('"')
+            held_plot = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
+            held_flora, held_fail = growth_read(port, ex, ey, "tomato_plant")
+            try:
+                held_progress = float(held.split(",")[3])
+            except (IndexError, ValueError):
+                held_progress = None
+            if not (held.startswith(f"{ex},{ey},wheat,")
+                    and held_progress is not None and held_progress < 1.0
+                    and held_plot is None and not held_flora
+                    and held_fail is None):
+                print(f"  [FAIL] re-designation test is invalid: the wheat "
+                      f"job was not held and unfinished when the swap was "
+                      f"made (plantJob={held!r} plot={held_plot!r} "
+                      f"flora={held_flora} read_failure={held_fail!r})")
+                return 1
+            send(port, f"plant.designate('probe',{ex},{ey},'tomato_plant'); "
+                       f"return 'ok'")
+            swapped = None
+            commit_deadline = time.time() + 10.0
+            while time.time() < commit_deadline:
+                swapped = send_json(
+                    port, f"return plant.getDesignationAt('probe',{ex},{ey})")
+                if isinstance(swapped, dict) \
+                   and swapped.get("crop") == "tomato_plant":
+                    break
+                time.sleep(0.2)
+            after_swap = send(port, plant_job_lua).strip('"')
+            swap_plot = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
+            swap_flora, swap_fail = growth_read(port, ex, ey, "tomato_plant")
+        finally:
+            send(port, "engine.setPaused(false); return 'ok'")
+        ok10a = (isinstance(swapped, dict)
+                 and swapped.get("crop") == "tomato_plant"
+                 and after_swap.startswith(f"{ex},{ey},wheat,")
+                 and swap_plot is None and not swap_flora
+                 and swap_fail is None)
         passed &= ok10a
         print(f"  [{'PASS' if ok10a else 'FAIL'}] the tomato re-designation "
-              f"replaced the wheat one while the job was unfinished: {swapped}")
+              f"was committed while the worker held the unfinished wheat "
+              f"job: designation={swapped} plantJob={after_swap!r} "
+              f"plot={swap_plot!r} flora={swap_flora} "
+              f"read_failure={swap_fail!r}")
 
         # Completion is the tomato INSTANCE itself, never the designation
         # vanishing: the designation clears the moment the plant command is
