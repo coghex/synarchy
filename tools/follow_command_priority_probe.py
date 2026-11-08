@@ -45,7 +45,8 @@ the admission decision before judging arbitration, so neither outcome depends
 on body generation and a phase A failure means a real arbitration regression.
 
 D and E stage their fight with a COMMITTED attack order (``commandAttack(
-attacker, victim, true)``). An uncommitted order opens an "autonomous",
+attacker, victim, true)``), with the attacker placed beside the victim at
+order time (``stage_committed_attack``). An uncommitted order opens an "autonomous",
 non-exempt attack occurrence, and #2521's combat policy ends that goal
 before any swing for two same-faction acolytes (neither is hostile to the
 other, the attacker has no last attacker, and the production fixture inputs
@@ -66,7 +67,8 @@ Run from the repo/worktree root (scripts/ resolve relative to CWD):
 Exit code 0 = all checks passed; 1 = a graded check failed; 2 = a fixture
 never established itself, so nothing downstream of it was graded; 3 = check
 E's SETUP failed (the staged attacker never landed a qualifying hit on E's
-subject, so E's arbitration was never exercised) and no other graded check
+subject, or E's non-player move was no longer pending when the attack was
+ordered, so E's arbitration was never exercised) and no other graded check
 failed. 3 is a failure, never a pass, and is distinct from a graded
 arbitration failure (exit 1: a hit landed and the subject still did not
 reach or hold combat).
@@ -189,6 +191,8 @@ def observe(port: int, uid: int, attacker=None) -> dict:
         "treatPending=(s.treatPending and s.treatPending.uid) or nil,",
         "pose=pose(uid), pos=pos(uid), attackerUid=atk, attackerPose=pose(atk),",
         "attackerPos=pos(atk)};",
+        "local as=atk and ai.getState(atk); if as then o.attackerAction=as.currentAction;",
+        "o.attackerGoal=as.activeGoal; o.attackerTarget=as.attackTargetUid end;",
         "if att then o.lastAttacker={uid=att.uid, at=att.at, age=now-(att.at or 0)} end;",
         f"local win={HIT_WINDOW_SEC};",
         "o.hitByStaged=((atk~=nil) and att~=nil and att.uid==atk and (now-(att.at or 0))<=win) and true or false;",
@@ -237,6 +241,25 @@ def poll_observed(port: int, uid: int, want, seconds: float, attacker=None,
             return seen, True, snaps, last
         time.sleep(0.4)
     return seen, False, snaps, last
+
+
+def stage_committed_attack(port: int, attacker: int, victim: int,
+                           beside: float = 0.6) -> None:
+    """Put ``attacker`` right beside ``victim``'s CURRENT position and issue
+    the COMMITTED attack order, in one console transaction (#2945).
+
+    The victim is a live, goal-bound acolyte that walks (search_for_water /
+    the pending move). Spawning the attacker "adjacent" and then settling
+    both for 1.5 s each left it a few tiles behind an equal-speed target,
+    so the chase sometimes never closed inside the poll window and no hit
+    landed (2 of 20 after-batch trials at 0bdd3b56f, both check D). Placing
+    the attacker at order time makes the first swing immediate. Only the
+    staging changes: the victim's reaction is still its own arbitration."""
+    send(port,
+         f"local v=unit.getInfo({int(victim)}); "
+         f"unit.setPos({int(attacker)}, v.gridX+{beside}, v.gridY); "
+         f"require('scripts.unit_ai').commandAttack({int(attacker)},"
+         f"{int(victim)},true); return 'fight'")
 
 
 def destroy_units(port: int, *uids: int) -> None:
@@ -455,9 +478,7 @@ def main() -> int:
         ud = spawn_acolyte(args.port, args.unit, sx + 4, sy, "D")
         atk = spawn_acolyte(args.port, args.unit, sx + 5, sy, "D-attacker")  # adjacent
         # COMMITTED order (#2945): see the module docstring.
-        send(args.port,
-             f"require('scripts.unit_ai').commandAttack({atk},{ud},true); "
-             f"return 'fight'")
+        stage_committed_attack(args.port, atk, ud)
         sampd: list = []
         seend, hitd, snapd, lastd = poll_observed(
             args.port, ud, COMBAT_ACTIONS, args.seconds + 6, attacker=atk,
@@ -480,14 +501,24 @@ def main() -> int:
         # scope since #916 scores it 9.0 against an active attack and lets
         # the player withdraw (#2945; Hspec "player move orders during
         # combat (#916)" owns that).
-        ue = spawn_acolyte(args.port, args.unit, sx + 7, sy, "E")
+        # Spawned at the course start, ~9 tiles from the far target, so the
+        # internal move is still pending when the attack lands (it used to
+        # spawn 2 tiles from the target and could arrive first, leaving
+        # nothing for combat to out-rank; #2945).
+        ue = spawn_acolyte(args.port, args.unit, sx, sy + 3, "E")
         send(args.port,
              f"require('scripts.unit_ai').commandMove({ue},{far_x},{far_y},"
              f"nil,true); return 'moved'")
-        atk2 = spawn_acolyte(args.port, args.unit, sx + 8, sy, "E-attacker")  # adjacent
-        send(args.port,
-             f"require('scripts.unit_ai').commandAttack({atk2},{ue},true); "
-             f"return 'fight'")
+        atk2 = spawn_acolyte(args.port, args.unit, sx + 1, sy + 3, "E-attacker")
+        # The move must still be pending, and non-player, at the moment the
+        # attack is ordered; otherwise there is nothing for combat to beat.
+        pre_e = observe(args.port, ue, atk2)
+        e_move_ok = bool(pre_e.get("movePending")) \
+            and not pre_e.get("movePlayer")
+        print(f"  [E pre-attack] movePending={pre_e.get('movePending')} "
+              f"movePlayer={pre_e.get('movePlayer')} "
+              f"action={pre_e.get('action')}")
+        stage_committed_attack(args.port, atk2, ue)
         sampe: list = []
         seene, hite, snape, laste = poll_observed(
             args.port, ue, COMBAT_ACTIONS, args.seconds + 6, attacker=atk2,
@@ -520,14 +551,17 @@ def main() -> int:
         e_checks = [("combat reached over a pending non-player move", hite),
                     ("combat does NOT hand back to the stale move",
                      not reverted)]
-        if landed:
+        if landed and e_move_ok:
             checks.extend(e_checks)
         else:
             e_setup_failed = True
-            print("  [E SETUP FAILURE] the staged attacker never landed a "
-                  f"qualifying hit on the subject within {HIT_WINDOW_SEC:g} s; "
-                  "check E's arbitration was not exercised, so its two "
-                  "assertions are NOT graded and NOT passed", file=sys.stderr)
+            why = ("the staged attacker never landed a qualifying hit on the "
+                   f"subject within {HIT_WINDOW_SEC:g} s" if not landed else
+                   "the subject's non-player move was already gone when the "
+                   "attack was ordered")
+            print(f"  [E SETUP FAILURE] {why}; check E's arbitration was not "
+                  "exercised, so its two assertions are NOT graded and NOT "
+                  "passed", file=sys.stderr)
         destroy_units(args.port, ue, atk2)
 
         # --- Check F: the command-time capacity refusal, asserted rather
