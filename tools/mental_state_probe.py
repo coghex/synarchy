@@ -315,6 +315,14 @@ def stage_lashout_cluster(port, x, y):
     memory (only unit.getLastAttacker) — via combat_anim_probe.py's
     spawn-adjacent + commandAttack + wait-for-a-swing-to-land pattern.
 
+    The staging order is COMMITTED (#2973, as retaliation_swap_probe's
+    since #2521): every acolyte spawns tag-less, so the pair are
+    uncontrolled allies, and since FTS-5 an AUTONOMOUS attack on an ally
+    with no hostility or fresh self-defense ends at its first decision
+    (scripts/unit_ai_combat_policy.lua), before any swing. The probe
+    stands in for the player; a committed order keeps its own rules, and
+    the policy under test (the lash-out target choice) is untouched.
+
     The subject's OWN reaction to that hit is suppressed until the break
     (#2773): its unit.getLastAttacker reads nil to every caller during
     setup — the 9c isolation idiom — so its ordinary incoming_hit
@@ -371,7 +379,7 @@ def stage_lashout_cluster(port, x, y):
     if problems:
         return lash, attacker, None, ("neuter not established: "
                                       + "; ".join(problems))
-    send(port, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
+    send(port, f"require('scripts.unit_ai').commandAttack({attacker},{lash},true); "
                f"return 'ok'")
     hit = poll_until(35, lambda: send(
         port, f"local a=_G.__probe_lash_real_gla({lash}); "
@@ -410,6 +418,12 @@ def stand_down_attacker(port, lash, attacker):
     unit is excluded by lash-out's eligibility, or stops ticking
     altogether.
 
+    The staging order is committed (#2973), so the stand-down also drops
+    the `committed` flag the way every production end of an attack does
+    (unit_ai_combat_move.lua): left set, the attacker would keep the
+    longer hold of a player order and answer the subject's later lash-out
+    far more stubbornly than the autonomous order this setup always used.
+
     Its stamina is deliberately LEFT ALONE (#2773). The old setup drained
     it to 0.1 of max to stop its ambient wander, but a unit left that low
     after a fight was traced Collapsed by the time the setup finished —
@@ -421,7 +435,7 @@ def stand_down_attacker(port, lash, attacker):
     send(port, f"local ai=require('scripts.unit_ai') "
                f"local s=ai.getState({attacker}); "
                f"if s then ai.markGoalAccomplished(s,'attack'); "
-               f"s.attackTargetUid=nil end; unit.stop({attacker}) "
+               f"s.attackTargetUid=nil; s.committed=nil end; unit.stop({attacker}) "
                f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
 
 
@@ -2121,6 +2135,21 @@ TICK_BLOCKING_ACTIVITIES = ("drinking", "eating", "pickup", "transitioning")
 #: 9c2's bounded re-stage: attempts, and how long to wait between them for
 #: the subject to be able to act again.
 NINE_C2_ATTEMPTS = 3
+
+#: A re-staged 9c2 hit counts as NEW only when it is later than the previous
+#: one by more than this (#2973). The previous hit time reaches Python through
+#: a JSON round trip that keeps 14 significant digits, so it can come back
+#: slightly BELOW the engine's own value; a bare `>` then accepted the OLD hit
+#: as the new one, and the attempt graded a hit already outside the swap's
+#: window. A real second hit is at least an attack cooldown later.
+NEW_HIT_MARGIN_SEC = 0.001
+
+
+def new_hit_poll_lua(lash, attacker, prev_at):
+    """Lua for 'has `attacker` landed a hit on `lash` later than `prev_at`?'"""
+    return (f"local a=unit.getLastAttacker({lash}); "
+            f"return (a and a.uid == {attacker} and "
+            f"a.at > {float(prev_at) + NEW_HIT_MARGIN_SEC!r}) and 'hit' or 'nil'")
 NINE_C2_READY_WAIT_S = 15.0
 
 #: 9c2's FAIR-TEST then_lua (#2773), after the 'collapsed' pose pin. At the
@@ -2607,6 +2636,14 @@ assert(load(OBSERVER))()
 seen = {}
 local pinned = unit.getPose
 local s = { attackTargetUid = 2, mentalLashoutActive = true }
+-- The lash-out goal's exempt occurrence (#2973), opened the way production
+-- opens it (unit_ai_mental -> core.setGoal -> policy.goalChanged with the
+-- 'lash_out' provenance). Without one the REAL combat policy classifies the
+-- goal as governed and ends it at its first continuation check (#2521), so
+-- the swap this harness measures never reaches its result.
+local policy = require('scripts.unit_ai_combat_policy')
+policy.bindStates({ [1] = s })
+policy.goalChanged(s, 'attack', 'lash_out')
 inCall = true
 local okCall, errCall = pcall(atk.attackTargetExecute, 1, s, {})
 inCall = false
@@ -2701,7 +2738,7 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
         out = subprocess.run(
             [lua, paths["harness.lua"], paths["attack.lua"],
              os.path.join(root, "scripts", "unit_ai_mental.lua"), observer],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, cwd=root)
     if out.returncode != 0:
         raise RuntimeError(f"swap harness failed: {out.stderr.strip()}")
     got = json.loads(out.stdout)
@@ -3883,6 +3920,35 @@ def self_test():
             ("malformed + ambiguous + invalid -> setup", [mkcall(post=None), amb, bad], "setup")):
         check(f"9c2 gate: {name}", gate(calls) == want)
 
+    # 9c2's "a NEW hit" test (#2973): the previous hit time comes back from
+    # JSON rounded to 14 significant digits, possibly BELOW the engine's own
+    # value, and the same hit must not read as new then.
+    import shutil as _sh, subprocess as _sp
+    _lua = _sh.which("lua")
+    if _lua is None:
+        print("  skip new-hit test: no `lua` interpreter installed")
+    else:
+        def _new_hit(at, uid, prev):
+            code = (f"unit = {{ getLastAttacker = function() return "
+                    f"{{ uid = {uid}, at = {at!r} }} end }}; "
+                    f"io.write(assert(load({new_hit_poll_lua(1, 2, prev)!r}))())")
+            return _sp.run([_lua, "-e", code], capture_output=True,
+                           text=True, timeout=30).stdout
+        engine_at = 109.39464500034123
+        rounded = float("%.14g" % engine_at)
+        check("new-hit: the rounding really does land below the engine value",
+              rounded < engine_at)
+        check("new-hit: the SAME hit, prior time rounded below it -> not new",
+              _new_hit(engine_at, 2, rounded) == "nil")
+        check("new-hit: the same hit against its exact time -> not new",
+              _new_hit(engine_at, 2, engine_at) == "nil")
+        check("new-hit: a later hit (one cooldown on) -> new",
+              _new_hit(engine_at + 1.5, 2, rounded) == "hit")
+        check("new-hit: a later hit by another unit -> not new",
+              _new_hit(engine_at + 1.5, 9, rounded) == "nil")
+        check("new-hit: the first staging (previous -1) takes any hit",
+              _new_hit(0.5, 2, -1.0) == "hit")
+
     # The PRODUCTION attack execute, no engine. MUTANT = the collapsed
     # exclusion removed from the retaliation swap.
     MUTANT = ('and attPose ~= "dead" and attPose ~= "collapsed"', 'and attPose ~= "dead"')
@@ -4819,12 +4885,11 @@ def main():
         prevHitAtB = -1.0
         gradedB = abortedB = False
         for attemptB in range(1, NINE_C2_ATTEMPTS + 1):
-            send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
+            # Committed, like stage_lashout_cluster's order (#2973).
+            send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB},true); "
                     f"return 'ok'")
             hitB = poll_until(35, lambda: send(
-                P, f"local a=unit.getLastAttacker({lashB}); "
-                   f"return (a and a.uid == {attackerB} and a.at > {prevHitAtB!r}) and 'hit' or 'nil'"
-            ) == "hit")
+                P, new_hit_poll_lua(lashB, attackerB, prevHitAtB)) == "hit")
             if not hitB:
                 ok = False
                 print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
@@ -4861,7 +4926,8 @@ def main():
                 f"local A, L, V = {attackerB}, {lashB}, {victimB};",
                 "local ai = require('scripts.unit_ai');",
                 "for _, u in ipairs({A, L}) do local s = ai.getState(u);",
-                " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil end;",
+                " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil;",
+                "  s.committed = nil end;",
                 " unit.stop(u) end;",
                 "unit.revive(A); unit.revive(L);",
                 "local st = require('scripts.unit_stats');",
