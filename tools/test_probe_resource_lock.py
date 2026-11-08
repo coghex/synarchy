@@ -1112,10 +1112,22 @@ def test_a_transient_admission_mutex_refusal_is_ridden_out_not_masked() -> None:
                f"(busy={busy}, error={error})")
 
         # A case expecting admission rides it out once the mutex frees ...
-        threading.Timer(0.3, lock._release_queue_mutex, args=(mutex,)).start()
+        # The mutex is freed only once the helper has begun a SECOND attempt,
+        # which it makes only after its first was refused: no timer, so no
+        # scheduling pause can free the mutex before the first attempt.
         attempts: list = []
+
+        def release_after_first_refusal() -> None:
+            give_up = time.monotonic() + 30.0
+            while len(attempts) < 2 and time.monotonic() < give_up:
+                time.sleep(0.005)
+            lock._release_queue_mutex(mutex)
+
+        releaser = threading.Thread(target=release_after_first_refusal)
+        releaser.start()
         hold, busy, error = taking_admitted(scratch, shared=HEADLESS_SHARED,
                                             attempts=attempts)
+        releaser.join()
         expect(hold is not None and busy is None and error is None
                and len(attempts) > 1,
                f"the retry is admitted after the mutex frees "
