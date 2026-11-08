@@ -143,7 +143,7 @@ def test_empty_result_is_none_not_empty_string() -> None:
     print("\n-- an EMPTY result is None (the deleted jget returned \"\")")
     # A Lua empty string: the console prints `> ""` and `send` strips the
     # surrounding quotes, leaving nothing. This is exactly the reply
-    # repair_ai_probe's `rs.suffix` check sees.
+    # a Lua `rs.suffix` check on a healthy item sees.
     expect(raw('""') == "",
            "`send` should return the empty string for a Lua empty string")
     expect(decode('""') is None,

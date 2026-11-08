@@ -4723,7 +4723,11 @@ openOrder (#2528)" block.
 ## The expedition loop: the unprepared control
 
 Enforced by `tools/expedition_loop_probe.py` (manual-only, fixed-seed,
-~30 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
+~30 min, two engine boots). It is the expedition arc's final integrated
+gate: changes to the arc run it on request with
+`python3 tools/run_probes.py --only expedition_loop --exact`. The routine
+quruntul lab rotation does not run it (`OPT_IN_ONLY` in
+`.quruntul/adapter.py`, #2934). `docs/expedition_gameplay_loop.md` is the
 design authority for the arc; CLAUDE.md states that the control exists and
 must end measurably worse off. This enumerates the six conditions that
 keep the comparison honest — weakening any one turns the control into
