@@ -1542,7 +1542,7 @@ def _raises(fn, *args, **kwargs):
 
 
 def _ok_reply(n: int, count: int = 1) -> str:
-    return f"defs|{n}|" + ";".join(f"{count},true,," for _ in range(n))
+    return f"defs|{n}|" + ";".join(f"{count},true,false,," for _ in range(n))
 
 
 def _tree(base: str, files: list[str]) -> None:
@@ -1643,7 +1643,9 @@ def test_definition_lua_line() -> None:
     pl = probelib
     odd = 'data/items/q"uote \'s \\back éé ✓.yaml'
     files = [pl.DefinitionFile("item", "engine.loadItemYaml", odd),
-             pl.DefinitionFile("unit", "engine.loadUnitYaml", "data/units/a.yaml")]
+             pl.DefinitionFile("unit", "engine.loadUnitYaml", "data/units/a.yaml"),
+             pl.DefinitionFile("faction", "engine.loadFactionYaml", "data/factions/empty.yaml"),
+             pl.DefinitionFile("faction", "engine.loadFactionYaml", "data/factions/zero.yaml")]
     lua = pl.definition_load_lua(files)
     expect("\n" not in lua and "\r" not in lua, "the whole load is ONE console line")
     expect(pl.lua_string(odd) in lua and pl.lua_string("data/units/a.yaml") in lua,
@@ -1659,6 +1661,8 @@ def test_definition_lua_line() -> None:
         "seen = {}\nengine = {}\n"
         "function engine.loadItemYaml(p, o) seen[#seen+1] = p; assert(o == true); return 2, true end\n"
         "function engine.loadUnitYaml(p, o) seen[#seen+1] = p; return 0, false end\n"
+        "function engine.loadFactionYaml(p, o) seen[#seen+1] = p; "
+        "if p:find('empty') then return 0, true, '' end return 0, true end\n"
         "local out = (function() " + lua + " end)()\n"
         "print(out)\n"
         "for _, p in ipairs(seen) do print((p:gsub('.', function(c) "
@@ -1670,11 +1674,20 @@ def test_definition_lua_line() -> None:
         done = subprocess.run([lua5, path], capture_output=True, text=True, timeout=20)
     expect(done.returncode == 0, f"the line runs ({done.stderr.strip()})")
     out = done.stdout.splitlines()
-    expect(out[0] in ("defs|2|2,true,,;0,false,,", "defs|2|2.0,true,,;0.0,false,,"),
+    expect(out[0] in ("defs|4|2,true,false,,;0,false,false,,;0,true,true,,;0,true,false,,",
+                      "defs|4|2.0,true,false,,;0.0,false,false,,;0.0,true,true,,;0.0,true,false,,"),
            f"the one-line report ({out[0]!r})")
-    expect([bytes.fromhex(h).decode("utf-8") for h in out[1:3]]
-           == [odd, "data/units/a.yaml"],
+    expect([bytes.fromhex(h).decode("utf-8") for h in out[1:5]]
+           == [odd, "data/units/a.yaml", "data/factions/empty.yaml",
+               "data/factions/zero.yaml"],
            "the engine receives each path byte-for-byte, in order")
+    # A refusal whose detail is the EMPTY string is still a refusal (the
+    # startup loader treats '' as truthy), and differs from a plain zero.
+    err = _raises(pl.parse_definition_reply, files, out[0])
+    expect(isinstance(err, pl.DefinitionLoadError)
+           and "data/factions/empty.yaml" in str(err)
+           and "refused" in str(err) and "data/factions/zero.yaml" not in str(err),
+           f"an empty-string refusal fails while a legitimate zero does not ({err})")
 
 
 def test_definition_reply_parsing() -> None:
@@ -1684,7 +1697,7 @@ def test_definition_reply_parsing() -> None:
     files = [D("item", "engine.loadItemYaml", "data/items/a.yaml"),
              D("item", "engine.loadItemYaml", "data/items/b.yaml"),
              D("faction", "engine.loadFactionYaml", "data/factions/f.yaml")]
-    got = pl.parse_definition_reply(files, "defs|3|2.0,true,,;3.0,true,,;0.0,true,,")
+    got = pl.parse_definition_reply(files, "defs|3|2.0,true,false,,;3.0,true,false,,;0.0,true,false,,")
     expect(got.counts == {"item": 5, "faction": 0},
            f"per-family counts sum the loader's units ({got.counts})")
     expect([(f.path, f.count) for f in got.files] == [
@@ -1693,23 +1706,23 @@ def test_definition_reply_parsing() -> None:
     expect(list(got.counts) == ["item", "faction"], "counts follow the family order")
 
     bad = {
-        "a parse failure": ("defs|3|2,true,,;0,false,,;0,true,,", "data/items/b.yaml"),
-        "a semantic refusal": ("defs|3|2,true,,;3,true,,;0,true,tag_x,undeclared faction tag",
+        "a parse failure": ("defs|3|2,true,false,,;0,false,false,,;0,true,false,,", "data/items/b.yaml"),
+        "a semantic refusal": ("defs|3|2,true,false,,;3,true,false,,;0,true,true,tag_x,undeclared faction tag",
                                "data/factions/f.yaml"),
-        "a Lua error": ("defs|3|2,true,,;E,attempt_to_call_a_nil_value;0,true,,",
+        "a Lua error": ("defs|3|2,true,false,,;E,attempt_to_call_a_nil_value;0,true,false,,",
                         "data/items/b.yaml"),
-        "no stated outcome": ("defs|3|2,,,;3,true,,;0,true,,", "data/items/a.yaml"),
-        "a non-number count": ("defs|3|ok,true,,;3,true,,;0,true,,", "data/items/a.yaml"),
-        "a negative count": ("defs|3|-1,true,,;3,true,,;0,true,,", "data/items/a.yaml"),
-        "a fractional count": ("defs|3|1.5,true,,;3,true,,;0,true,,", "data/items/a.yaml"),
-        "a malformed record": ("defs|3|2,true,,;garbage;0,true,,", "data/items/b.yaml"),
+        "no stated outcome": ("defs|3|2,,false,,;3,true,false,,;0,true,false,,", "data/items/a.yaml"),
+        "a non-number count": ("defs|3|ok,true,,;3,true,false,,;0,true,false,,", "data/items/a.yaml"),
+        "a negative count": ("defs|3|-1,true,false,,;3,true,false,,;0,true,false,,", "data/items/a.yaml"),
+        "a fractional count": ("defs|3|1.5,true,false,,;3,true,false,,;0,true,false,,", "data/items/a.yaml"),
+        "a malformed record": ("defs|3|2,true,false,,;garbage;0,true,false,,", "data/items/b.yaml"),
     }
     for label, (reply, where) in bad.items():
         err = _raises(pl.parse_definition_reply, files, reply)
         expect(isinstance(err, pl.DefinitionLoadError) and where in str(err),
                f"{label} fails and names the file ({err})")
     err = _raises(pl.parse_definition_reply, files,
-                  "defs|3|2,true,,;3,true,tag_x,undeclared faction tag;0,false,,")
+                  "defs|3|2,true,false,,;3,true,true,tag_x,undeclared faction tag;0,false,false,,")
     expect(err is not None and "2 of 3" in str(err)
            and "undeclared faction tag" in str(err) and "tag_x" in str(err)
            and "data/items/b.yaml" in str(err) and "data/factions/f.yaml" in str(err)
@@ -1718,16 +1731,23 @@ def test_definition_reply_parsing() -> None:
     for label, reply in {
             "an empty reply": "",
             "a console error": "[string]:1: unexpected symbol near 'x'",
-            "a short report": "defs|3|2,true,,;3,true,,",
-            "a long report": "defs|3|1,true,,;1,true,,;1,true,,;1,true,,",
-            "another file count": "defs|2|1,true,,;1,true,,",
-            "a non-numeric count": "defs|x|1,true,,;1,true,,;1,true,,",
+            "a short report": "defs|3|2,true,false,,;3,true,false,,",
+            "a long report": "defs|3|1,true,false,,;1,true,false,,;1,true,false,,;1,true,false,,",
+            "another file count": "defs|2|1,true,false,,;1,true,false,,",
+            "a non-numeric count": "defs|x|1,true,false,,;1,true,false,,;1,true,false,,",
             "a report with no body": "defs|3|",
             "nil": None}.items():
         err = _raises(pl.parse_definition_reply, files, reply)
         expect(isinstance(err, pl.DefinitionLoadError),
                f"{label} is refused, never a success ({err})")
-    zero = pl.parse_definition_reply(files[2:], "defs|1|0,true,,")
+    err = _raises(pl.parse_definition_reply, files[2:], "defs|1|0,true,true,,")
+    expect(isinstance(err, pl.DefinitionLoadError) and "refused" in str(err)
+           and "data/factions/f.yaml" in str(err),
+           "a refusal with an empty detail is a refusal, not a zero")
+    err = _raises(pl.parse_definition_reply, files[2:], "defs|1|0,true,maybe,,")
+    expect(isinstance(err, pl.DefinitionLoadError),
+           "a record with no refusal flag is malformed, never assumed clean")
+    zero = pl.parse_definition_reply(files[2:], "defs|1|0,true,false,,")
     expect(zero.counts == {"faction": 0},
            "a zero count on a parsed, unrefused file IS a success")
     err = _raises(pl.require_positive_files, got)
@@ -1757,7 +1777,7 @@ def test_load_definitions_is_one_console_call() -> None:
         expect(report.counts == {"unit": 4} and report.files[0].count == 4,
                "the report form keeps per-file counts")
         with LineConsole(lambda line: "defs|31|" + ";".join(
-                ["1,true,,"] * 30 + ["0,false,,"])) as console:
+                ["1,true,false,,"] * 30 + ["0,false,false,,"])) as console:
             err = _raises(pl.load_definitions, console.port, ("item", "unit"),
                           root_dir=tmp)
         expect(isinstance(err, pl.DefinitionLoadError) and "data/units/u.yaml" in str(err)

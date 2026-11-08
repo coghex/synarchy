@@ -755,18 +755,23 @@ def plan_definition_files(families=STANDARD_FAMILIES,
 
 #: Lua that loads every file of `{{verb, path}, ...}` in order and answers ONE
 #: line, ``defs|<count>|<record>;<record>...``. Each record is the loader's
-#: ``n,parsed,refusal-detail,refusal-reason`` (the verbs answer the last three
-#: only when their second argument is truthy, which is how ``startup_loader``
-#: asks) or ``E,<message>`` when the call raised. Every field is reduced to
-#: ``[%w _.-]`` so a path or message can never break the line or its framing.
+#: ``n,parsed,refused,refusal-detail,refusal-reason`` (the verbs answer the
+#: last three only when their second argument is truthy, which is how
+#: ``startup_loader`` asks) or ``E,<message>`` when the call raised. ``refused``
+#: is ``true`` when the loader returned a refusal VALUE at all (``detail ~= nil``,
+#: so an empty detail string still counts, as in the startup loader), kept apart
+#: from the text because an empty text must not read as "no refusal". Every
+#: field is reduced to ``[%w _.-]`` so a path or message can never break the
+#: line or its framing.
 _DEFS_LUA = (
     "local f = {%s}; local out = {}; "
     "local function san(v) if v == nil then return '' end; "
     "local s = tostring(v):gsub('[^%%w _%%.%%-]', '_'); return s:sub(1, 80) end; "
     "for i = 1, #f do "
     "local ok, n, parsed, detail, reason = pcall(engine[f[i][1]], f[i][2], true); "
-    "if ok then out[i] = san(n) .. ',' .. san(parsed) .. ',' .. san(detail) .. "
-    "',' .. san(reason) else out[i] = 'E,' .. san(n) end end; "
+    "if ok then out[i] = san(n) .. ',' .. san(parsed) .. ',' .. "
+    "tostring(detail ~= nil or reason ~= nil) .. ',' .. san(detail) .. ',' .. "
+    "san(reason) else out[i] = 'E,' .. san(n) end end; "
     "return 'defs|' .. #f .. '|' .. table.concat(out, ';')")
 
 
@@ -778,7 +783,7 @@ def definition_load_lua(files: list[DefinitionFile]) -> str:
     return _DEFS_LUA % rows
 
 
-_RECORD_RE = re.compile(r"^([^,]*),([^,]*),([^,]*),([^,]*)$")
+_RECORD_RE = re.compile(r"^([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)$")
 _ERROR_RE = re.compile(r"^E,([^,]*)$")
 
 
@@ -819,7 +824,7 @@ def parse_definition_reply(files: list[DefinitionFile], raw: str) -> DefinitionL
         if not m:
             problems.append(f"{where}: malformed result {rec!r}")
             continue
-        n_raw, parsed, detail, reason = m.groups()
+        n_raw, parsed, refused, detail, reason = m.groups()
         try:
             value = float(n_raw)
             if not math.isfinite(value) or value < 0 or value != math.floor(value):
@@ -832,10 +837,13 @@ def parse_definition_reply(files: list[DefinitionFile], raw: str) -> DefinitionL
                 f"{where}: the loader did not parse the file "
                 f"(parsed={parsed or 'missing'}, count {n_raw})")
             continue
-        if detail or reason:
+        if refused not in ("true", "false"):
+            problems.append(f"{where}: malformed result {rec!r}")
+            continue
+        if refused == "true" or detail or reason:
             problems.append(
                 f"{where}: the loader refused the file "
-                f"({reason + ': ' if reason else ''}{detail})")
+                f"({reason + ': ' if reason else ''}{detail or 'no detail'})")
             continue
         counts[f.family] += int(value)
         loaded.append(LoadedFile(f.family, f.path, int(value)))
