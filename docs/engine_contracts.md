@@ -2373,7 +2373,13 @@ override and an override equal to the default are different inputs.
 override, S3; `nil` until a setter records one), `getPhysioDefault`, `readPhysio` and `readPhysioBase`, and Haskell
 `physioRead` / `physioReadBase`, may be called by anyone; they never
 change state. A registry-owned, derived or meter key is read purely and
-never initializes, rolls or writes. Nominal reads evaluate the healthy
+never initializes, rolls or writes. `unit.peekStat(uid, name)` (#2960) is the
+non-rolling stat read for callers that must observe a unit without changing it:
+the effective value of a stat or skill the unit already holds, else `nil` and
+`"unrolled"` (templated, not yet rolled), `"undefined"`, `"nounit"` or
+`"badargs"`; `unit.getStat`, `getStatBase` and `getAllStats` lazily roll and
+cache, so the access audit refuses them in a pure read
+(`thermo.readHeatBalance`). Nominal reads evaluate the healthy
 rule against EFFECTIVE inputs, ignore modifiers on the key itself, and
 read meters as 0. Simulated reads are stored base plus active modifiers;
 the base verb returns the stored base; an absent Simulated meter reads
