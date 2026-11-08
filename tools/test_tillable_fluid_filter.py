@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the tillable-tile fluid filter in three probes (#1793).
+"""Unit tests for the tillable-tile fluid filter in three probes (#1793, #2938).
 
 ENGINE-FREE, and deliberately so: `till_probe.py`, `plant_probe.py` and
 `farm_ai_probe.py` each boot a real headless engine and generate a
@@ -19,6 +19,14 @@ probes decoded it as a JSON object, so
 one of those fluid filters was dead: `find_tillable` could return a
 coordinate under water. This file owns three of those sites;
 `test_action_outcome_probe.py` owns the other two.
+
+#2938 removed `farm_ai_probe`'s scan: its six sites are now a fixed
+fixture, so there is no lattice or first-hit finder left to drive and its
+scan cases are retired. What they protected still holds for the fixture,
+and `test_farm_ai_fixture_*` below keeps that meaning: a wet, sloped,
+flora-bearing or already-tilled site is rejected, a patch that never
+settles fails with a diagnostic, and every fluid query collapses the
+multi-return before transport.
 
 `TerrainConsole` below is the single definition of that arity boundary
 and `test_action_outcome_probe.py` imports it, so the two files cannot
@@ -41,16 +49,16 @@ Decoding is the SHIPPED decoder: the console text is rendered the way
 quote-strip, and handed to the real `probelib.send_json`.
 
 Each probe's scan is named in `FINDERS` below, because they no longer
-share one shape: `till_probe` and `farm_ai_probe` expose
+share one shape: `till_probe` exposes
 `find_tillable`, which returns the first hit, while `plant_probe`
 exposes the generator `iter_tillable` (#1762), whose extra candidates
 its fixture selection needs when the first tile turns out to be
 climatically unusable. The SCAN itself — the lattice and the
 slope/fluid/flora filters, which is all this file covers — is identical
-across the three, so `first_tillable` adapts the two shapes rather than
+across the two, so `first_tillable` adapts the two shapes rather than
 testing them differently.
 
-Covered, for each of those three scans:
+Covered, for each of those two scans (till_probe, plant_probe):
   * a flat, flora-free WET candidate is rejected and the scan continues
     to the next, DRY lattice point;
   * with nothing wet anywhere the same scan returns that first candidate,
@@ -234,7 +242,7 @@ def drive(module, console, call):
 
 
 # ---------------------------------------------------------------------
-# The three finders, driven through their own declared defaults
+# The two remaining finders, driven through their own declared defaults
 # ---------------------------------------------------------------------
 # Each scan walks its own lattice; these are the first two points of it,
 # read off the shipped ranges. A test makes the FIRST one wet and expects
@@ -243,7 +251,6 @@ def drive(module, console, call):
 FINDERS = [
     ("till_probe", till_probe, "find_tillable", (-64, -64), (-64, -60)),
     ("plant_probe", plant_probe, "iter_tillable", (-64, -64), (-64, -60)),
-    ("farm_ai_probe", farm_ai_probe, "find_tillable", (-64, -64), (-64, -60)),
 ]
 
 
@@ -348,6 +355,109 @@ def test_the_sampling_lattices_are_unchanged():
               f"{len(points)} points, first {points[:1]}, last {points[-1:]}")
 
 
+# ---------------------------------------------------------------------
+# farm_ai_probe's fixed fixture (#2938): the scan is gone, the meaning stays
+# ---------------------------------------------------------------------
+_TERRAIN_AT = re.compile(r"world\.getTerrainAt\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,")
+_PLANTABLE = re.compile(r"world\.isPlantable\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
+_RECT = re.compile(r"x=(-?\d+),(-?\d+) do for y=(-?\d+),(-?\d+)")
+
+
+class FixtureConsole(TerrainConsole):
+    """`TerrainConsole` plus the fixture's own queries.
+
+    The patch plan and read-back chunks are answered as an engine that
+    built the patch would (`settled=False` models one that never lands);
+    point queries on a site come from `tiles` exactly as for the scans.
+    `tilled` names sites `world.isPlantable` reports as already tilled."""
+
+    HEIGHTS = {"near": 34, "far": 30}
+
+    def __init__(self, tiles=None, settled=True, tilled=()):
+        super().__init__(tiles)
+        self.settled = settled
+        self.tilled = set(tilled)
+
+    def _height(self, gx):
+        return self.HEIGHTS["near" if gx >= 0 else "far"]
+
+    def send_json(self, port, lua, timeout=10.0, idle=None):
+        if "addTile" in lua:
+            self.sent.append(lua)
+            x0 = int(_RECT.search(lua).group(1))
+            return {"target": self._height(x0), "edits": 3, "refused": 0}
+        if "local ok=0" in lua:
+            self.sent.append(lua)
+            x0, x1, y0, y1 = map(int, _RECT.search(lua).groups())
+            total = (x1 - x0 + 1) * (y1 - y0 + 1)
+            return {"ok": total if self.settled else 0,
+                    "first_bad": None if self.settled else {"x": x0}}
+        match = _TERRAIN_AT.search(lua)
+        if match:
+            self.sent.append(lua)
+            z = self._height(int(match.group(1)))
+            return {"s": z, "t": z}
+        match = _PLANTABLE.search(lua)
+        if match:
+            self.sent.append(lua)
+            return (int(match.group(1)), int(match.group(2))) in self.tilled
+        return super().send_json(port, lua, timeout, idle)
+
+
+def _fixture(tiles=None, **kw):
+    console = FixtureConsole(tiles, **kw)
+    result = drive(farm_ai_probe, console,
+                   lambda: farm_ai_probe.build_fixture(PORT))
+    return console, result
+
+
+def test_farm_ai_fixture_accepts_flat_dry_flora_free_sites():
+    console, (ok, why) = _fixture()
+    check("farm_ai fixture accepts six flat, dry, flora-free, untilled sites",
+          ok, why)
+    check("farm_ai fixture queried every site's fluid",
+          all(console.queried("getFluidAt", *xy)
+              for xy in farm_ai_probe.SITES.values()))
+
+
+def test_farm_ai_fixture_rejects_each_bad_site_kind():
+    site = farm_ai_probe.SITES["B"]
+    cases = [
+        ("a WET site", dict(tiles={site: Tile(fluid="river")})),
+        ("a SLOPED site", dict(tiles={site: Tile(slope=1)})),
+        ("a flora-bearing site", dict(tiles={site: Tile(flora={"id": "oak"})})),
+        ("an already-tilled site", dict(tilled={site})),
+    ]
+    for label, kw in cases:
+        console, (ok, why) = _fixture(**kw)
+        check(f"farm_ai fixture rejects {label}",
+              ok is False and "site B" in why, f"{ok} {why}")
+        check(f"farm_ai fixture reads flora as a table for {label}",
+              console.queried("getFloraAt", *site),
+              "the flora query never ran")
+
+
+def test_farm_ai_fixture_fails_when_a_patch_never_settles():
+    console = FixtureConsole(settled=False)
+    z, why = drive(farm_ai_probe, console,
+                   lambda: farm_ai_probe.build_flat_patch(
+                       PORT, farm_ai_probe.NEAR_PATCH, timeout=0.1))
+    check("a patch that never settles reports no height and a diagnostic",
+          z is None and "did not settle" in why, f"{z} {why}")
+
+
+def test_farm_ai_fixture_collapses_fluid_multi_return():
+    console, _ = _fixture(tiles={farm_ai_probe.SITES["A"]:
+                                 Tile(fluid="river")})
+    check("farm_ai fixture never sends an uncaptured getFluidAt",
+          console.uncaptured_fluid_calls() == [],
+          str(console.uncaptured_fluid_calls()[:1]))
+    patch_lua = [lua for lua in console.sent if "local ok=0" in lua]
+    check("farm_ai fixture's patch read-back captures fluid with local",
+          bool(patch_lua) and all("local f=world.getFluidAt" in l
+                                  for l in patch_lua))
+
+
 def main():
     print("tillable-tile fluid filter tests (engine-free)\n")
     test_a_wet_candidate_is_rejected_for_the_next_dry_one()
@@ -355,6 +465,10 @@ def main():
     test_a_wet_tile_never_decodes_as_a_table()
     test_the_slope_and_flora_filters_are_unchanged()
     test_the_sampling_lattices_are_unchanged()
+    test_farm_ai_fixture_accepts_flat_dry_flora_free_sites()
+    test_farm_ai_fixture_rejects_each_bad_site_kind()
+    test_farm_ai_fixture_fails_when_a_patch_never_settles()
+    test_farm_ai_fixture_collapses_fluid_multi_return()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
