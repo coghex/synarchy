@@ -25,8 +25,12 @@ the two facts that already make the REAL types comparable for free:
 `compare_session_files` decodes N save files (independently produced --
 e.g. an original save and a resave taken after a fresh-process load
 published it) through the real `World.Save.Envelope.decodeSessionEnvelope`
-and asserts every one is pairwise equal on both halves. This needs no
-engine, no GPU, and no window.
+and asserts they agree on both halves. The first file is the LIVE capture
+and the rest are re-saves taken across loads, so the codec compares them
+on two footings (`World.Save.Compare`, #2936): every re-save against the
+first re-save exactly (bar the rebuilt physiology caches), and the first
+re-save against the live capture bar the animation name (and the playback
+start that follows it) of a unit whose override a load deliberately cleared. This needs no engine, no GPU, and no window.
 
 Issue #2274: the last GHCi consumer in this family
 --------------------------------------------------
@@ -227,7 +231,8 @@ def compare_session_files(paths: list[Path], *,
                           capture: dict | None = None) -> tuple[bool, str]:
     """Decode every file in `paths` (at least 2) through the real save
     codec and assert every decoded `SessionSnapshot` plus every
-    `lua.<module>` payload is pairwise structurally equal. Returns
+    `lua.<module>` payload agrees as the module docstring describes
+    (live capture first, re-saves after). Returns
     (all_equal, diagnostic) -- diagnostic is empty on success, or a
     human-readable explanation (including a per-file canonical-summary
     diff where available) on failure/decode error. Opt-in `capture` receives

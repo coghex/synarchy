@@ -635,6 +635,7 @@ library
                      Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology
+                     World.Save.Compare
                      Gameplay.Tags.Tag
                      Gameplay.Tags.Index
                      Gameplay.Tags.Types
@@ -1707,6 +1708,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.Save.Compare
                    Test.Headless.World.Save.CurrentSchema
                    Test.Headless.World.Save.CurrentSchema.Fixtures
                    Test.Headless.World.Save.CurrentSchema.Live
