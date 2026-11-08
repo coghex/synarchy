@@ -291,6 +291,43 @@ def destroy_units(port: int, *uids: int) -> None:
         send(port, f"unit.destroy({int(u)}); return 'ok'")
 
 
+def grade_e(samples: list, tail_obs: list):
+    """Classify check E from its observations (#2945). Pure: no engine.
+
+    Returns ``(setup_reason, reached, reverted)``.
+
+    * ``setup_reason`` is None when E's arbitration was really exercised,
+      else why it was not: the staged attacker never landed a qualifying
+      hit, or the subject's NON-PLAYER move was not still pending in the
+      qualifying combat observation. That observation is the first sample
+      whose action is a combat action (or, if combat was never reached, the
+      first sample carrying a hit). A move that arrived, or was cleaned up
+      by ``maintainTask``, before combat is observed leaves nothing for
+      combat to out-rank, so both E assertions would pass vacuously.
+    * ``reached``: some sample's action was a combat action.
+    * ``reverted``: a tail sample handed back to ``follow_command`` while
+      the staged attacker was still alive ("while the fight is on").
+    """
+    landed = any(o.get("hitByStaged") for o in samples)
+    ref = next((o for o in samples if o.get("action") in COMBAT_ACTIONS), None)
+    if ref is None:
+        ref = next((o for o in samples if o.get("hitByStaged")), None)
+    move_ok = (ref is not None and bool(ref.get("movePending"))
+               and not ref.get("movePlayer"))
+    reached = any(o.get("action") in COMBAT_ACTIONS for o in samples)
+    reverted = any(o.get("action") == "follow_command"
+                   and o.get("attackerPose") != "dead" for o in tail_obs)
+    if not landed:
+        reason = ("the staged attacker never landed a qualifying hit on the "
+                  f"subject within {HIT_WINDOW_SEC:g} s")
+    elif not move_ok:
+        reason = ("the subject's non-player move was no longer pending in "
+                  "the qualifying combat observation")
+    else:
+        reason = None
+    return reason, reached, reverted
+
+
 def print_obs(tag: str, snaps: list, last: dict) -> None:
     """Print each action-transition snapshot plus the final sample."""
     def line(label, o):
@@ -557,8 +594,7 @@ def main() -> int:
         # pending move legitimately resumes). At e9da94adc one trial's
         # victim killed its attacker mid-tail and read as a hand-back.
         over = sum(1 for o in tail_obs if o.get("attackerPose") == "dead")
-        reverted = any(a == "follow_command" and o.get("attackerPose") != "dead"
-                       for a, o in zip(tail, tail_obs))
+        e_why, e_reached, reverted = grade_e(sampe, tail_obs)
         if over:
             print(f"  [E tail: {over} of {len(tail_obs)} samples taken after "
                   f"the staged attacker died are not counted as hand-back]")
@@ -578,32 +614,23 @@ def main() -> int:
         # never landed a qualifying hit, so E's arbitration was never
         # exercised) from an ARBITRATION failure (a hit landed and the
         # subject still did not reach or hold combat). Neither is a pass.
-        # The non-player move must be pending IN the qualifying combat
-        # observation itself (the first sample carrying a hit by the staged
-        # attacker): a move that arrived or was cleaned up before combat is
-        # observed leaves nothing for combat to out-rank, and both E
-        # assertions would pass vacuously. (pre_e, taken at the order, only
-        # proves the move existed then.)
-        first_hit = next((o for o in sampe if o.get("hitByStaged")), None)
-        landed = first_hit is not None
-        e_move_ok = landed and bool(first_hit.get("movePending")) \
-            and not first_hit.get("movePlayer")
-        print(f"  [E staged attacker landed a qualifying hit: {landed}; "
-              f"non-player move pending in that observation: {e_move_ok}]")
-        e_checks = [("combat reached over a pending non-player move", hite),
+        # Requirement 3 (#2945): tell a SETUP failure (``grade_e``: no
+        # qualifying hit, or no pending non-player move in the combat
+        # observation, so E's arbitration was never exercised) from an
+        # ARBITRATION failure (a hit landed with the move pending and the
+        # subject still did not reach or hold combat). Neither is a pass.
+        print(f"  [E setup: {e_why or 'established'}]")
+        e_checks = [("combat reached over a pending non-player move",
+                     e_reached),
                     ("combat does NOT hand back to the stale move",
                      not reverted)]
-        if landed and e_move_ok:
+        if e_why is None:
             checks.extend(e_checks)
         else:
             e_setup_failed = True
-            why = ("the staged attacker never landed a qualifying hit on the "
-                   f"subject within {HIT_WINDOW_SEC:g} s" if not landed else
-                   "the subject's non-player move was no longer pending in "
-                   "the first observation carrying a qualifying hit")
-            print(f"  [E SETUP FAILURE] {why}; check E's arbitration was not "
-                  "exercised, so its two assertions are NOT graded and NOT "
-                  "passed", file=sys.stderr)
+            print(f"  [E SETUP FAILURE] {e_why}; check E's arbitration was "
+                  "not exercised, so its two assertions are NOT graded and "
+                  "NOT passed", file=sys.stderr)
         destroy_units(args.port, ue, atk2)
 
         # --- Check F: the command-time capacity refusal, asserted rather
