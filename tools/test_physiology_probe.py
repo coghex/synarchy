@@ -338,6 +338,34 @@ def circulation_cases():
                                   c["sepsis"], c["core"], c["heartRate"])
         expect(abs(got - c["expected"]) < 1e-9,
                f"port vs parity fixture, {c['name']!r}: {got} vs {c['expected']}")
+    # Every clamp bound of the rule is exercised: dropping any one of them (in
+    # an independent re-statement of the rule) changes at least one fixture
+    # case, so the shared fixture cannot pass a rule that lost a clamp
+    # (round 3 of #2968: the fitness lower bound was unreached).
+    def clamped_rule(skip):
+        def bound(name, lo, hi, x):
+            return max(lo if name + "_lo" not in skip else float("-inf"),
+                       min(hi if name + "_hi" not in skip else float("inf"), x))
+
+        def rule(c):
+            blood = bound("blood", 0.1, 1.0, c["bloodFraction"] * 1.1)
+            fat_frac = c["fatMass"] / c["bodyMass"] if c["bodyMass"] > 0 else 0.2
+            fit = bound("fit", 0.3, 1.1, (0.5 + 0.5 * c["constitution"])
+                        * (1 - 0.7 * max(0.0, fat_frac - 0.20)))
+            sick = bound("sick", 0.4, 1.0, 1 - 0.5 * c["sepsis"])
+            vaso = bound("vaso", 0.45, 1.0, 1 - 0.06 * max(0.0, 36.0 - c["core"]))
+            hr = 1.0 if c["heartRate"] is None else bound(
+                "hr", 0.5, 1.0, c["heartRate"] / c["resting"])
+            return bound("final", 0.05, 1.0, blood * fit * sick * vaso * hr)
+        return rule
+    expect(all(abs(clamped_rule(set())(c) - c["expected"]) < 1e-9 for c in parity),
+           "the independent restatement agrees with the fixture")
+    for bound in ("blood_lo", "blood_hi", "fit_lo", "fit_hi", "sick_lo", "sick_hi",
+                  "vaso_lo", "hr_lo", "hr_hi", "final_lo", "final_hi"):
+        rule = clamped_rule({bound})
+        caught = [c["name"] for c in parity if abs(rule(c) - c["expected"]) > 2e-5]
+        expect(caught, f"no parity case exercises the {bound} clamp: dropping it "
+                       "changes nothing in the shared fixture")
     expect(CONSTANTS["RESTING_HR"] == parity[0]["resting"],
            "the fixture rests at the registry's RESTING_HR")
     named = {c["name"]: c["expected"] for c in parity}
