@@ -1559,20 +1559,31 @@ def _tree(base: str, files: list[str]) -> None:
 # ---------------------------------------------------------------------
 # #2952 gave probes `load_definitions`, one console call for the whole file
 # list. A tools file that goes back to one console call per YAML file costs
-# ~0.3 s a file again (#2948), so this scan fails on the old shape. It looks
-# for the two ways that shape is spelled, in any loop or comprehension:
-#   * an `engine.load<Family>Yaml` verb named anywhere in it (the verb table
-#     of the old `for pattern, fn in [...]`, or the verb in a loop body that
-#     walks a separately collected file list), and
-#   * an f-string that calls a formatted-in function name on a quoted,
-#     formatted-in path, `f"{fn}('{path}')"`, which is how a helper that takes the verb as an
-#     argument loads a directory one file at a time.
-# Filesystem enumeration without a per-file console load is not flagged.
+# ~0.3 s a file again (#2948), so this scan fails on that shape: a loop or
+# comprehension whose body makes a CONSOLE CALL (any call that is not a
+# collector, formatter or filesystem helper) carrying a load command built from
+# what the loop binds. A command counts as a load command when it names an
+# `engine.load<Family>Yaml` verb, or is the f-string `f"{fn}('{path}')"` a
+# helper uses to take the verb as an argument (the quotes are optional: a path
+# can arrive as `{json.dumps(path)}`). It is followed through simple
+# assignments (`command = f"..."; send(port, command)`) and through a command
+# list built first and sent line by line.
+# Not flagged: enumeration that makes no console call (a loop over a loader
+# table that only collects paths) and batch construction (`chunks.append(f"...")`
+# sent once after the loop, which is one round trip).
 _LOAD_VERB = re.compile(r"\bload[A-Za-z]+Yaml\b")
-_QUOTED_CALL_OPEN = re.compile(r"""^\(\s*['"]$""")
-_QUOTED_CALL_CLOSE = re.compile(r"""^['"]\s*\)""")
+_QUOTED_CALL_OPEN = re.compile(r"""^\(\s*['"]?$""")
+_QUOTED_CALL_CLOSE = re.compile(r"""^['"]?\s*\)""")
 _LOOP_NODES = (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp, ast.DictComp,
                ast.GeneratorExp)
+#: Callables that build, collect, format or enumerate; none of them reaches the
+#: console, so a load command passed to one is not a console call.
+_NOT_A_SEND = frozenset({
+    "append", "extend", "add", "insert", "update", "setdefault", "join",
+    "format", "print", "write", "writelines", "info", "debug", "warning",
+    "error", "log", "sorted", "list", "tuple", "set", "dict", "str", "len",
+    "glob", "rglob", "iglob", "listdir", "scandir", "Path", "abspath",
+    "relpath", "isfile", "isdir", "exists", "basename", "dirname", "walk"})
 #: (file name, enclosing function) pairs allowed to keep a per-file loop:
 #: `tools/bootstrap_timing.py`'s path A is the frozen per-file BASELINE that
 #: the one-call path is measured against (#2952 kept it on purpose).
@@ -1594,42 +1605,82 @@ def _bound_names(target: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
 
 
-def _verb_in(node: ast.AST) -> str | None:
+def _names(node: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _names_a_load(node: ast.AST) -> bool:
+    """The expression holds a load verb or the `f"{fn}('{path}')"` shape."""
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-            found = _LOAD_VERB.search(sub.value)
-            if found:
-                return found.group(0)
-    return None
+        if (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+                and _LOAD_VERB.search(sub.value)):
+            return True
+        if isinstance(sub, ast.JoinedStr):
+            v = sub.values
+            for here, after, nxt, close in zip(v, v[1:], v[2:], v[3:]):
+                if (isinstance(here, ast.FormattedValue)
+                        and isinstance(after, ast.Constant)
+                        and isinstance(after.value, str)
+                        and _QUOTED_CALL_OPEN.match(after.value)
+                        and isinstance(nxt, ast.FormattedValue)
+                        and isinstance(close, ast.Constant)
+                        and isinstance(close.value, str)
+                        and _QUOTED_CALL_CLOSE.match(close.value)):
+                    return True
+    return False
 
 
-def _loop_per_file_reason(loop: ast.AST) -> str | None:
+def _callee(call: ast.Call) -> str:
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else getattr(f, "attr", "")
+
+
+def _command_names(scope: ast.AST) -> set[str]:
+    """Names in `scope` that hold load commands: assigned from one, or
+    appended or extended with one."""
+    held: set[str] = set()
+    for node in ast.walk(scope):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            value = node.value
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target])
+            if value is not None and _names_a_load(value):
+                for t in targets:
+                    held |= _bound_names(t)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr in ("append", "extend", "add")
+              and isinstance(node.func.value, ast.Name)
+              and any(_names_a_load(a) for a in node.args)):
+            held.add(node.func.value.id)
+    return held
+
+
+def _loop_per_file_reason(loop: ast.AST, scope_commands: set[str]) -> str | None:
     iters, targets, bodies = _loop_parts(loop)
-    for node in iters:
-        verb = _verb_in(node)
-        if verb:
-            return f"iterates a table naming {verb}"
+    walks_commands = any(_names(i) & scope_commands for i in iters)
+    local: set[str] = set()
     for body in bodies:
+        # Statements run in order, so an assignment taints before its use.
         for node in ast.walk(body):
-            # A call that names a load verb AND takes the item the loop
-            # binds: the same call, repeated for each file.
-            if isinstance(node, ast.Call):
-                verb = _verb_in(node)
-                if verb and targets & {n.id for n in ast.walk(node)
-                                       if isinstance(n, ast.Name)}:
-                    return f"calls {verb} once per item"
-            if isinstance(node, ast.JoinedStr):
-                v = node.values
-                for here, after, nxt, close in zip(v, v[1:], v[2:], v[3:]):
-                    if (isinstance(here, ast.FormattedValue)
-                            and isinstance(after, ast.Constant)
-                            and isinstance(after.value, str)
-                            and _QUOTED_CALL_OPEN.match(after.value)
-                            and isinstance(nxt, ast.FormattedValue)
-                            and isinstance(close, ast.Constant)
-                            and isinstance(close.value, str)
-                            and _QUOTED_CALL_CLOSE.match(close.value)):
-                        return "calls a formatted-in function name on a path"
+            if isinstance(node, ast.Assign) and not isinstance(node.value, ast.Call):
+                if _names_a_load(node.value) or _names(node.value) & local:
+                    if _names(node.value) & (targets | local):
+                        for t in node.targets:
+                            local |= _bound_names(t)
+            if not isinstance(node, ast.Call) or _callee(node) in _NOT_A_SEND:
+                continue
+            args = [*node.args, *(k.value for k in node.keywords)]
+            used = set().union(*(_names(a) for a in args)) if args else set()
+            if any(_names_a_load(a) for a in args):
+                if (used & (targets | local)
+                        or any(isinstance(sub, ast.JoinedStr)
+                               and _names_a_load(sub) for a in args
+                               for sub in ast.walk(a))):
+                    return "sends a load command once per item"
+            if used & local:
+                return "sends a load command once per item"
+            if walks_commands and used & targets:
+                return "sends a prepared load command once per item"
     return None
 
 
@@ -1638,23 +1689,26 @@ def per_file_definition_loops(root: Path = TOOLS) -> list[str]:
     definitions one console call per file."""
     offenders: list[str] = []
 
-    def visit(node: ast.AST, rel: str, func: str | None, flagged: bool) -> None:
+    def visit(node: ast.AST, rel: str, func: str | None, scope: ast.AST,
+              commands: set[str], flagged: bool) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            func = node.name
+            func, scope = node.name, node
+            commands = _command_names(node)
         if isinstance(node, _LOOP_NODES) and not flagged:
-            reason = _loop_per_file_reason(node)
+            reason = _loop_per_file_reason(node, commands)
             if reason and (Path(rel).name, func) not in PER_FILE_LOOP_EXEMPT:
                 offenders.append(f"{rel}:{node.lineno} {reason}")
             flagged = reason is not None
         for child in ast.iter_child_nodes(node):
-            visit(child, rel, func, flagged)
+            visit(child, rel, func, scope, commands, flagged)
 
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root).as_posix()
         if (path.name == "probelib.py" or path.name.startswith("test_")
                 or "__pycache__" in path.parts):
             continue
-        visit(ast.parse(path.read_text(encoding="utf-8")), rel, None, False)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        visit(tree, rel, None, tree, _command_names(tree), False)
     return offenders
 
 
@@ -1721,6 +1775,64 @@ def bootstrap(port):
 """
 
 
+PER_FILE_ASSIGNED_COMMAND = """
+import glob
+from probelib import send
+
+
+def bootstrap(port):
+    for path in sorted(glob.glob("data/items/*.yaml")):
+        command = f"engine.loadItemYaml('{path}')"
+        send(port, command)
+"""
+
+PER_FILE_COMMAND_LIST = """
+import glob
+from probelib import send
+
+
+def bootstrap(port):
+    commands = [f"engine.loadItemYaml('{p}')" for p in glob.glob("data/items/*.yaml")]
+    for command in commands:
+        send(port, command)
+"""
+
+PER_FILE_JSON_PATH = """
+import json
+from pathlib import Path
+from probelib import send
+
+
+def bootstrap(port, repo):
+    for family, loader in (("substances", "loadSubstanceYaml"),):
+        for path in sorted((repo / "data" / family).glob("*.yaml")):
+            send(port, f"engine.{loader}({json.dumps(str(path))}); return true")
+"""
+
+ENUMERATION_OVER_LOADER_TABLE = """
+import glob
+
+
+def plan():
+    files = []
+    for pattern, verb in [("data/items/*.yaml", "engine.loadItemYaml")]:
+        files.extend((verb, p) for p in sorted(glob.glob(pattern)))
+    return files
+"""
+
+BATCHED_COMMANDS_SENT_ONCE = """
+import glob
+from probelib import send
+
+
+def bootstrap(port):
+    chunks = []
+    for path in sorted(glob.glob("data/items/*.yaml")):
+        chunks.append(f"engine.loadItemYaml('{path}')")
+    send(port, "; ".join(chunks))
+"""
+
+
 ONE_FIXED_FILE_PER_ITERATION = """
 from probelib import boot, send
 
@@ -1744,7 +1856,11 @@ def test_a_per_file_loop_is_caught() -> None:
     for label, source in (("verb table + glob loop", PER_FILE_TREE_LOOP),
                           ("separately collected file list", PER_FILE_COLLECTED_LIST),
                           ("verb passed to a directory helper", PER_FILE_VERB_ARGUMENT),
-                          ("comprehension", PER_FILE_COMPREHENSION)):
+                          ("comprehension", PER_FILE_COMPREHENSION),
+                          ("path passed as json.dumps", PER_FILE_JSON_PATH),
+                          ("command assigned, then sent", PER_FILE_ASSIGNED_COMMAND),
+                          ("command list built, then sent line by line",
+                           PER_FILE_COMMAND_LIST)):
         found = _per_file_scan(source)
         expect(len(found) == 1, f"{label}: expected one offender, got {found!r}")
 
@@ -1753,6 +1869,12 @@ def test_enumeration_without_a_per_file_load_is_not_caught() -> None:
     print("\n-- filesystem enumeration with no per-file console load stays allowed")
     found = _per_file_scan(ENUMERATION_ONLY)
     expect(found == [], f"expected no offender, got {found!r}")
+    for label, source in (("loader table that only collects paths",
+                           ENUMERATION_OVER_LOADER_TABLE),
+                          ("commands batched and sent once",
+                           BATCHED_COMMANDS_SENT_ONCE)):
+        found = _per_file_scan(source)
+        expect(found == [], f"{label}: expected no offender, got {found!r}")
     found = _per_file_scan(ONE_FIXED_FILE_PER_ITERATION)
     expect(found == [], "one fixed file loaded per engine is not a per-file "
            f"loop over a directory, got {found!r}")

@@ -731,13 +731,20 @@ def probe_wiring_cases():
         expect(raw not in led, f"the ledger wrapper makes no call to {raw}")
     expect(led.count("end") >= 4, "the ledger chunk is closed")
     # bootstrap installs it, once, after the scripts it wraps are loaded.
+    # Definition loading is one probelib.load_definitions call (#2953), so it
+    # is mocked at that boundary; every other setup line still goes through send.
     sent = []
-    real_send = probe.send
+    loads = []
+    real_send, real_load = probe.send, probe.load_definitions
     probe.send = lambda port, lua: (sent.append(lua), "ok")[1]
+    probe.load_definitions = lambda port, fams, **kw: (loads.append((port, fams)), {})[1]
     try:
         probe.bootstrap(9170)
     finally:
-        probe.send = real_send
+        probe.send, probe.load_definitions = real_send, real_load
+    expect(loads == [(9170, ("substance", "infection", "item", "equipment",
+                             "material", "faction", "physiology", "unit"))],
+           "bootstrap loads the same eight families, in order, in one call")
     expect(sent.count(probe.LEDGER_LUA) == 1, "bootstrap installs the ledger exactly once")
     expect(sent.index(probe.LEDGER_LUA)
            > max(i for i, c in enumerate(sent) if "unit_resources.lua" in c),
