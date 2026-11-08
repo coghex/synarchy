@@ -16,7 +16,7 @@ Protocol batches (sizes 20 and 20, fixed in advance):
 | Batch | Commit | What the commit contains | Trials | Exit 0 | Exit 1 | Other |
 |---|---|---|---|---|---|---|
 | Before | `ef2a42682` | requirement 2 evidence capture only; E's move kind, fixture and every assertion unchanged | 20 | 0 | 20 | 0 |
-| After | `c1bc96116` (final probe file) | narrowed E, committed-attack staging, attacker placed at order time, E's move kept pending and verified before the first hit, pair isolation on evidence, hand-back counted only while the fight is on | 20 | 20 | 0 | 0 |
+| After | `1a5d1926b` (final probe file) | narrowed E, committed-attack staging, attacker placed at order time and kept beside the victim until its first hit, E's move verified pending in the qualifying combat sample, pair isolation on evidence, hand-back counted only while the fight is on | 20 | 20 | 0 | 0 |
 
 Development batches (NOT part of the protocol; each ran at a non-final commit while a defect was found and fixed; all
 reported, none hidden; the review of round 1 asked for this to be explicit and an owner exception was requested in
@@ -27,9 +27,14 @@ the channel):
 | `0bdd3b56f` | 20 | 18 | 2 | both failures: check D, no hit landed (attacker chased a walking victim); fixed by placing the attacker at order time |
 | `25d9b1f4f` | 20 | 20 | 0 | clean, but measured before the review's findings and before the leftover-patient effect below was exposed (the pair teardown it contained was later removed on review as speculative) |
 | `e9da94adc` | 20 | 14 | 6 | teardown removed, staging repaired: every failure had `treat_ally` selected (see below) |
+| `c1bc96116` | 20 | 20 | 0 | teardown restored, hand-back counted while the fight is on; clean, before the review's E pending-move finding |
+| `46401665f` | 20 | 18 | 2 | E pending-move required in the qualifying sample. Trial 7: E setup failure (exit 3 path) - no hit landed, the attacker lagged and the move finished. Trial 10: check D, no hit landed (attacker lagged a walking victim). No `treat_ally`, no wounded unit. Fixed by keeping the attacker beside the victim until the first hit (`dev-46401665f/`) |
 
-The final PR commit differs from `c1bc96116` only in `tools/ci_probes.py` (the FLAKY reason text); the probe file is
-byte-identical (`git diff c1bc96116 HEAD -- tools/follow_command_priority_probe.py` is empty).
+The final PR commit differs from `1a5d1926b` only in `tools/ci_probes.py` (the FLAKY reason text); the probe file is
+byte-identical (`git diff 1a5d1926b HEAD -- tools/follow_command_priority_probe.py` is empty).
+
+Owner exception (2026-11-08, relayed by syn-manager): "Allow the fix" — keep the pair teardown and the reported extra
+batches; the final 20-trial batch at the PR's final probe commit is the after.
 
 ## Before batch: per-check tally (20 trials, from each trial's own complete stdout)
 
@@ -94,9 +99,9 @@ Verdict for this batch: probe-side. A medic with a wounded ally in reach treatin
 documented ladder, not a defect; the probe left patients in reach that the check did not intend. Eligible combat was
 never out-scored: where combat was eligible and the unit was alive, it won.
 
-## Final batch (`c1bc96116`)
+## Final batch (`1a5d1926b`)
 
-20/20 exit 0 (lab run `20674d0a-c24b-472f-940c-75e7ba1667b2`): every check PASS and no E setup failure (exit 3) is the
+20/20 exit 0 (lab run `a6c5bdeb-0265-48d2-bab7-d4870e78111e`): every check PASS and no E setup failure (exit 3) is the
 only path to exit 0, and a passing run prints nothing through `run_probes`. Smoke runs printed the evidence lines; for
 example D `search_for_water -> attack_target` with `incomingHitBasis: self_defense`, E `follow_command -> engage ->
 attack_target` with `movePending: true, movePlayer: false` at the order.
