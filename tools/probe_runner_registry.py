@@ -376,7 +376,9 @@ PROBES = [
      "and arrival capacity refusals; a partial batch; a stale instance; a "
      "vanished counterpart retiring quietly; a blocked approach stalling "
      "out; a progressing trip outliving the stall budget; and a mid-walk "
-     "save/load round trip resuming to completion"),
+     "save/load round trip resuming to completion; and one exact instance "
+     "walked by real carriers round all six ordered pairs of acolyte, "
+     "technomule and built storage (#2935)"),
     ("transfer_context_menu", "transfer_context_menu_probe.py",
      "offscreen: right-click 'Transfer' on a built storage building and on "
      "the technomule, located via ui.dumpWidgets(), creates a session with "

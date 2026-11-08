@@ -79,7 +79,8 @@ class Checks:
         print(f"\n=== [{stage}] {title} ===" if title
               else f"\n=== [{stage}] ===", flush=True)
 
-    def ok(self, cond: bool, label: str, detail: str = "") -> bool:
+    def ok(self, cond: bool, label: str, detail: str = "",
+           setup: bool = False) -> bool:
         cond = bool(cond)
         # Recording against a stage counts as reaching it, so an
         # operational failure raised before its own enter() still reports
@@ -94,7 +95,7 @@ class Checks:
             # `self.stage` is already the attributed stage here: `ok_at`
             # sets it to its target before delegating, so a teardown-path
             # boundary-log failure is retained under its own boundary.
-            record = (self.failure.setup if self.stage == "setup"
+            record = (self.failure.setup if setup or self.stage == "setup"
                       else self.failure.check)
             record(f"[{self.stage}] {label}"
                    + (f" ({detail})" if detail else ""))

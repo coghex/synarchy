@@ -927,7 +927,12 @@ def test_the_transfer_order_probe_records_operational_failures() -> None:
                  "running stage 'phase9': boom"),
                 ("exit", "raise SystemExit(3)",
                  "FAIL: [phase9] the engine could not be started, or died, "
-                 "during stage 'phase9' (SystemExit: 3)")):
+                 "during stage 'phase9' (SystemExit: 3)"),
+                ("fixture", "from probelib import FixtureNotRegistered\n"
+                 "    raise FixtureNotRegistered('the loader rejected it')",
+                 "SETUP FAILURE: [phase9] a probe fixture was rejected by "
+                 "the engine loader during stage 'phase9': the loader "
+                 "rejected it")):
             add_driver(tree, name, (
                 "import transfer_order_probe as probe\n"
                 "def die(*args, **kwargs):\n"

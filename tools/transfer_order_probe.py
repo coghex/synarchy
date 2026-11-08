@@ -52,6 +52,13 @@ checks is downstream of that:
      is released.
  11. The carrier DIES mid-walk: its order is retired rather than left
      pending forever on a unit that will never tick again.
+ 12. ONE exact instance walks the whole directed circuit of the three
+     endpoint classes (acolyte, technomule, built storage) through queued
+     orders - all six ordered pairs, each walked by a real carrier to its
+     arrival commit - with exact source and destination ownership read
+     before and after every leg, the order pruned and exactly one
+     attributed completion event per leg (#2935: the per-pair completion
+     the retired end-to-end probe gave each queued gesture).
 
 #1253's terminal cleanup runs through every one of those. Whichever way
 an order ends — committed, refused, retired, stalled or cancelled — its
@@ -216,7 +223,7 @@ KILL_HOLD_X = 30
 # One stage per phase: a failure names the phase that broke, and every failed
 # check is a durable failure record (#2802) under that stage. The shared
 # recorder also carries the #1487 integrity-log oracle phase 9 ends with.
-STAGES = [f"phase{n}" for n in range(1, 12)]
+STAGES = [f"phase{n}" for n in range(1, 13)]
 
 
 # --------------------------------------------------------------------------
@@ -875,6 +882,95 @@ def phase_cancel(port: int, chk: Checks) -> None:
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
+def endpoint_ids(port: int, ep) -> list:
+    """The exact `probe_ingot` instance ids an endpoint holds, as the
+    transfer contract projects them."""
+    info = send_json(port, "return unit.transferEndpointInfo("
+                           f"{{ kind = '{ep[0]}', id = {ep[1]} }})")
+    return sorted(int(i["instanceId"]) for i in (info or {}).get("contents")
+                  or [] if i.get("defName") == "probe_ingot")
+
+
+def phase_endpoint_circuit(port: int, chk: Checks) -> None:
+    """12. One exact instance through all six ordered endpoint-class pairs.
+
+    {acolyte, technomule, built storage} has six directed edges, and one
+    circuit visits each exactly once (A->S, S->M, M->A, A->M, M->S, S->A),
+    so a SINGLE instance is carried round it: any leg that moved a different
+    item, or moved it to the wrong place, breaks every leg after it. Each
+    leg is a queued order commanded for an EXACT instance and walked by a
+    real carrier (the unit endpoint it involves; a technomule for two of the
+    six) to its arrival commit. On the arena, so no terrain decides it."""
+    print("\n--- 12. one exact instance round the six endpoint-class "
+          "pairs ---")
+    lane = LANES[2]
+    hold_x = 20
+    bid = spawn_hold(port, "probe_wide_hold", hold_x, lane)
+    if not chk.ok(bid is not None, "3x1 probe hold spawned"):
+        return
+    acolyte = spawn_carrier(port, hold_x + 14, lane)
+    mraw = send(port, f"return unit.spawn('technomule', {hold_x + 14}, "
+                      f"{lane + 5}, nil, 'player')")
+    try:
+        mule = int(float(mraw))
+    except (TypeError, ValueError):
+        chk.ok(False, "technomule spawned", mraw)
+        return
+    clear_find_water(port, mule)
+    A, M, S = ("unit", acolyte), ("unit", mule), ("building", bid)
+    give(port, acolyte, "probe_ingot", 1)
+    held = endpoint_ids(port, A)
+    if not chk.ok(len(held) == 1, "the acolyte holds exactly one probe_ingot",
+                  str(held)):
+        return
+    iid = held[0]
+    # (name, source, destination, executor uid): the executor is the unit
+    # endpoint the leg involves; for unit<->unit it is the source, except
+    # M->A where the RECEIVER walks to fetch it.
+    circuit = [("acolyte->storage", A, S, acolyte),
+               ("storage->technomule", S, M, mule),
+               ("technomule->acolyte", M, A, acolyte),
+               ("acolyte->technomule", A, M, acolyte),
+               ("technomule->storage", M, S, mule),
+               ("storage->acolyte", S, A, acolyte)]
+    for name, src, dst, executor in circuit:
+        label = f"circuit {name}"
+        if not chk.ok(endpoint_ids(port, src) == [iid]
+                      and iid not in endpoint_ids(port, dst),
+                      f"{label}: the exact instance {iid} starts on the "
+                      f"source and not on the destination",
+                      f"src={endpoint_ids(port, src)!r} "
+                      f"dst={endpoint_ids(port, dst)!r}"):
+            return
+        before = event_total(port, executor, "unit_event", "transferred")
+        request = ("{ source = { kind = '%s', id = %d }, destination = "
+                   "{ kind = '%s', id = %d }, items = { { instanceId = %d, "
+                   "defName = 'probe_ingot' } } }"
+                   % (src[0], src[1], dst[0], dst[1], iid))
+        oid_raw = command_order(port, executor, request)
+        try:
+            oid = int(float(oid_raw))
+        except (TypeError, ValueError):
+            chk.ok(False, f"{label}: the order was accepted", oid_raw)
+            return
+        chk.ok(wait_settled(port, executor, oid, 150.0),
+               f"{label}: the carrier walks the order to its arrival commit "
+               f"and it is pruned")
+        chk.ok(endpoint_ids(port, dst) == [iid]
+               and iid not in endpoint_ids(port, src),
+               f"{label}: the exact instance is now on the destination and "
+               f"left the source - in exactly one endpoint",
+               f"src={endpoint_ids(port, src)!r} "
+               f"dst={endpoint_ids(port, dst)!r}")
+        chk.ok(not [o for o in orders(port, executor) if o.get("id") == oid],
+               f"{label}: no order is left in the store")
+        chk.ok(event_total(port, executor, "unit_event", "transferred")
+               - before == 1,
+               f"{label}: the completion reached the player exactly once")
+    for uid in (acolyte, mule):
+        send(port, f"unit.destroy({uid}); return 'ok'")
+
+
 def phase_carrier_dies(port: int, chk: Checks) -> None:
     """11. The carrier DIES mid-walk (#1253, review round 1).
 
@@ -1137,13 +1233,13 @@ def main() -> int:
                     help="comma-separated phase numbers (default: all)")
     args = ap.parse_args()
 
-    all_phases = set(range(1, 12))
+    all_phases = set(range(1, 13))
     wanted = {int(p) for p in args.only.split(",") if p.strip()} or all_phases
     # A selection that names no real phase must FAIL, not report a clean
     # run of nothing: an exit-0 probe that executed zero checks is
     # indistinguishable from one that passed.
     if not wanted & all_phases:
-        print(f"no such phase(s): {sorted(wanted)} (valid: 1-11)")
+        print(f"no such phase(s): {sorted(wanted)} (valid: 1-12)")
         return 2
     tmp = tempfile.mkdtemp(prefix="synarchy_transfer_order_probe_")
     # Only the SELECTED phases are stages, so a `--only` run is not reported
@@ -1153,7 +1249,7 @@ def main() -> int:
     proc = None
     try:
         try:
-            if wanted & (set(range(1, 9)) | {10, 11}):
+            if wanted & (set(range(1, 9)) | {10, 11, 12}):
                 print(f"== arena engine (port {args.port}) ==")
                 proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
                 bootstrap_defs(args.port, tmp)
@@ -1170,6 +1266,7 @@ def main() -> int:
                     (8, phase_long_trip),
                     (10, phase_cancel),
                     (11, phase_carrier_dies),
+                    (12, phase_endpoint_circuit),
                 ]
                 for n, fn in phases:
                     if n in wanted:
@@ -1181,8 +1278,16 @@ def main() -> int:
                 root = make_isolated_root(tmp)
                 chk.enter("phase9")
                 phase_save_load(chk, root, tmp, args.port, args.seed, args.size)
-        except FixtureNotRegistered:
-            raise
+        except FixtureNotRegistered as exc:
+            # A SETUP failure, not a behavioural one: nothing downstream of
+            # a fixture that never registered can pass. It keeps its setup
+            # meaning (the `setup` record kind and the message the entry
+            # point has always printed) but is now recorded against the
+            # stage it interrupted, with the stage summary still printed.
+            print(f"\n{exc}")
+            chk.ok(False, f"a probe fixture was rejected by the engine "
+                          f"loader during stage '{chk.stage}': {exc}",
+                   setup=True)
         except SystemExit as exc:
             # `probelib.boot` reports an engine that died before READY, or
             # never printed it, by calling sys.exit() - and SystemExit
