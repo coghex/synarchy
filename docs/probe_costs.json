@@ -45,17 +45,6 @@
       "state": "passed",
       "wall_seconds": 214.719
     },
-    "bleeding_trail": {
-      "count": 3,
-      "date": "2026-10-19",
-      "max_seconds": 379.069,
-      "median_seconds": 288.615,
-      "min_seconds": 286.693,
-      "revision": "acc77479e710",
-      "run_id": "5578e845-1297-4390-a09b-d356e27c495d",
-      "state": "passed",
-      "wall_seconds": 379.069
-    },
     "blood_decal": {
       "count": 3,
       "date": "2026-10-19",
