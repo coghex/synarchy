@@ -218,6 +218,60 @@ def main():
                 "unit.spawn(", "debugAmbient"):
         expect(raw not in probe.DIAG, f"the diagnostics make no call {raw}")
 
+    # 12. The squirrel section emits a baseline AND a final per-unit record for
+    #     its three squirrels (#2944), and the optional sink gets every record,
+    #     all without changing its checks (it still passes on a healthy fake).
+    import contextlib
+    import io
+    import tempfile
+    squirrel_units = [{"id": i, "circ": 1.0, "conc": 1.0, "concMode": "nominal",
+                       "modes": {"salt": "nominal"}, "stats": {"body_mass": 0.25}}
+                      for i in (11, 12, 13)]
+    spawned = iter([11, 12, 13, 21, 22, 23, 31, 32, 33])
+    sq_agg = {"n": 3, "dead": 0, "core": {"min": 36.5, "max": 36.9, "avg": 36.7},
+              "conc": {"min": 1.0, "max": 1.0, "avg": 1.0},
+              "circ": {"min": 1.0, "max": 1.0, "avg": 1.0}}
+
+    def sq_send(port, lua):
+        if "unit.spawn" in lua:
+            return str(next(spawned))
+        if lua.startswith("_U="):
+            return "3"
+        if "body_mass" in lua and "string.format" in lua:
+            return '"0.250000,0.050000,0.150000"'
+        if "getPhysioOverride" in lua:
+            return json.dumps(HEALTHY)
+        if "pcall(function()" in lua and "unit.readBloodView" in lua:
+            return json.dumps(dict(sq_agg, units=squirrel_units))
+        return json.dumps(sq_agg)
+
+    real_send, real_sleep = probe.send, probe.time.sleep
+    probe.send, probe.time.sleep = sq_send, lambda _s: None
+    sink = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
+    sink.close()
+    os.environ[probe.DIAG_SINK_ENV] = sink.name
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            probe.small_creature_section(9170, 30.0)
+    finally:
+        probe.send, probe.time.sleep = real_send, real_sleep
+        del os.environ[probe.DIAG_SINK_ENV]
+    printed = [json.loads(ln.split("[DIAG] ", 1)[1])
+               for ln in out.getvalue().splitlines() if "[DIAG]" in ln]
+    sunk = [json.loads(ln) for ln in open(sink.name).read().splitlines()]
+    os.unlink(sink.name)
+    got = [(r["scenario"], r["phase"], r["species"], len(r["units"] or []))
+           for r in printed if r["scenario"] == "small creature temperate"]
+    expect(got == [("small creature temperate", "baseline", "red_squirrel", 3),
+                   ("small creature temperate", "final", "red_squirrel", 3)],
+           f"the squirrel section emits a 3-unit baseline then final record: {got}")
+    expect(sunk == printed, "the sink receives exactly the printed records")
+    expect("[PASS] small creature temperate" in out.getvalue()
+           and "[PASS] squirrel simple profile" in out.getvalue(),
+           "the squirrel section still judges a healthy fake as before "
+           "(its cold-comparison check is not satisfiable by this fake)")
+
     if failures:
         print("physiology probe self-test: FAILED")
         for failure in failures:

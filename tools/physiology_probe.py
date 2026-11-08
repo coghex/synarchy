@@ -26,7 +26,7 @@ Usage: python3 tools/physiology_probe.py [--port 9170] [--seconds 30] [--count 5
 Exit 0 = all scenarios passed.
 """
 from __future__ import annotations
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, json, os, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/physiology_probe_engine.log"
@@ -82,6 +82,8 @@ AGG = (
 # changes, and the extra `units` key is ignored by every assertion. The stat
 # snapshot comes from `unit.getAllStats` (effective values; the access audit
 # does not follow it) and the registry-owned keys through the read verbs.
+#: Optional file every `[DIAG]` record is also appended to (one JSON per line).
+DIAG_SINK_ENV = "SYNARCHY_PHYSIOLOGY_DIAG_FILE"
 DIAG_SYSTEMS = ("thermo", "salt", "hydration", "nutrition", "cardio", "blood")
 DIAG = (
     "local function f(v) if v==nil then return nil end "
@@ -130,7 +132,14 @@ def emit_diag(label, phase, m):
     rec = {"scenario": label, "phase": phase, "species": m.get("species"),
            "units": m.get("units"), "unitsError": m.get("unitsError"),
            "agg": {k: m.get(k) for k in ("n", "dead", "core", "conc", "circ")}}
-    print("  [DIAG] " + json.dumps(rec, sort_keys=True))
+    line = json.dumps(rec, sort_keys=True)
+    print("  [DIAG] " + line)
+    # Optional durable sink: a runner that keeps only a failing probe's output
+    # (tools/run_probes.py) still leaves every attempt's per-unit evidence here.
+    sink = os.environ.get(DIAG_SINK_ENV)
+    if sink:
+        with open(sink, "a") as fh:
+            fh.write(line + "\n")
 
 
 def spawn_batch(port, count, species="acolyte", x0=1):
@@ -289,6 +298,9 @@ def small_creature_section(port, seconds):
         print("  [FAIL] small creature: could not spawn red_squirrel")
         return False
     time.sleep(1.0)
+    # Observation only: the three squirrels' per-unit baseline (≈ spawn state).
+    emit_diag("small creature temperate", "baseline",
+              measure(port, units=True, species="red_squirrel"))
     masses = unit_masses(port, sq[0])
     time.sleep(seconds)
     m = measure(port, units=True, species="red_squirrel")
