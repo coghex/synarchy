@@ -100,7 +100,7 @@ All 120 temperate acolytes of both batches reproduce the engine's value with thi
   fail, plus a further 1.2% of units sitting exactly on 0.75. A bodyfat `N(0.2, 0.09)`
   model gives 2.6% per unit, 12% per run. Observed: 1/24 runs (4%) and 1/120 units
   (0.8%) below 0.75, within chance of the model (P(at most 1 failing run in 24) about
-  21%); with the issue's 2 earlier failures in 3 runs, the pooled 3/27 matches it.
+  24%); with the issue's 2 earlier failures in 3 runs, the pooled 3/27 matches it.
 - Lowest values: batch R 0.7411 (c 0.681, fat 0.369), 0.7520 (c 0.721, fat 0.380), 0.7807
   (c 0.759, fat 0.361); batch D 0.7500 (c 0.500, fat 0.034), 0.7631 (c 0.722, fat 0.363).
 
