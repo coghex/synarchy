@@ -1819,34 +1819,45 @@ WANDER_PACE_FRACTION = 0.4
 def wander_break_verdict(samples, capped=False):
     """Grade phase 4a's samples (oldest first; see break_sample_lua).
 
-    Answers (verdict, detail): 'moved' (the unit walked at least
-    min(WANDER_MIN_PATH, WANDER_PACE_FRACTION x meander x active seconds)
-    tiles while its wander break was active), 'waiting' (not over, nothing
+    Answers (verdict, detail): 'moved' (the unit walked the required path
+    while its wander break was active), 'waiting' (not over, nothing
     decided), 'still' (the break ended, or the wait capped, with less
     walked), 'never_active' (it was never mid-break), 'wrong_behavior' (a
-    break of another behaviour ran). Movement outside the active break never
-    counts: the setup stops the unit first, so the only movement the break
-    can be credited with is its own, and once it ends the ordinary AI wanders
-    by itself."""
+    break of another behaviour ran).
+
+    The required path is WANDER_MIN_PATH, and that FIXED minimum may be met
+    at any time (early success ends the wait). The pace-scaled minimum
+    (min(WANDER_MIN_PATH, WANDER_PACE_FRACTION x meander x active seconds))
+    is judged ONLY once the break has actually ended: scaled from a few
+    early samples it would be almost nothing, and an early 'moved' ends the
+    break (#2976, review round 1). A wait that capped before the break ended
+    has no established episode duration, so it too is held to the fixed
+    minimum. Movement outside the active break never counts: the setup
+    stops the unit first, so the only movement the break can be credited
+    with is its own, and once it ends the ordinary AI wanders by itself."""
     act, other = _active_run(samples, "wander")
     path = _active_path(samples, "wander")
-    need = WANDER_MIN_PATH
-    means = [x["mean"] for x in act if isinstance(x.get("mean"), (int, float)) and x["mean"] > 0]
-    if means and len(act) > 1:
-        need = min(WANDER_MIN_PATH,
-                   WANDER_PACE_FRACTION * (sum(means) / len(means)) * (act[-1]["now"] - act[0]["now"]))
-    if path >= need and path > 0:
-        return "moved", f"walked {path:.2f} tiles (need {need:.2f}) while the wander break was active"
+    ended = _break_ended(samples)
+    if path >= WANDER_MIN_PATH:
+        return "moved", f"walked {path:.2f} tiles (need {WANDER_MIN_PATH}) while the wander break was active"
     if not act:
         if other:
             return "wrong_behavior", f"the break rolled {sorted(map(str, other))}, not wander"
-        if _break_ended(samples) or capped:
+        if ended or capped:
             return "never_active", "the wander break was never observed active"
         return "waiting", "no active wander break yet"
-    if _break_ended(samples) or capped:
-        return "still", (f"walked only {path:.2f} tiles (need {need:.2f}) while the wander break "
-                         f"was active" + ("; wait capped" if capped and not _break_ended(samples) else ""))
-    return "waiting", f"walked {path:.2f} tiles (need {need:.2f}) so far"
+    if not ended and not capped:
+        return "waiting", f"walked {path:.2f} tiles so far (need {WANDER_MIN_PATH})"
+    need = WANDER_MIN_PATH
+    means = [x["mean"] for x in act if isinstance(x.get("mean"), (int, float)) and x["mean"] > 0]
+    if ended and means and len(act) > 1:
+        need = min(WANDER_MIN_PATH,
+                   WANDER_PACE_FRACTION * (sum(means) / len(means)) * (act[-1]["now"] - act[0]["now"]))
+    if path >= need and path > 0:
+        return "moved", (f"walked {path:.2f} tiles (need {need:.2f}, scaled to this unit's meander "
+                         f"over the whole {act[-1]['now'] - act[0]['now']:.1f} game s break)")
+    return "still", (f"walked only {path:.2f} tiles (need {need:.2f}) while the wander break was active"
+                     + ("; wait capped before the break ended" if not ended else ""))
 
 
 def _away_path(samples):
@@ -2116,47 +2127,6 @@ NINE_H_NEAR = 5.0
 NINE_H_FAR = 6.0
 
 
-def chebyshev_geometry_lua(subj, near, far):
-    """ONE console chunk: read both candidates' offset from the subject,
-    pose and the production eligibility verdict, THEN force the lash-out
-    break, so the reading is the geometry the first decision sees."""
-    return " ".join((
-        f"local S, N, F = {subj}, {near}, {far};",
-        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
-        "local me = unit.getInfo(S);",
-        "local function rd(o) local i = unit.getInfo(o);",
-        " if not i or not me then return { ok = false } end;",
-        " return { ok = true, dx = i.gridX - me.gridX, dy = i.gridY - me.gridY,",
-        "  elig = pol.eligible(S, me, o) == true, pose = tostring(unit.getPose(o)) } end;",
-        "local g = { n = rd(N), f = rd(F), t = engine.gameTime() };",
-        "require('scripts.mental_state').forceBreak(S, 'lash_out');",
-        "return g"))
-
-
-def chebyshev_geometry_problems(geom):
-    """Why a 9h selection is not gradable (empty list: it is). Both
-    candidates must read back, be eligible, and rank differently under the
-    two metrics: the intended one Chebyshev-nearer and Euclidean-farther."""
-    if not isinstance(geom, dict) or not all(
-            isinstance(geom.get(k), dict) and geom[k].get("ok") is True for k in ("n", "f")):
-        return ["a candidate's position could not be read at the decision"]
-    out = []
-    for k, name in (("n", "the Chebyshev-nearer candidate"), ("f", "the Euclidean-nearer candidate")):
-        c = geom[k]
-        if c.get("elig") is not True:
-            out.append(f"{name} was not eligible at the decision (pose {c.get('pose')})")
-    try:
-        ch = {k: max(abs(geom[k]["dx"]), abs(geom[k]["dy"])) for k in ("n", "f")}
-        eu = {k: geom[k]["dx"] ** 2 + geom[k]["dy"] ** 2 for k in ("n", "f")}
-    except (KeyError, TypeError):
-        return out + ["a candidate's offset is unreadable"]
-    if not ch["n"] < ch["f"]:
-        out.append(f"the intended candidate is not Chebyshev-nearer ({ch['n']:.2f} vs {ch['f']:.2f})")
-    if not eu["n"] > eu["f"]:
-        out.append(f"the intended candidate is not Euclidean-farther ({eu['n']:.2f} vs {eu['f']:.2f})")
-    return out
-
-
 def live_unit_ids(port):
     """Every uid unit.getAllIds lists right now (None when unreadable)."""
     r = send_json(port, "return { ids = unit.getAllIds() or {} }")
@@ -2205,6 +2175,392 @@ def retirement_problem(victims, remaining):
     return None
 
 
+_CHEB_OBSERVER_TEMPLATE = r"""
+local S, N, F = @S@, @N@, @F@
+local mentalAi = require('scripts.unit_ai_mental')
+local policy = mentalAi.lashoutPolicy
+local atk = require('scripts.unit_ai_combat_attack')
+local origSC, origATE = mentalAi.shortCircuit, atk.attackTargetExecute
+local origGI, origGP, origEx, origAll = unit.getInfo, unit.getPose, unit.exists, unit.getAllIds
+local rec = { inTick = false, done = false, nilSel = false, tickRaised = false, allIds = false,
+  me = false, info = {}, pose = {}, exists = {}, elig = {}, target = -1, targetTyped = false }
+_G.__probe_cheb_rec = rec
+local function restore()
+  unit.getInfo, unit.getPose, unit.exists, unit.getAllIds = origGI, origGP, origEx, origAll
+  atk.attackTargetExecute, mentalAi.shortCircuit = origATE, origSC
+  _G.__probe_cheb_restore = nil
+end
+_G.__probe_cheb_restore = restore
+local function role(u) if u == N then return 'n' elseif u == F then return 'f' end return nil end
+unit.getInfo = function(u)
+  local v = origGI(u)
+  if rec.inTick and not rec.done then
+    if u == S then
+      if type(v) == 'table' then rec.me = { gridX = v.gridX, gridY = v.gridY } end
+    elseif role(u) then
+      rec.info[role(u)] = (type(v) == 'table') and { gridX = v.gridX, gridY = v.gridY, defName = v.defName } or { invalid = true }
+    end
+  end
+  return v
+end
+unit.getPose = function(u)
+  local v = origGP(u)
+  if rec.inTick and not rec.done and role(u) then rec.pose[role(u)] = v end
+  return v
+end
+unit.exists = function(u)
+  local v = origEx(u)
+  if rec.inTick and not rec.done and role(u) then rec.exists[role(u)] = v end
+  return v
+end
+unit.getAllIds = function()
+  if rec.inTick and not rec.done then rec.allIds = true end
+  return origAll()
+end
+local function replay(oid)
+  local r = role(oid)
+  if not rec.me or not r or rec.info[r] == nil or rec.info[r].invalid
+     or rec.exists[r] == nil or rec.pose[r] == nil then return false end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  unit.exists = function(u) if u == oid then return rec.exists[r] end return origEx(u) end
+  unit.getPose = function(u) if u == oid then return rec.pose[r] end return origGP(u) end
+  unit.getInfo = function(u) if u == oid then return rec.info[r] end return origGI(u) end
+  local ok, res = pcall(policy.eligible, S, rec.me, oid)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  return ok and res == true
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u == S and rec.inTick and not rec.done then
+    rec.done = true
+    local t = s and s.attackTargetUid
+    rec.targetTyped = (type(t) == 'number')
+    rec.target = rec.targetTyped and t or -1
+    rec.elig.n, rec.elig.f = replay(N), replay(F)
+  end
+  return origATE(u, s, params)
+end
+mentalAi.shortCircuit = function(uid, s, ...)
+  if uid ~= S or rec.done then return origSC(uid, s, ...) end
+  rec.inTick, rec.me, rec.info, rec.pose, rec.exists, rec.allIds = true, false, {}, {}, {}, false
+  local res = table.pack(pcall(origSC, uid, s, ...))
+  rec.inTick = false
+  if not res[1] then
+    rec.tickRaised, rec.tickErr, rec.done = true, tostring(res[2]), true
+  elseif res[2] == true and not rec.done then
+    rec.done, rec.nilSel = true, true
+    rec.elig.n, rec.elig.f = replay(N), replay(F)
+  end
+  if rec.done then restore() end
+  if not res[1] then error(res[2], 0) end
+  return table.unpack(res, 2, res.n)
+end
+require('scripts.mental_state').forceBreak(S, 'lash_out')
+return 'cheb-observer-installed'
+"""
+
+
+def chebyshev_observer_chunk(subj, near, far):
+    """The one-line console text that installs the 9h decision observer and
+    forces the lash-out break in the SAME chunk (the Lua thread runs a chunk
+    whole, so the first AI tick is observed). It wraps unit_ai_mental's
+    shortCircuit (called through the module table every tick) and
+    unit_ai_combat_attack.attackTargetExecute (what lashOutExecute calls
+    straight after the pick), records the subject's own position and the
+    answers the DECISION got for each candidate (info, pose, existence)
+    during the subject's tick, and replays the production eligibility
+    predicate on exactly those answers when the execute is reached. The
+    wrappers restore themselves when the decision is final."""
+    return " ".join(line.strip() for line in
+                    _CHEB_OBSERVER_TEMPLATE.replace("@S@", str(int(subj)))
+                    .replace("@N@", str(int(near))).replace("@F@", str(int(far))).splitlines()
+                    if line.strip())
+
+
+#: Reads the observer's record and removes the wrappers whether or not the
+#: decision happened.
+CHEB_COLLECT_LUA = ("local r = _G.__probe_cheb_rec; "
+                    "if _G.__probe_cheb_restore then _G.__probe_cheb_restore() end; "
+                    "_G.__probe_cheb_rec = nil; "
+                    "if r == nil then return { missing = true } end; return r")
+
+
+def chebyshev_decision_verdict(rec, near, far):
+    """Grade 9h's FIRST observed selection against the geometry and
+    eligibility the DECISION itself saw (#2976, review round 1: a snapshot
+    taken before forceBreak says nothing about candidates that move before
+    the AI tick).
+
+    Answers (kind, detail): 'setup' (the observation is missing, malformed
+    or its preconditions did not hold: discard and restage), 'ok' (a held
+    setup selected the Chebyshev-nearer candidate) or 'policy' (a held setup
+    selected the other candidate, or none). The preconditions: the first
+    decision completed without raising; the subject's own position was
+    captured; both candidates' info, existence and pose were read by the
+    decision; the production predicate, replayed on those answers, admits
+    both; and on the decision's own positions the intended candidate is
+    Chebyshev-nearer and Euclidean-farther than the decoy."""
+    if not isinstance(rec, dict) or rec.get("missing") is True:
+        return "setup", "no decision record (the observer was never installed or already removed)"
+    if rec.get("tickRaised") is True:
+        return "setup", f"the subject's first lash-out tick raised ({rec.get('tickErr')})"
+    if rec.get("done") is not True:
+        return "setup", "no lash-out decision was observed"
+    me = rec.get("me")
+    if not (isinstance(me, dict) and _finite_num(me.get("gridX")) and _finite_num(me.get("gridY"))):
+        return "setup", "the subject position the decision measured from was not captured"
+    problems = []
+    dist = {}
+    for k, name in (("n", "the Chebyshev-nearer candidate"), ("f", "the Euclidean-nearer candidate")):
+        info = (rec.get("info") or {}).get(k) if isinstance(rec.get("info"), dict) else None
+        if not (isinstance(info, dict) and _finite_num(info.get("gridX")) and _finite_num(info.get("gridY"))):
+            problems.append(f"{name} was not read by the decision")
+            continue
+        if (rec.get("elig") or {}).get(k) is not True:
+            problems.append(f"{name} was not eligible on the decision's own reads (pose "
+                            f"{(rec.get('pose') or {}).get(k)!r}, exists {(rec.get('exists') or {}).get(k)!r})")
+        dx, dy = info["gridX"] - me["gridX"], info["gridY"] - me["gridY"]
+        dist[k] = (max(abs(dx), abs(dy)), dx * dx + dy * dy)
+    if len(dist) == 2:
+        if not dist["n"][0] < dist["f"][0]:
+            problems.append(f"at the decision the intended candidate is not Chebyshev-nearer "
+                            f"({dist['n'][0]:.2f} vs {dist['f'][0]:.2f})")
+        if not dist["n"][1] > dist["f"][1]:
+            problems.append(f"at the decision the intended candidate is not Euclidean-farther "
+                            f"({dist['n'][1]:.2f} vs {dist['f'][1]:.2f})")
+    if problems:
+        return "setup", "; ".join(problems)
+    target = rec.get("target")
+    if rec.get("nilSel") is True or rec.get("targetTyped") is not True:
+        return "policy", "the decision selected no target although both candidates were eligible"
+    if target == near:
+        return "ok", f"selected {near}"
+    return "policy", f"selected {target}, not the Chebyshev-nearer {near} (decoy {far})"
+
+
+_MULE_OBSERVER_TEMPLATE = r"""
+local L, V, M = @L@, @V@, @M@
+local atk = require('scripts.unit_ai_combat_attack')
+local pol = require('scripts.unit_ai_mental').lashoutPolicy
+local WINDOW = require('scripts.unit_ai_combat').RETALIATE_WINDOW_SEC
+local orig = atk.attackTargetExecute
+local calls = {}
+_G.__probe_mule_calls = calls
+_G.__probe_mule_restore = function() atk.attackTargetExecute = orig; _G.__probe_mule_restore = nil end
+local function pos(i) if type(i) ~= 'table' then return { invalid = true } end return { gridX = i.gridX, gridY = i.gridY } end
+local function reading()
+  local ok, r = pcall(function()
+    local me, mi, gla = unit.getInfo(L), unit.getInfo(M), unit.getLastAttacker(L)
+    return { now = engine.gameTime(), lpos = pos(me), mpos = pos(mi), mdef = mi and mi.defName or false,
+      range = unit.getAttackRange(L) or 1.0, mexists = unit.exists(M) == true, mpose = unit.getPose(M),
+      glaUid = gla and gla.uid or false, glaAt = gla and gla.at or false, window = WINDOW,
+      victimElig = ((me ~= nil) and pol.eligible(L, me, V) == true) or false }
+  end)
+  if ok then return r end
+  return { err = tostring(r) }
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u ~= L or not s or #calls >= 200 then return orig(u, s, params) end
+  local c = { pre = s.attackTargetUid or -1, before = reading() }
+  local ok, err = pcall(orig, u, s, params)
+  c.after = reading()
+  c.post = s.attackTargetUid or -1
+  calls[#calls + 1] = c
+  if not ok then error(err, 0) end
+end
+return 'mule-observer-installed'
+"""
+
+#: Removes the observer and answers the recorded calls ('none' when there
+#: were no calls, a marker when the observer was never installed).
+_MULE_COLLECT_LUA = ("local c = _G.__probe_mule_calls; "
+                     "local restore = _G.__probe_mule_restore; "
+                     "if restore then restore() end; "
+                     "_G.__probe_mule_calls = nil; "
+                     "if c == nil then return 'observer-missing' end; "
+                     "if restore == nil then return 'observer-restore-missing' end; "
+                     "return #c == 0 and 'none' or c")
+
+
+def mule_observer_chunk(subj, victim, mule):
+    """The one-line console text that pins the subject's last-attacker record
+    to the technomule (as 9k always did) and installs the execute observer
+    in the SAME chunk, so every lash-out execute afterwards is recorded."""
+    pin = (f"if not _G.__probe_orig_getLastAttacker then "
+           f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
+           f"unit.getLastAttacker = function(u) "
+           f"if u == {subj} then return {{uid={mule}, at=engine.gameTime()}} end "
+           f"return _G.__probe_orig_getLastAttacker(u) end; ")
+    obs = " ".join(line.strip() for line in
+                   _MULE_OBSERVER_TEMPLATE.replace("@L@", str(int(subj)))
+                   .replace("@V@", str(int(victim))).replace("@M@", str(int(mule))).splitlines()
+                   if line.strip())
+    return pin + obs
+
+
+MULE_UNPIN_LUA = ("if _G.__probe_orig_getLastAttacker then "
+                  "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
+                  "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
+
+
+def technomule_call_status(c, victim, mule):
+    """('valid', []) when one recorded lash-out execute was a REAL retaliation
+    opportunity that only the technomule exclusion could have refused, on
+    both its BEFORE and AFTER readings (the clock and positions move while
+    the execute runs); else ('invalid', misses) or ('malformed', why).
+
+    The swap (scripts/unit_ai_combat_attack.lua:196-226) fires on a recent
+    attacker that is not the current target, exists, is neither dead nor
+    collapsed, is not a technomule, hit within RETALIATE_WINDOW_SEC, and is
+    within (attack range or 1.0) + 0.5 Chebyshev tiles. So a valid call has
+    the intended victim as its target, the mule recorded as the attacker
+    within the window, alive and in reach, and the victim still eligible:
+    only 'defName == technomule' stands between it and the swap."""
+    if not isinstance(c, dict):
+        return "malformed", ["the call record is not an object"]
+    misses = []
+    if c.get("pre") != victim:
+        misses.append(f"the target before the call was {c.get('pre')!r}, not {victim}")
+    for side in ("before", "after"):
+        r = c.get(side)
+        if not isinstance(r, dict) or "err" in r:
+            return "malformed", [f"{side} reading missing or raised ({r!r})"]
+        nums = [r.get(k) for k in ("now", "glaAt", "range", "window")]
+        if not all(_finite_num(v) for v in nums):
+            return "malformed", [f"{side} reading has a non-numeric clock, hit time, range or window"]
+        lp, mp = r.get("lpos"), r.get("mpos")
+        if not all(isinstance(q, dict) and _finite_num(q.get("gridX")) and _finite_num(q.get("gridY"))
+                   for q in (lp, mp)):
+            return "malformed", [f"{side} reading has an unreadable position"]
+        if r.get("mexists") is not True:
+            misses.append(f"{side}: the mule did not exist")
+        if not isinstance(r.get("mpose"), str) or r["mpose"] in ("dead", "collapsed"):
+            misses.append(f"{side}: the mule's pose was {r.get('mpose')!r}")
+        if r.get("mdef") != "technomule":
+            misses.append(f"{side}: the mule's defName was {r.get('mdef')!r}")
+        if r.get("glaUid") != mule:
+            misses.append(f"{side}: the subject's recorded attacker was {r.get('glaUid')!r}")
+        age = r["now"] - r["glaAt"]
+        if not 0 <= age <= r["window"]:
+            misses.append(f"{side}: the hit was {age:.2f} s old (window {r['window']})")
+        dist = max(abs(lp["gridX"] - mp["gridX"]), abs(lp["gridY"] - mp["gridY"]))
+        if dist > r["range"] + 0.5:
+            misses.append(f"{side}: the mule was {dist:.2f} tiles away (reach {r['range']} + 0.5)")
+        if r.get("victimElig") is not True:
+            misses.append(f"{side}: the intended target was not eligible")
+    return ("valid", []) if not misses else ("invalid", misses)
+
+
+def technomule_swap_verdict(calls, victim, mule):
+    """9k's gate on the recorded executes (#2976). Answers (verdict, detail):
+    'setup' (no execute, or none was a valid opportunity: the exclusion was
+    never exercised, so nothing is proven), 'policy' (a VALID opportunity
+    left a target other than the victim: the technomule exclusion failed) or
+    'pass' (at least one valid opportunity and every one kept the victim)."""
+    if not isinstance(calls, list) or not calls:
+        return "setup", "no lash-out attackTargetExecute call on the subject during the window"
+    valid, closest, counts = [], None, {}
+    for c in calls:
+        status, misses = technomule_call_status(c, victim, mule)
+        counts[status] = counts.get(status, 0) + 1
+        if status == "valid":
+            valid.append(c)
+        elif closest is None or len(misses) < len(closest[1]):
+            closest = (status, misses)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+    if not valid:
+        return "setup", (f"{len(calls)} call(s) ({summary}); closest {closest[0]}: "
+                         + "; ".join(closest[1]))
+    for c in valid:
+        if c["post"] != victim:
+            return "policy", f"target {c['pre']} -> {c['post']} on a valid retaliation opportunity"
+    return "pass", f"{len(valid)} valid opportunity call(s) of {len(calls)} ({summary}), all kept {victim}"
+
+
+_MULE_HARNESS_LUA = r"""
+-- arg: 'excl' (production technomule exclusion) or 'noexcl' (mutated), then k=v overrides
+local MODE = arg[1]
+local OV = {}
+for i = 2, #arg do local k, v = arg[i]:match('^(%w+)=(.*)$'); OV[k] = v end
+local L, V, M = 1, 2, 3
+local pos = { [L] = { 0, 0 }, [V] = { 1, 0 }, [M] = { -1, 0 } }
+if OV.mx then pos[M] = { tonumber(OV.mx), 0 } end
+local pose = { [L] = 'standing', [V] = OV.vpose or 'standing', [M] = OV.mpose or 'standing' }
+local def = { [L] = 'acolyte', [V] = 'acolyte', [M] = 'technomule' }
+unit = {}
+unit.getInfo = function(u) local p = pos[u]; return p and { gridX = p[1], gridY = p[2], defName = def[u] } end
+unit.exists = function(u) return pos[u] ~= nil end
+unit.getPose = function(u) return pose[u] end
+unit.getAttackRange = function(u) return 0.9 end
+unit.getLastAttacker = function(u) if u == L then return { uid = M, at = engine.gameTime() } end end
+engine = { gameTime = function() return 10.0 end }
+local policy = { eligible = function(uid, me, oid)
+  if oid == uid or not unit.exists(oid) then return false end
+  local ps = unit.getPose(oid)
+  if ps == 'dead' or ps == 'collapsed' then return false end
+  local i = unit.getInfo(oid)
+  if not i or i.defName == 'technomule' then return false end
+  return math.max(math.abs(me.gridX - i.gridX), math.abs(me.gridY - i.gridY)) <= 8
+end }
+-- the production retaliation swap (unit_ai_combat_attack.lua:196-226), with the technomule exclusion optional
+local atk = { attackTargetExecute = function(uid, s, params)
+  local att = unit.getLastAttacker(uid)
+  local ap = att and unit.getPose(att.uid)
+  local ai = att and unit.getInfo(att.uid)
+  if att and att.uid ~= s.attackTargetUid and unit.exists(att.uid) and ap ~= 'dead' and ap ~= 'collapsed'
+     and ai and (MODE == 'noexcl' or ai.defName ~= 'technomule')
+     and (engine.gameTime() - (att.at or 0)) <= 3.0 then
+    local m = unit.getInfo(uid)
+    local d = math.max(math.abs(m.gridX - ai.gridX), math.abs(m.gridY - ai.gridY))
+    if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then s.attackTargetUid = att.uid end
+  end
+end }
+package.preload['scripts.unit_ai_mental'] = function() return { lashoutPolicy = policy } end
+package.preload['scripts.unit_ai_combat_attack'] = function() return atk end
+package.preload['scripts.unit_ai_combat'] = function() return { RETALIATE_WINDOW_SEC = 3.0 } end
+local function ser(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts, n = {}, #v
+    if n > 0 and next(v, n) == nil then
+      for i = 1, n do parts[#parts + 1] = ser(v[i]) end
+      return '[' .. table.concat(parts, ',') .. ']'
+    end
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), ser(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%q', v)
+  elseif t == 'number' or t == 'boolean' then return tostring(v) end
+  return 'null'
+end
+local ATE0 = atk.attackTargetExecute
+assert(load(io.read('a')))()
+if not OV.noexec then
+  for _ = 1, 3 do local s = { attackTargetUid = V }; atk.attackTargetExecute(L, s, {}) end
+end
+local calls = _G.__probe_mule_calls
+_G.__probe_mule_restore()
+print(ser({ calls = calls, restored = (atk.attackTargetExecute == ATE0) }))
+"""
+
+
+def run_mule_harness(mode, **overrides):
+    """The 9k observer chunk run under `lua` against the production swap rule
+    (with or without the technomule exclusion), the mule and victim placed or
+    posed by `overrides`. Answers {calls, restored}, or None without lua."""
+    import shutil as _sh, subprocess as _sp
+    lua_bin = _sh.which("lua")
+    if lua_bin is None:
+        return None
+    chunk = mule_observer_chunk(1, 2, 3)
+    pin_end = chunk.index("local L, V, M")
+    out = _sp.run([lua_bin, "-e", "arg = {" + ", ".join(
+        repr(a) for a in [mode] + [f"{k}={v}" for k, v in overrides.items()]) + "}",
+        "-e", _MULE_HARNESS_LUA.replace("io.read('a')", repr(chunk[pin_end:]))],
+        capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
 def snap_chebyshev_candidates(port, subj, near, far):
     """Stop both candidates and put them at their intended offsets from the
     subject's CURRENT position (unit.setPos enqueues a teleport on the unit
@@ -2233,17 +2589,112 @@ def snap_chebyshev_candidates(port, subj, near, far):
     return poll_until(5, arrived) is not None
 
 
+_CHEB_HARNESS_LUA = r"""
+-- arg: picker mode ('cheb'|'euclid'), then the position / pose overrides as k=v
+local MODE = arg[1]
+local OV = {}
+for i = 2, #arg do local k, v = arg[i]:match('^(%w+)=(.*)$'); OV[k] = v end
+local S, N, F = 1, 2, 3
+local pos = { [S] = { 0, 0 }, [N] = { 5, 5 }, [F] = { 6, 0 } }
+local pose = { [S] = 'standing', [N] = 'standing', [F] = 'standing' }
+-- a candidate that has MOVED (or fallen) by the time the AI tick reads it
+if OV.nx then pos[N] = { tonumber(OV.nx), tonumber(OV.ny) } end
+if OV.fx then pos[F] = { tonumber(OV.fx), tonumber(OV.fy) } end
+if OV.npose then pose[N] = OV.npose end
+local def = { [N] = OV.ndef or 'acolyte' }
+unit = {}
+unit.getAllIds = function() return { S, N, F } end
+unit.exists = function(u) return pos[u] ~= nil end
+unit.getPose = function(u) return pose[u] end
+unit.getInfo = function(u) local p = pos[u]; return p and { gridX = p[1], gridY = p[2], defName = def[u] or 'acolyte' } end
+engine = { gameTime = function() return 1.0 end }
+local policy = { range = 8 }
+policy.eligible = function(uid, me, oid)
+  if oid == uid or not unit.exists(oid) then return false end
+  local ps = unit.getPose(oid)
+  if ps == 'dead' or ps == 'collapsed' then return false end
+  local info = unit.getInfo(oid)
+  if not info or info.defName == 'technomule' then return false end
+  return math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY)) <= 8
+end
+local atk = { attackTargetExecute = function(uid, s, params) s.executed = true end }
+local mental = { lashoutPolicy = policy }
+mental.shortCircuit = function(uid, s)
+  local me = unit.getInfo(uid)
+  local best, bestD = nil, math.huge
+  for _, oid in ipairs(unit.getAllIds()) do
+    if policy.eligible(uid, me, oid) then
+      local i = unit.getInfo(oid)
+      local dx, dy = math.abs(i.gridX - me.gridX), math.abs(i.gridY - me.gridY)
+      local d = (MODE == 'cheb') and math.max(dx, dy) or (dx * dx + dy * dy)
+      if d < bestD then best, bestD = oid, d end
+    end
+  end
+  if best then
+    s.attackTargetUid = best
+    atk.attackTargetExecute(uid, s, {})
+  end
+  return true
+end
+package.preload['scripts.unit_ai_mental'] = function() return mental end
+package.preload['scripts.unit_ai_combat_attack'] = function() return atk end
+package.preload['scripts.mental_state'] = function() return { forceBreak = function() end } end
+local function ser(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), ser(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%q', v)
+  elseif t == 'number' or t == 'boolean' then return tostring(v) end
+  return 'null'
+end
+local GI0, ATE0, SC0, GP0 = unit.getInfo, atk.attackTargetExecute, mental.shortCircuit, unit.getPose
+local chunk = assert(load(io.read('a')))
+chunk()
+-- the AI ticks go through the module table, exactly as unit_ai.lua does
+local s = {}
+package.loaded['scripts.unit_ai_mental'] = nil
+local m = require('scripts.unit_ai_mental')
+m.shortCircuit(S, s)
+local rec = _G.__probe_cheb_rec
+rec.restored = (unit.getInfo == GI0 and unit.getPose == GP0 and atk.attackTargetExecute == ATE0
+                and mental.shortCircuit == SC0)
+print(ser(rec))
+"""
+
+
+def run_cheb_harness(mode, **overrides):
+    """The 9h observer chunk, run under `lua` against a stub picker (Chebyshev
+    or the mutated Euclidean one), with candidates optionally moved or
+    collapsed by the time the AI tick reads them. Answers the record as a
+    dict, or None without a lua interpreter."""
+    import shutil as _sh, subprocess as _sp
+    lua_bin = _sh.which("lua")
+    if lua_bin is None:
+        return None
+    out = _sp.run([lua_bin, "-e", "arg = {" + ", ".join(
+        repr(a) for a in [mode] + [f"{k}={v}" for k, v in overrides.items()]) + "}",
+        "-e", _CHEB_HARNESS_LUA.replace("io.read('a')", repr(chebyshev_observer_chunk(1, 2, 3)))],
+        capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
 def chebyshev_ranking_phase(port):
     """Phase 9h (#717, #2976): nearest-target ranking uses Chebyshev distance
     (matching eligibility's metric), not squared Euclidean. (5,5) is nearer
     than (6,0) under Chebyshev (5 vs 6) despite (6,0) being nearer under
     squared Euclidean (36 vs 50).
 
-    Graded ONLY on a selection whose preconditions held at the decision:
-    exactly the two candidates are eligible for the subject, and each is
-    eligible with the ranking distinguishing the metrics. A setup that
-    missed them is discarded, named and restaged (bounded); a wrong target
-    on a held setup is a policy failure and is never restaged. Answers
+    The FIRST selection is observed where it is made (chebyshev_observer_
+    chunk, installed in the same console chunk that forces the break) and
+    graded on the geometry and eligibility the DECISION itself read
+    (chebyshev_decision_verdict): candidates move between any earlier
+    snapshot and the AI tick. A setup whose preconditions did not hold at the
+    decision is discarded, named and restaged (bounded); a wrong target on
+    a held setup is a policy failure and is never restaged. Answers
     (ok, line)."""
     reasons = []
     for attempt in range(1, NINE_H_ATTEMPTS + 1):
@@ -2254,18 +2705,18 @@ def chebyshev_ranking_phase(port):
         far = spawn_acolyte(port, -15 + NINE_H_FAR, 40)                    # (b, 0)
         snap_ok = snap_chebyshev_candidates(port, subj, near, far)
         stray = isolation_problem(port, subj, (near, far))
-        geom = send_json(port, chebyshev_geometry_lua(subj, near, far))
-        problems = (([] if snap_ok else ["the candidates' teleport next to the subject never "
-                                         "took effect"])
-                    + ([stray] if stray else []) + chebyshev_geometry_problems(geom))
-
-        def target():
-            t = lash_target(port, subj)
-            return t if t != "nil" else None
-        picked = poll_until(10, target)
+        send(port, chebyshev_observer_chunk(subj, near, far))
+        poll_until(10, lambda: send(
+            port, "local r = _G.__probe_cheb_rec; return (r and r.done) and 'done' or 'nil'") == "done")
+        rec = send_json(port, CHEB_COLLECT_LUA)
         send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(port, subj) != "break")
         destroy_units(port, subj, near, far)
+        kind, detail = chebyshev_decision_verdict(rec, near, far)
+        problems = ([] if snap_ok else ["the candidates' teleport next to the subject never "
+                                        "took effect"]) + ([stray] if stray else [])
+        if kind == "setup":
+            problems.append(detail)
         if problems:
             reasons.append(f"attempt {attempt}: " + "; ".join(problems))
             if attempt < NINE_H_ATTEMPTS:
@@ -2273,12 +2724,11 @@ def chebyshev_ranking_phase(port):
                       f"({'; '.join(problems)}); restaging")
                 continue
             return False, (f"  [FAIL] setup: 9h never staged a gradable ranking in "
-                           f"{NINE_H_ATTEMPTS} attempts ({' | '.join(reasons)}); geometry {geom}")
-        if picked == str(near):
+                           f"{NINE_H_ATTEMPTS} attempts ({' | '.join(reasons)}); last record {rec}")
+        if kind == "ok":
             return True, (f"  [pass] nearest-target ranking uses Chebyshev distance "
-                          f"({near} over the Euclidean-nearer {far})")
-        return False, (f"  [FAIL] expected Chebyshev-nearer {near}, got {picked} "
-                       f"(Euclidean-nearer would be {far}); geometry at the decision {geom}")
+                          f"({near} over the Euclidean-nearer {far}; {detail})")
+        return False, (f"  [FAIL] expected Chebyshev-nearer {near} ({detail}); decision record {rec}")
 
 
 #: 9j (#2975), episode end while delirious. Meander (delirium's aimless
@@ -4312,22 +4762,6 @@ def self_test():
     check("9b: an unreadable episode window fails",
           landed_in_episode(dict(LR, since=None), 3) is False and landed_in_episode("x", 3) is False)
 
-    # 9h geometry (#2976): graded only on a setup whose preconditions held.
-    GOOD = {"n": {"ok": True, "dx": 6.0, "dy": 6.0, "elig": True, "pose": "standing"},
-            "f": {"ok": True, "dx": 8.0, "dy": 0.0, "elig": True, "pose": "standing"}}
-    check("9h: the staged geometry (6,6 vs 8,0) distinguishes the metrics -> gradable",
-          chebyshev_geometry_problems(GOOD) == [])
-    check("9h: the Chebyshev-nearer candidate collapsed -> not gradable",
-          chebyshev_geometry_problems(dict(GOOD, n=dict(GOOD["n"], elig=False, pose="collapsed"))) != [])
-    check("9h: the Euclidean-nearer candidate ineligible -> not gradable",
-          chebyshev_geometry_problems(dict(GOOD, f=dict(GOOD["f"], elig=False))) != [])
-    check("9h: positions that no longer separate the metrics -> not gradable",
-          chebyshev_geometry_problems(dict(GOOD, n=dict(GOOD["n"], dx=8.0, dy=8.0))) != []
-          and chebyshev_geometry_problems(dict(GOOD, f=dict(GOOD["f"], dx=5.0, dy=0.0))) != [])
-    check("9h: an unreadable candidate -> not gradable",
-          chebyshev_geometry_problems(dict(GOOD, n={"ok": False})) != []
-          and chebyshev_geometry_problems(None) != [])
-
     check("9h: the staged offsets separate the metrics and sit well inside the eight-tile range",
           NINE_H_NEAR < NINE_H_FAR < NINE_H_NEAR * 2 ** 0.5 and NINE_H_FAR <= 6.0
           and NINE_H_NEAR * 2 ** 0.5 <= 7.1)
@@ -4442,6 +4876,95 @@ def self_test():
           nine_b_should_restage(False, False, True, True, 1) is False)
     check("9b restage: a failed dressing is never restaged",
           nine_b_should_restage(False, True, False, True, 1) is False)
+    # 9h decision observer (#2976, review round 1): graded on what the DECISION read.
+    held = run_cheb_harness("cheb")
+    if held is None:
+        print("  skip 9h observer harness: no lua interpreter")
+    else:
+        check("9h observer: the decision's own reads on the staged geometry -> ok (Chebyshev picker)",
+              chebyshev_decision_verdict(held, 2, 3)[0] == "ok")
+        check("9h observer: the same geometry with a Euclidean-mutated picker -> policy failure",
+              chebyshev_decision_verdict(run_cheb_harness("euclid"), 2, 3)[0] == "policy")
+        check("9h observer: the intended candidate DRIFTED to (4, 4) before the tick: the mutated "
+              "picker would still pick it, but the geometry the decision read no longer separates "
+              "the metrics -> setup (never a pass)",
+              chebyshev_decision_verdict(run_cheb_harness("euclid", nx=4, ny=4), 2, 3)[0] == "setup")
+        check("9h observer: the decoy drifted out of range (9 tiles) -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", fx=9, fy=0), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate collapsed by the tick -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", npose="collapsed"), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate farther than the decoy under Chebyshev "
+              "(6.5, 6.5 vs 6, 0) -> setup, whatever the picker chose",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", nx=6.5, ny=6.5), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate ineligible by the production rule although "
+              "read, standing and in range (a technomule) -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", ndef="technomule"), 2, 3)[0] == "setup")
+        check("9h observer: the wrappers restore themselves and the record names the decision's reads",
+              held.get("done") is True and held["restored"] is True and held["target"] == 2
+              and held["info"]["n"]["gridX"] == 5
+              and held["elig"]["n"] is True and held["elig"]["f"] is True)
+    base = {"done": True, "me": {"gridX": 0, "gridY": 0}, "target": 2, "targetTyped": True, "nilSel": False,
+            "info": {"n": {"gridX": 5, "gridY": 5}, "f": {"gridX": 6, "gridY": 0}},
+            "elig": {"n": True, "f": True}, "pose": {"n": "standing", "f": "standing"}, "exists": {"n": True, "f": True}}
+    check("9h verdict: a held setup selecting the Chebyshev-nearer candidate -> ok",
+          chebyshev_decision_verdict(base, 2, 3)[0] == "ok")
+    check("9h verdict: a held setup selecting the decoy -> policy",
+          chebyshev_decision_verdict(dict(base, target=3), 2, 3)[0] == "policy")
+    check("9h verdict: a held setup that selected nothing -> policy",
+          chebyshev_decision_verdict(dict(base, nilSel=True, targetTyped=False, target=-1), 2, 3)[0] == "policy")
+    check("9h verdict: missing observer, an un-finished decision, a raised tick and an uncaptured "
+          "subject are all setup",
+          all(chebyshev_decision_verdict(r, 2, 3)[0] == "setup" for r in (
+              {"missing": True}, None, dict(base, done=False), dict(base, tickRaised=True, tickErr="x"),
+              dict(base, me=False))))
+    check("9h verdict: a candidate the decision never read -> setup",
+          chebyshev_decision_verdict(dict(base, info={"n": base["info"]["n"]}), 2, 3)[0] == "setup")
+    # 9k retaliation opportunity (#2976, review round 1): the technomule exclusion must be
+    # EXERCISED, not merely never observed to fail.
+    mh = run_mule_harness("excl")
+    if mh is None:
+        print("  skip 9k observer harness: no lua interpreter")
+    else:
+        kv = lambda h: technomule_swap_verdict(h["calls"], 2, 3)
+        check("9k observer: a mule in reach, in window, alive, the victim eligible; production rule "
+              "keeps the victim -> pass, wrappers restored",
+              kv(mh)[0] == "pass" and mh["restored"] is True and len(mh["calls"]) == 3)
+        check("9k observer: the technomule exclusion REMOVED (production swap otherwise) -> the swap "
+              "fires on a valid opportunity -> policy failure",
+              kv(run_mule_harness("noexcl"))[0] == "policy")
+        check("9k observer: a mule four tiles away is no opportunity: even with the exclusion removed "
+              "the victim stays, which must read as setup, never as a pass",
+              kv(run_mule_harness("noexcl", mx=-4))[0] == "setup"
+              and kv(run_mule_harness("excl", mx=-4))[0] == "setup")
+        check("9k observer: no execute at all -> setup",
+              technomule_swap_verdict(run_mule_harness("excl", noexec=1)["calls"], 2, 3)[0] == "setup")
+        check("9k observer: the intended target collapsed (ineligible) -> setup",
+              kv(run_mule_harness("excl", vpose="collapsed"))[0] == "setup")
+        check("9k observer: a dead mule is no opportunity -> setup",
+              kv(run_mule_harness("noexcl", mpose="dead"))[0] == "setup")
+    good_side = {"now": 10.0, "glaAt": 10.0, "range": 0.9, "window": 3.0, "mexists": True,
+                 "mpose": "standing", "mdef": "technomule", "glaUid": 3, "victimElig": True,
+                 "lpos": {"gridX": 0, "gridY": 0}, "mpos": {"gridX": -1, "gridY": 0}}
+    good_call = {"pre": 2, "post": 2, "before": dict(good_side), "after": dict(good_side)}
+    check("9k call status: a complete valid opportunity", technomule_call_status(good_call, 2, 3)[0] == "valid")
+    for what, mutate, want in (
+            ("a stale hit (4 s old)", lambda c: c["after"].update(glaAt=6.0), "invalid"),
+            ("the hit already outside the window on the BEFORE reading", lambda c: c["before"].update(glaAt=5.0), "invalid"),
+            ("a mule out of reach on the AFTER reading", lambda c: c["after"].update(mpos={"gridX": -3, "gridY": 0}), "invalid"),
+            ("a different recorded attacker", lambda c: c["before"].update(glaUid=9), "invalid"),
+            ("a mule whose defName is not technomule", lambda c: c["before"].update(mdef="acolyte"), "invalid"),
+            ("a target other than the victim before the call", lambda c: c.update(pre=3), "invalid"),
+            ("an ineligible victim after the call", lambda c: c["after"].update(victimElig=False), "invalid"),
+            ("a reading that raised", lambda c: c.update(before={"err": "boom"}), "malformed"),
+            ("an unreadable mule position", lambda c: c["before"].update(mpos={"invalid": True}), "malformed")):
+        c = {k: (dict(v) if isinstance(v, dict) else v) for k, v in good_call.items()}
+        mutate(c)
+        check(f"9k call status: {what} -> {want}", technomule_call_status(c, 2, 3)[0] == want)
+    check("9k verdict: a valid opportunity that left the mule as the target -> policy",
+          technomule_swap_verdict([dict(good_call, post=3)], 2, 3)[0] == "policy")
+    check("9k verdict: one valid call among invalid ones is enough to pass",
+          technomule_swap_verdict([dict(good_call, pre=7), good_call], 2, 3)[0] == "pass")
+
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -4546,7 +5069,8 @@ def self_test():
                   "nine_b_diag_lua": nine_b_diag_lua(1, 2),
                   "wounds_lua": wounds_lua(1),
                   "topup_stamina_lua": topup_stamina_lua(1, 2),
-                  "chebyshev_geometry_lua": chebyshev_geometry_lua(1, 2, 3),
+                  "chebyshev_observer_chunk": chebyshev_observer_chunk(1, 2, 3),
+                  "mule_observer_chunk": mule_observer_chunk(1, 2, 3),
                   "break_sample_lua(mule)": break_sample_lua(1, 50),
                   "dressing_read_lua": dressing_read_lua(1),
                   "dressing_exclude_lua": dressing_exclude_lua(1),
@@ -5723,9 +6247,54 @@ def self_test():
     check("4a: movement only AFTER the break ended does not count",
           wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0), bs(6.5, 0, 0, brk=False),
                                 bs(7, 2, 2, brk=False)])[0] == "still")
+    # Review round 1: an early scaled success would end the break. Feed every prefix of
+    # a normal unit's (meander 0.25) nearly stationary six-second trace: no prefix may
+    # read 'moved' while under the fixed 0.3 tiles, and the complete trace fails.
+    trace_still = [dict(bs(t * 0.5, 0.002 * t, 0), mean=0.25) for t in range(13)]
+    prefixes = [wander_break_verdict(trace_still[:k])[0] for k in range(1, len(trace_still) + 1)]
+    check("4a: no prefix of a (nearly) stationary trace reads 'moved' before the break ends",
+          "moved" not in prefixes and all(v in ("waiting", "never_active") for v in prefixes[:-1]))
+    check("4a: ... and the complete trace, once the break has ended, is 'still'",
+          wander_break_verdict(trace_still + [bs(6.5, 0.02, 0, brk=False)])[0] == "still")
+    check("4a: a capped wait that never saw the break end is held to the FIXED minimum",
+          wander_break_verdict([dict(bs(t, 0.04 * t, 0), mean=0.06) for t in range(6)], capped=True)[0] == "still")
+
+    def fake_phase(trace_fn):
+        """run_break_phase's sampling loop over a scripted console: sample k answers
+        trace_fn(k); returns (samples, verdict) and how many samples were taken."""
+        g = globals()
+        saved = {k: g[k] for k in ("send", "send_json", "time")}
+        n, clock = [0], [0.0]
+
+        class FakeTime:
+            def time(self):
+                return clock[0]
+
+            def sleep(self, d):
+                clock[0] += d
+
+        def fsj(port, lua, **kw):
+            n[0] += 1
+            return trace_fn(n[0] - 1)
+        g.update(send=lambda *a, **k: "ok", send_json=fsj, time=FakeTime())
+        try:
+            smp, v, _ = run_break_phase(1, 2, "wander", wander_break_verdict, cap_s=20.0)
+            return smp, v, n[0]
+        finally:
+            g.update(saved)
+    tiny = lambda k: (dict(bs(k * 0.15, 0.001 * k, 0), mean=0.25) if k < 40
+                      else bs(7.0, 0.04, 0, brk=False))
+    smp, v, taken = fake_phase(tiny)
+    check("4a: the sampling loop does NOT stop early on tiny movement; it samples through the "
+          "break and fails it", v == "still" and taken >= 40)
+    steady = lambda k: dict(bs(k * 0.5, 0.2 * k, 0), mean=0.25)
+    smp, v, taken = fake_phase(steady)
+    check("4a: a normal unit that really walks 0.3 tiles ends the wait early with 'moved'",
+          v == "moved" and taken <= 4)
     slow = [dict(bs(t, 0.04 * t, 0), mean=0.06) for t in (0, 1, 2, 3, 4, 5)]
     check("4a: a very slow unit (meander 0.06) that walks what it can in 5 s passes the scaled path",
-          wander_break_verdict(slow)[0] == "moved")
+          wander_break_verdict(slow + [bs(6.5, 0.2, 0, brk=False)])[0] == "moved"
+          and wander_break_verdict(slow)[0] == "waiting")
     check("4a: a normal unit (meander 0.25) that walks only 0.2 tiles in 5 s still FAILS the full "
           "WANDER_MIN_PATH once the break is over",
           wander_break_verdict([dict(bs(t, 0.04 * t, 0), mean=0.25) for t in (0, 1, 2, 3, 4, 5)]
@@ -6898,29 +7467,29 @@ def main():
             ok = False
             print(f"  [FAIL] setup: {subjK} never targeted {targetK}")
 
-        send(P, f"if not _G.__probe_orig_getLastAttacker then "
-                f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
-                f"unit.getLastAttacker = function(u) "
-                f"if u == {subjK} then return {{uid={muleK}, at=engine.gameTime()}} end "
-                f"return _G.__probe_orig_getLastAttacker(u) end; return 'ok'")
+        installK = send(P, mule_observer_chunk(subjK, targetK, muleK))
 
         # Sample rapidly through the retaliation-swap's own 3s window —
-        # subjK must stay on targetK and never swap onto the technomule.
+        # subjK must stay on targetK and never swap onto the technomule, and
+        # the observer must have seen real retaliation opportunities (#2976).
         samplesK = []
         deadline = time.time() + 3.0
         while time.time() < deadline:
             samplesK.append(lash_target(P, subjK))
             time.sleep(0.15)
-        send(P, "if _G.__probe_orig_getLastAttacker then "
-                "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
-                "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
+        statusK, callsK = parse_swap_collection(send(P, _MULE_COLLECT_LUA))
+        send(P, MULE_UNPIN_LUA)
+        verdictK, whyK = technomule_swap_verdict(callsK, targetK, muleK)
 
-        if str(targetK) in samplesK and str(muleK) not in samplesK:
+        if (installK == "mule-observer-installed" and statusK == "ok"
+                and str(targetK) in samplesK and str(muleK) not in samplesK
+                and verdictK == "pass"):
             print(f"  [pass] lash-out stayed on {targetK} and never swapped "
-                  f"onto the technomule {muleK}: {samplesK[:4]}...")
+                  f"onto the technomule {muleK}: {samplesK[:4]}... ({whyK})")
         else:
             ok = False
-            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}; eligible for {subjK} now: "
+            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}; observer {installK!r}/"
+                  f"{statusK}; {verdictK}: {whyK}; eligible for {subjK} now: "
                   f"{eligible_neighbours(P, subjK)}, {targetK} pose "
                   f"{send(P, f'return unit.getPose({targetK})')}")
 
