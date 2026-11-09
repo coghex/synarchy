@@ -194,7 +194,12 @@ passing in all 15 runs. The one failing run is outside the listed checks:
   issues `unit.stop(uid)`, which did not cancel it. #2975's work recorded one such read (0.52 tiles/s,
   cause unestablished). Rate: 1 of 15 here, 0 of 15 before, 0 of 45 development runs. This may be an
   engine race between the stop and the previous tick's queued move rather than probe timing; it is
-  reported, not fixed here (the issue: a failure outside the listed checks is reported, not fixed).
+  reported, not fixed here (the issue: a failure outside the listed checks is reported, not fixed). Owner
+  ruling 2026-11-09: filed as #2979 (episode-end `unit.stop` vs in-flight pursuit race); a #2979-class 9j
+  failure does not block #2976.
+  Trace (game t, lash, brk, delir, tgt, speed, meander, comfort, x): (135.92,1,1,0,28,1.314,0.309,0.617,-23.33) (136.23,1,1,1,28,1.314,...,-22.97)
+  then, with the episode over (lash 0, brk 0, tgt none): (136.87,0,0,1,False,0.7099,0.309,0.617,-22.39) (137.25,...,0.7099,...,-22.18)
+  (137.59,...,-21.99) (137.97,...,-21.78) (138.31,...,-21.59) (138.68,...,-21.38): constant 0.7099 tiles/s toward the old target.
   Evidence: `after3/transcript-12.txt` and `after3/kept-failures/`.
 
 Observed restages in this batch: 9k attempt 1 in runs 4 and 12 (no valid retaliation opportunity: discarded,
