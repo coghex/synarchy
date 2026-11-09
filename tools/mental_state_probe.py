@@ -408,6 +408,68 @@ def stage_lashout_cluster(port, x, y):
     return lash, attacker, decoy, None
 
 
+#: 9c2's staged hit (#2976): how often the waiting loop tops the fighters up.
+NINE_C2_TOPUP_S = 1.0
+#: 9a/9b's bounded re-stage when the subject dies before 9b can grade (#2976).
+NINE_B_ATTEMPTS = 3
+#: Fraction of max stamina the fighters are topped up to (never 0: stamina 0
+#: is the engine's universal death rule, and a full-set is avoided too).
+NINE_C2_TOPUP_FRACTION = 0.9
+
+
+def topup_stamina_lua(*uids):
+    """ONE console chunk raising every named unit's stamina to
+    NINE_C2_TOPUP_FRACTION of its own maximum."""
+    return " ".join(
+        ["local st = require('scripts.unit_stats');"]
+        + [f"unit.setStat({u}, 'stamina', st.get({u}, 'max_stamina') * {NINE_C2_TOPUP_FRACTION});"
+           for u in uids]
+        + ["return 'ok'"])
+
+
+def poll_new_hit(port, lash, attacker, prev_at, timeout_s=35.0):
+    """Wait for `attacker` to land a NEW hit on `lash` (a record later than
+    prev_at, by new_hit_poll_lua), keeping both fighters' stamina up while it
+    waits.
+
+    Neutering a fighter (strength_base 0.02) also shrinks its stamina pool to a
+    few points, so the committed chase exhausts the attacker within seconds;
+    an exhausted attacker collapses and only resumes after recovering, and in
+    45 staged trials the hit took 18-25 s nine times (a failed run's attacker
+    was still falling at 35 s). That is stamina bookkeeping of the fixture,
+    not a lash-out or combat question, so it is held off instead of waited
+    out. The hit itself is still a real landed hit from the committed attack
+    (new_hit_poll_lua), and nothing else about the staging changes."""
+    deadline = time.time() + timeout_s
+    last = 0.0
+    while time.time() < deadline:
+        if send(port, new_hit_poll_lua(lash, attacker, prev_at)) == "hit":
+            return True
+        if time.time() - last >= NINE_C2_TOPUP_S:
+            last = time.time()
+            send(port, topup_stamina_lua(lash, attacker))
+        time.sleep(0.3)
+    return False
+
+
+def nine_b_should_restage(landed, graded_ok, dressed_ok, subject_dead, attempt):
+    """Whether 9a/9b are re-staged on a fresh cluster (#2976): only when no hit
+    was landed because the subject DIED (nothing was decided), 9a graded fine
+    (so no observed wrong decision is erased) and the dressing held, and an
+    attempt is left. A living subject that never lands a hit, a failed 9a and
+    a failed dressing are failures."""
+    return bool(not landed and subject_dead and graded_ok and dressed_ok
+                and attempt < NINE_B_ATTEMPTS)
+
+
+def nine_c2_hit_wait_restage(hit, subject_dead, attempt):
+    """Whether 9c2's staged-hit wait is discarded and re-staged on fresh units
+    (#2976): only when no new hit was seen BECAUSE the subject is dead (nothing
+    was decided and nothing about the swap was observed) and an attempt is
+    left. A living subject that was never hit is a setup failure."""
+    return bool(not hit and subject_dead and attempt < NINE_C2_ATTEMPTS)
+
+
 def stand_down_attacker(port, lash, attacker):
     """End the attacker's own fight and keep both fighters standing.
 
@@ -1680,6 +1742,1238 @@ def wander_episode_verdict(samples):
     return "still", f"walked only {path:.2f} tiles while lash-out was active"
 
 
+#: 4a/4b (#2976): a forced wander or flee break is graded on what the unit
+#: does WHILE the break is active, in proportion to its own pace. The old
+#: checks asked for a fixed 0.9 tiles of net displacement (4a) and a fixed
+#: 2.0 tiles farther from the mule (4b). Both silently assumed a unit that
+#: walks at about 0.66 tiles/s; acolytes do not: endurance is drawn per unit
+#: (range 1.0) and the whole-band modifiers (exhaustion, hunger, injuries)
+#: scale ordered and meander speed together, so a slow unit covers about
+#: 0.85 x ordered x 6 s = 1.3-2.0 tiles of a six-second flee and 0.5-1.0 of a
+#: six-second wander, under both fixed thresholds, while doing exactly what
+#: the contract says (observed: the flee runs at its ordered speed, straight
+#: away from the mule). Pinning endurance at 0.4 reproduces both failures
+#: together. The predicates below keep the claim and drop the assumption.
+#:
+#: A wander break must WALK: at least WANDER_MIN_PATH tiles of path while
+#: the wander break is active (9g's walked-path predicate, 'wander_episode_
+#: verdict', on this break's own active flag rather than lash-out's). A flee
+#: break must run AWAY from the mule at the unit's ordered speed:
+FLEE_MIN_ACTIVE_S = 3.0        # game s of the active break that must be observed
+FLEE_MIN_WALK_SAMPLES = 3      # active samples in which the unit is walking
+FLEE_PACE_FRACTION = 0.8       # median walking speed >= this x ordered speed
+FLEE_GAIN_FRACTION = 0.6       # path run directly away from the mule >= this x ordered x active s
+FLEE_DIRECT_FRACTION = 0.7     # away-path >= this x path: away, not sideways
+
+
+def break_sample_lua(uid, mule=None):
+    """One console read of what 4a/4b judge (#2976): the clock, position,
+    locomotion speed (unit.getInfo's moveSpeed, 0 when not walking), whether
+    the unit is mid-break and WHICH behaviour it rolled, its activity, its
+    ordered speed now, and the mule's position (4b)."""
+    return " ".join((
+        f"local u = {uid};",
+        "local ms = require('scripts.mental_state');",
+        "local i = unit.getInfo(u);",
+        "local mi = " + (f"unit.getInfo({mule})" if mule is not None else "nil") + ";",
+        "local brk = ms.isBreaking(u) == true;",
+        "return { now = engine.gameTime(), x = i and i.gridX or nil, y = i and i.gridY or nil,",
+        " sp = i and i.moveSpeed or nil, brk = brk,",
+        " beh = brk and ms.breakBehavior(u) or false,",
+        " act = tostring(unit.getActivity(u)),",
+        " ord = require('scripts.movement_speed').ordered(u),",
+        " mean = require('scripts.movement_speed').meander(u),",
+        " mx = mi and mi.gridX or nil, my = mi and mi.gridY or nil }"))
+
+
+def _xy(x):
+    return (isinstance(x.get("x"), (int, float)) and not isinstance(x.get("x"), bool)
+            and isinstance(x.get("y"), (int, float)) and not isinstance(x.get("y"), bool)
+            and math.isfinite(x["x"]) and math.isfinite(x["y"]))
+
+
+def _active_run(samples, behavior):
+    """The samples on which the unit was mid-break with `behavior` and had a
+    readable position, plus the other behaviours seen mid-break."""
+    act = [x for x in samples if x.get("brk") and x.get("beh") == behavior and _xy(x)]
+    other = {x.get("beh") for x in samples if x.get("brk") and x.get("beh") != behavior}
+    return act, other
+
+
+def _break_ended(samples):
+    return bool(samples) and not samples[-1].get("brk") and any(x.get("brk") for x in samples)
+
+
+def _active_path(samples, behavior):
+    """Path length summed over CONSECUTIVE active samples (a jump across a
+    stretch where the break was not active is not a walk)."""
+    path, prev = 0.0, None
+    for x in samples:
+        on = bool(x.get("brk") and x.get("beh") == behavior and _xy(x))
+        if on and prev is not None:
+            path += math.hypot(x["x"] - prev["x"], x["y"] - prev["y"])
+        prev = x if on else None
+    return path
+
+
+#: 4a (#2976): a unit whose meander pace is so low that WANDER_MIN_PATH is
+#: more than it could walk in the observed break is asked for this fraction
+#: of what it could walk instead (meander x active game seconds). A normal
+#: acolyte (0.2-0.35 tiles/s over a six-second break) is still held to the
+#: full WANDER_MIN_PATH; a stationary unit never passes.
+WANDER_PACE_FRACTION = 0.4
+
+
+def wander_break_verdict(samples, capped=False):
+    """Grade phase 4a's samples (oldest first; see break_sample_lua).
+
+    Answers (verdict, detail): 'moved' (the unit walked the required path
+    while its wander break was active), 'waiting' (not over, nothing
+    decided), 'still' (the break ended, or the wait capped, with less
+    walked), 'never_active' (it was never mid-break), 'wrong_behavior' (a
+    break of another behaviour ran).
+
+    The required path is WANDER_MIN_PATH, and that FIXED minimum may be met
+    at any time (early success ends the wait). The pace-scaled minimum
+    (min(WANDER_MIN_PATH, WANDER_PACE_FRACTION x meander x active seconds))
+    is judged ONLY once the break has actually ended: scaled from a few
+    early samples it would be almost nothing, and an early 'moved' ends the
+    break (#2976, review round 1). A wait that capped before the break ended
+    has no established episode duration, so it too is held to the fixed
+    minimum. Movement outside the active break never counts: the setup
+    stops the unit first, so the only movement the break can be credited
+    with is its own, and once it ends the ordinary AI wanders by itself."""
+    act, other = _active_run(samples, "wander")
+    path = _active_path(samples, "wander")
+    ended = _break_ended(samples)
+    if path >= WANDER_MIN_PATH:
+        return "moved", f"walked {path:.2f} tiles (need {WANDER_MIN_PATH}) while the wander break was active"
+    if not act:
+        if other:
+            return "wrong_behavior", f"the break rolled {sorted(map(str, other))}, not wander"
+        if ended or capped:
+            return "never_active", "the wander break was never observed active"
+        return "waiting", "no active wander break yet"
+    if not ended and not capped:
+        return "waiting", f"walked {path:.2f} tiles so far (need {WANDER_MIN_PATH})"
+    need = WANDER_MIN_PATH
+    means = [x["mean"] for x in act if isinstance(x.get("mean"), (int, float)) and x["mean"] > 0]
+    if ended and means and len(act) > 1:
+        need = min(WANDER_MIN_PATH,
+                   WANDER_PACE_FRACTION * (sum(means) / len(means)) * (act[-1]["now"] - act[0]["now"]))
+    if path >= need and path > 0:
+        return "moved", (f"walked {path:.2f} tiles (need {need:.2f}, scaled to this unit's meander "
+                         f"over the whole {act[-1]['now'] - act[0]['now']:.1f} game s break)")
+    return "still", (f"walked only {path:.2f} tiles (need {need:.2f}) while the wander break was active"
+                     + ("; wait capped before the break ended" if not ended else ""))
+
+
+def _away_path(samples):
+    """How far the unit moved AWAY from the mule it flees, summed step by step
+    over consecutive active flee samples: each step's displacement projected
+    on the unit vector from the mule's position at the START of that step
+    (the nearest-unit search is re-run on every re-issue, so the direction it
+    runs is judged against where the mule was then, not where it was when the
+    break began: the technomule walks by itself, and a mule drifting toward
+    the unit must not hide a unit that ran straight away)."""
+    away, prev = 0.0, None
+    for x in samples:
+        on = bool(x.get("brk") and x.get("beh") == "flee" and _xy(x)
+                  and isinstance(x.get("mx"), (int, float)) and isinstance(x.get("my"), (int, float)))
+        if on and prev is not None:
+            ux, uy = prev["x"] - prev["mx"], prev["y"] - prev["my"]
+            norm = math.hypot(ux, uy)
+            if norm > 1e-9:
+                away += ((x["x"] - prev["x"]) * ux + (x["y"] - prev["y"]) * uy) / norm
+        prev = x if on else None
+    return away
+
+
+def flee_break_verdict(samples, capped=False):
+    """Grade phase 4b's samples (oldest first; see break_sample_lua with the
+    mule): while the flee break is active the unit must run AWAY from the
+    mule at its ordered speed, judged from the active samples alone, after
+    the break has ended (or the wait capped).
+
+    Answers (verdict, detail): 'ok'; 'waiting'; 'never_active'; 'wrong_
+    behavior'; 'uncovered' (fewer than FLEE_MIN_ACTIVE_S game s of the active
+    break observed, or the mule or ordered speed unreadable: nothing
+    attributable, a setup failure); 'no_run' (too few walking samples, or a
+    median walking speed under FLEE_PACE_FRACTION x ordered); 'not_away' (it
+    walked at pace but moved away from the mule (_away_path) by less than
+    FLEE_GAIN_FRACTION x ordered x seconds, or by under FLEE_DIRECT_FRACTION
+    of its path)."""
+    act, other = _active_run(samples, "flee")
+    if not _break_ended(samples) and not capped:
+        return "waiting", "the break is still running" if act else "no active flee break yet"
+    if not act:
+        if other:
+            return "wrong_behavior", f"the break rolled {sorted(map(str, other))}, not flee"
+        return "never_active", "the flee break was never observed active"
+    span = act[-1]["now"] - act[0]["now"] if all(
+        isinstance(x.get("now"), (int, float)) for x in (act[0], act[-1])) else 0.0
+    ords = [x["ord"] for x in act if isinstance(x.get("ord"), (int, float)) and x["ord"] > 0]
+    mules = [(x.get("mx"), x.get("my")) for x in act]
+    if (span < FLEE_MIN_ACTIVE_S or not ords
+            or not all(isinstance(v, (int, float)) and math.isfinite(v) for m in mules for v in m)):
+        return "uncovered", (f"only {span:.1f} game s of the active break observed, or the "
+                             f"mule/ordered speed unreadable (need {FLEE_MIN_ACTIVE_S} s)")
+    ordered = sum(ords) / len(ords)
+    walking = sorted(x["sp"] for x in act if x.get("act") in ("walking", "running")
+                     and isinstance(x.get("sp"), (int, float)))
+    path = _active_path(samples, "flee")
+    away = _away_path(samples)
+    gain = (math.hypot(act[-1]["x"] - mules[-1][0], act[-1]["y"] - mules[-1][1])
+            - math.hypot(act[0]["x"] - mules[0][0], act[0]["y"] - mules[0][1]))
+    note = (f"over {span:.1f} game s: ran {away:.2f} tiles directly away from the mule on "
+            f"{path:.2f} of path (distance to it grew {gain:.2f}), {len(walking)} walking "
+            f"samples, ordered {ordered:.2f} tiles/s")
+    if len(walking) < FLEE_MIN_WALK_SAMPLES:
+        return "no_run", f"the unit was walking in only {len(walking)} active samples {note}"
+    median = walking[len(walking) // 2]
+    if median < FLEE_PACE_FRACTION * ordered:
+        return "no_run", f"median walking speed {median:.2f} is under {FLEE_PACE_FRACTION} x ordered; {note}"
+    if away < FLEE_GAIN_FRACTION * ordered * span or away < FLEE_DIRECT_FRACTION * path:
+        return "not_away", note
+    return "ok", note + f", median speed {median:.2f}"
+
+
+def nearest_other_uid(port, uid):
+    """The uid unit_ai_mental.lua's nearestOtherUnit would flee from now: the
+    nearest live other unit strictly within 15 tiles (None when none)."""
+    r = send_json(port, " ".join((
+        f"local u = {uid}; local me = unit.getInfo(u); local best, bd = nil, 15 * 15;",
+        "for _, o in ipairs(unit.getAllIds() or {}) do",
+        " if o ~= u and unit.getPose(o) ~= 'dead' then local oi = unit.getInfo(o);",
+        "  if oi and me then local dx, dy = oi.gridX - me.gridX, oi.gridY - me.gridY;",
+        "   local d2 = dx * dx + dy * dy; if d2 < bd then best, bd = o, d2 end end end end;",
+        "return { uid = best or false }")))
+    uid_ = r.get("uid") if isinstance(r, dict) else None
+    return uid_ if isinstance(uid_, int) and not isinstance(uid_, bool) else None
+
+
+def run_break_phase(port, uid, behavior, verdict_fn, mule=None, cap_s=None):
+    """Force `behavior` on a STILL unit and sample until the break ends.
+
+    The unit is stopped in the same console chunk that forces the break, so
+    any movement while it is active is the break's own (the short-circuit
+    only issues a move when the unit is not already walking, so a unit
+    mid-leg would otherwise carry on at its meander pace until the leg ended,
+    and the break, six game seconds long here, could be over first).
+    Answers (samples, verdict, detail)."""
+    cap = WANDER_WAIT_CAP_S if cap_s is None else cap_s
+    send(port, f"unit.stop({uid}); require('scripts.mental_state').forceBreak({uid},'{behavior}'); "
+               f"return 'ok'")
+    samples, verdict, detail = [], "waiting", ""
+    deadline = time.time() + cap
+    while time.time() < deadline:
+        got = send_json(port, break_sample_lua(uid, mule))
+        if isinstance(got, dict):
+            samples.append(got)
+        verdict, detail = verdict_fn(samples)
+        if verdict != "waiting":
+            break
+        time.sleep(0.15)
+    else:
+        verdict, detail = verdict_fn(samples, capped=True)
+    return samples, verdict, detail
+
+
+def break_trace_line(samples):
+    return " ".join(
+        f"({x.get('now', float('nan')):.2f},{int(bool(x.get('brk')))},{x.get('beh')},"
+        f"{x.get('act')},{x.get('sp')},{x.get('x')},{x.get('y')},mule={x.get('mx')},{x.get('my')})"
+        for x in samples[-40:])
+
+
+def _id_list(ids):
+    """A console reply's uid list as a sorted list of ints. The console
+    encodes an EMPTY Lua table as {} (a JSON object), not [], so an empty
+    object is an empty list; anything else that is not a list is unreadable
+    (None), and a non-integer entry makes the whole read unreadable."""
+    if isinstance(ids, dict) and not ids:
+        return []
+    if not isinstance(ids, list):
+        return None
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return None
+    return sorted(ids)
+
+
+def eligible_neighbours(port, subj):
+    """The uids the PRODUCTION lash-out eligibility predicate admits for
+    `subj` right now (scripts/unit_ai_mental.lua lashoutPolicy.eligible:
+    alive, standing-or-down-but-not-collapsed, not a technomule, within the
+    eight-tile Chebyshev range). Fixture isolation is observed with the
+    policy's own rule rather than assumed from where units were once put
+    (#2976: 9i's target, left alive, wandered into 9k's range)."""
+    r = send_json(port, " ".join((
+        f"local u = {subj}; local me = unit.getInfo(u); local out = {{}};",
+        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
+        "for _, o in ipairs(unit.getAllIds() or {}) do",
+        " if me and pol.eligible(u, me, o) then out[#out + 1] = o end end;",
+        "return { ids = out }")))
+    return _id_list(r.get("ids") if isinstance(r, dict) else None)
+
+
+def isolation_problem(port, subj, allowed):
+    """None when exactly the `allowed` uids are eligible lash-out targets for
+    `subj`; otherwise a sentence naming the strays (or the unreadable read)."""
+    got = eligible_neighbours(port, subj)
+    if got is None:
+        return f"the eligible-neighbour read for {subj} failed"
+    strays = sorted(set(got) - set(allowed))
+    missing = sorted(set(allowed) - set(got))
+    if not strays and not missing:
+        return None
+    return (f"unit(s) eligible for {subj}'s lash-out {got}: unrelated {strays}, "
+            f"intended-but-ineligible {missing}")
+
+
+def destroy_units(port, *uids):
+    """Remove finished fixture units so nothing of one scenario can walk into
+    a later one's range (the ordinary AI wanders every live unit)."""
+    for u in uids:
+        if u is not None:
+            send(port, f"unit.destroy({u}); return 'ok'")
+
+
+def neuter_fighters(port, *uids):
+    """Verified neuter (as 9a's staging): answers a problem sentence, or
+    None when every setter and the read-back took."""
+    snap = send_json(port, neuter_chunk(tuple(uids)), timeout=15.0)
+    problems = neuter_snapshot_problems(snap, tuple(uids))
+    return "neuter not established: " + "; ".join(problems) if problems else None
+
+
+def landed_poll_lua(lash, attacker):
+    """One console read for 9b: the attacker's record of who last hit it and
+    when, with the subject's lash-out episode window (mental_since to
+    mental_until, the episode that must own the hit)."""
+    return " ".join((
+        f"local a = unit.getLastAttacker({attacker});",
+        f"local m = require('scripts.mental_state').summary({lash});",
+        "return { uid = a and a.uid or false, at = a and a.at or false,",
+        " since = m.since, ends = m.endsAt, state = m.state, behavior = m.behavior or false,",
+        " now = engine.gameTime() }"))
+
+
+def landed_in_episode(rec, lash):
+    """True when `rec` (a landed_poll_lua reply) proves `lash` LANDED a hit
+    on the attacker during its current lash-out episode: the attacker's
+    last-attacker record names `lash` AND carries a game time inside the
+    episode (mental_since <= at <= mental_until). Identity alone is not
+    enough (#2976): the record is stamped by every landed hit, so one from
+    before the episode, or an ordinary swing after it expired, would satisfy
+    it, and an attack command or attempted swing never writes it at all."""
+    if not isinstance(rec, dict) or rec.get("uid") != lash:
+        return False
+    at, since, ends = rec.get("at"), rec.get("since"), rec.get("ends")
+    return (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in (at, since, ends))
+            and since <= at <= ends and rec.get("state") == "break")
+
+
+def nine_b_diag_lua(lash, attacker):
+    """What a 9b failure needs to be attributed: both fighters' pose,
+    activity, knockdown, stamina and position, the subject's lash-out target,
+    the clock."""
+    return " ".join((
+        f"local L, A = {lash}, {attacker}; local li, ai = unit.getInfo(L), unit.getInfo(A);",
+        "local s = require('scripts.unit_ai').getState(L);",
+        "return { now = engine.gameTime(), tgt = s and s.attackTargetUid or false,",
+        " lpose = tostring(unit.getPose(L)), lact = tostring(unit.getActivity(L)),",
+        " lkd = li and li.knockedDown == true or false, lstam = unit.getStat(L, 'stamina'),",
+        " apose = tostring(unit.getPose(A)), aact = tostring(unit.getActivity(A)),",
+        " akd = ai and ai.knockedDown == true or false,",
+        " lx = li and li.gridX, ly = li and li.gridY, ax = ai and ai.gridX, ay = ai and ai.gridY }"))
+
+
+def stage_nine_c2_units(port):
+    """9c2's three fixture units on their own cluster, both fighters
+    neutered with the neuter READ BACK (the old unverified setters let a
+    staged hit kill the subject: a traced run had the subject dead 1.5 s
+    after the hit, so 9c2 had no one to grade). Answers (lash, victim,
+    attacker, problem)."""
+    lashB = spawn_acolyte(port, 0, 20)
+    set_wellbeing(port, lashB, 1.0, 0.0)
+    poll_until(5, lambda: mstate(port, lashB) == "stable")
+    victimB = spawn_acolyte(port, 1, 20)     # eligible target, stays live
+    attackerB = spawn_acolyte(port, -1, 20)  # becomes the disqualified "recent attacker"
+    return lashB, victimB, attackerB, neuter_fighters(port, attackerB, lashB)
+
+
+def wounds_lua(uid):
+    """The unit's wounds as flat scalar records (up to 8), with its pose:
+    evidence of what a staged hit did to a subject that collapsed or died."""
+    return " ".join((
+        f"local w = unit.getWounds({uid}) or {{}}; local out = {{}};",
+        "for i = 1, math.min(#w, 8) do local r = {};",
+        " for k, v in pairs(w[i]) do local t = type(v);",
+        "  if t == 'number' or t == 'string' or t == 'boolean' then r[k] = v end end;",
+        " out[#out + 1] = r end;",
+        f"return {{ pose = tostring(unit.getPose({uid})), n = #w, wounds = out, "
+        f"stamina = unit.getStat({uid}, 'stamina'), blood = unit.getStat({uid}, 'blood_volume') }}"))
+
+
+#: 9h (#2976): the candidates must be eligible and must distinguish the two
+#: metrics at the moment the break is forced, or the selection says nothing
+#: about Chebyshev ranking.
+NINE_H_ATTEMPTS = 3
+#: 9h geometry, relative to the subject: the intended candidate at (a, a) and
+#: the decoy at (b, 0), with a < b < a*sqrt(2) so the intended one is
+#: Chebyshev-nearer (a vs b) and the decoy Euclidean-nearer (b^2 vs 2a^2).
+#: The old (6, 6) / (8, 0) put the decoy ON the eight-tile eligibility
+#: boundary, and the units meander ~0.3 tiles/s from the moment they spawn:
+#: a traced run read it at dx 8.96 (ineligible), which leaves one candidate
+#: and no ranking to grade (and, with the intended one drifting out instead,
+#: picks the decoy). Both candidates now sit well inside the range, and the
+#: offsets are SNAPPED (unit.setPos next to the subject's current position,
+#: arrival confirmed) just before the decision, because a few seconds of
+#: spawn-time wandering moved the 0.6-tile Euclidean margin of a first
+#: attempt by more than that in three attempts out of three.
+NINE_H_NEAR = 5.0
+NINE_H_FAR = 6.0
+
+
+def live_unit_ids(port):
+    """Every uid unit.getAllIds lists right now (None when unreadable)."""
+    r = send_json(port, "return { ids = unit.getAllIds() or {} }")
+    return _id_list(r.get("ids") if isinstance(r, dict) else None)
+
+
+#: How long retire_other_units waits for the queued destroys to take effect.
+RETIRE_WAIT_S = 10.0
+
+
+def retire_other_units(port, keep, wait_s=RETIRE_WAIT_S):
+    """Remove every unit except `keep` (the run's main subject, which the
+    final contamination guard still reads) and CONFIRM they are gone.
+
+    unit.destroy only queues a UnitDestroy (Units/Spawn.hs), so an
+    acknowledged call proves nothing: the units are polled until
+    unit.getAllIds no longer lists any of them. Answers (victims, remaining):
+    `remaining` is what was still listed when the wait ended (empty = clean;
+    None = the id list could not be read). Taking the live list rather than a
+    hand-kept list of handles is what covers units a phase left behind
+    without naming them (#2976: 9f's surviving subject, 4b's technomule)."""
+    before = live_unit_ids(port)
+    if before is None:
+        return [], None
+    victims = [u for u in before if u not in set(keep)]
+    destroy_units(port, *victims)
+    left = {"v": victims}
+
+    def settled():
+        now = live_unit_ids(port)
+        if now is None:
+            return None
+        left["v"] = [u for u in victims if u in set(now)]
+        return True if not left["v"] else None
+    poll_until(wait_s, settled)
+    return victims, left["v"]
+
+
+def destroy_confirmed(port, *uids, wait_s=RETIRE_WAIT_S):
+    """destroy_units, then wait until unit.getAllIds no longer lists any of
+    them (the destroy only queues a UnitDestroy). A re-stage spawns its fresh
+    units on the SAME spots right away, and a spawn onto a spot whose old unit
+    is still there never produced an AI state in a traced run (the probe
+    exited on 'never got AI state'). Answers the uids still listed when the
+    wait ended ([] = clean; None = the list could not be read)."""
+    uids = [u for u in uids if u is not None]
+    destroy_units(port, *uids)
+    left = {"v": list(uids)}
+
+    def settled():
+        now = live_unit_ids(port)
+        if now is None:
+            left["v"] = None
+            return None
+        left["v"] = [u for u in uids if u in set(now)]
+        return True if not left["v"] else None
+    poll_until(wait_s, settled)
+    if left["v"]:
+        print(f"  [setup] destroyed units {left['v']} were still listed after {wait_s:.0f} s")
+    return left["v"]
+
+
+def retirement_problem(victims, remaining):
+    """None when every retired unit is confirmed gone; otherwise a sentence."""
+    if remaining is None:
+        return "the live-unit list could not be read to confirm the cleanup"
+    if remaining:
+        return (f"{len(remaining)} of {len(victims)} retired unit(s) {remaining} were still "
+                f"listed after the wait; cleanup unconfirmed")
+    return None
+
+
+_CHEB_OBSERVER_TEMPLATE = r"""
+local S, N, F = @S@, @N@, @F@
+local mentalAi = require('scripts.unit_ai_mental')
+local policy = mentalAi.lashoutPolicy
+local atk = require('scripts.unit_ai_combat_attack')
+local origSC, origATE = mentalAi.shortCircuit, atk.attackTargetExecute
+local origGI, origGP, origEx, origAll = unit.getInfo, unit.getPose, unit.exists, unit.getAllIds
+local rec = { inTick = false, done = false, nilSel = false, tickRaised = false, allIds = false,
+  me = false, info = {}, pose = {}, exists = {}, elig = {}, target = -1, targetTyped = false }
+_G.__probe_cheb_rec = rec
+local function restore()
+  unit.getInfo, unit.getPose, unit.exists, unit.getAllIds = origGI, origGP, origEx, origAll
+  atk.attackTargetExecute, mentalAi.shortCircuit = origATE, origSC
+  _G.__probe_cheb_restore = nil
+end
+_G.__probe_cheb_restore = restore
+local function role(u) if u == N then return 'n' elseif u == F then return 'f' end return nil end
+unit.getInfo = function(u)
+  local v = origGI(u)
+  if rec.inTick and not rec.done then
+    if u == S then
+      if type(v) == 'table' then rec.me = { gridX = v.gridX, gridY = v.gridY } end
+    elseif role(u) then
+      rec.info[role(u)] = (type(v) == 'table') and { gridX = v.gridX, gridY = v.gridY, defName = v.defName } or { invalid = true }
+    end
+  end
+  return v
+end
+unit.getPose = function(u)
+  local v = origGP(u)
+  if rec.inTick and not rec.done and role(u) then rec.pose[role(u)] = v end
+  return v
+end
+unit.exists = function(u)
+  local v = origEx(u)
+  if rec.inTick and not rec.done and role(u) then rec.exists[role(u)] = v end
+  return v
+end
+unit.getAllIds = function()
+  if rec.inTick and not rec.done then rec.allIds = true end
+  return origAll()
+end
+local function replay(oid)
+  local r = role(oid)
+  if not rec.me or not r or rec.info[r] == nil or rec.info[r].invalid
+     or rec.exists[r] == nil or rec.pose[r] == nil then return false end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  unit.exists = function(u) if u == oid then return rec.exists[r] end return origEx(u) end
+  unit.getPose = function(u) if u == oid then return rec.pose[r] end return origGP(u) end
+  unit.getInfo = function(u) if u == oid then return rec.info[r] end return origGI(u) end
+  local ok, res = pcall(policy.eligible, S, rec.me, oid)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  return ok and res == true
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u == S and rec.inTick and not rec.done then
+    rec.done = true
+    local t = s and s.attackTargetUid
+    rec.targetTyped = (type(t) == 'number')
+    rec.target = rec.targetTyped and t or -1
+    rec.elig.n, rec.elig.f = replay(N), replay(F)
+  end
+  return origATE(u, s, params)
+end
+mentalAi.shortCircuit = function(uid, s, ...)
+  if uid ~= S or rec.done then return origSC(uid, s, ...) end
+  rec.inTick, rec.me, rec.info, rec.pose, rec.exists, rec.allIds = true, false, {}, {}, {}, false
+  local res = table.pack(pcall(origSC, uid, s, ...))
+  rec.inTick = false
+  if not res[1] then
+    rec.tickRaised, rec.tickErr, rec.done = true, tostring(res[2]), true
+  elseif res[2] == true and not rec.done then
+    rec.done, rec.nilSel = true, true
+    rec.elig.n, rec.elig.f = replay(N), replay(F)
+  end
+  if rec.done then restore() end
+  if not res[1] then error(res[2], 0) end
+  return table.unpack(res, 2, res.n)
+end
+require('scripts.mental_state').forceBreak(S, 'lash_out')
+return 'cheb-observer-installed'
+"""
+
+
+def chebyshev_observer_chunk(subj, near, far):
+    """The one-line console text that installs the 9h decision observer and
+    forces the lash-out break in the SAME chunk (the Lua thread runs a chunk
+    whole, so the first AI tick is observed). It wraps unit_ai_mental's
+    shortCircuit (called through the module table every tick) and
+    unit_ai_combat_attack.attackTargetExecute (what lashOutExecute calls
+    straight after the pick), records the subject's own position and the
+    answers the DECISION got for each candidate (info, pose, existence)
+    during the subject's tick, and replays the production eligibility
+    predicate on exactly those answers when the execute is reached. The
+    wrappers restore themselves when the decision is final."""
+    return " ".join(line.strip() for line in
+                    _CHEB_OBSERVER_TEMPLATE.replace("@S@", str(int(subj)))
+                    .replace("@N@", str(int(near))).replace("@F@", str(int(far))).splitlines()
+                    if line.strip())
+
+
+#: Reads the observer's record and removes the wrappers whether or not the
+#: decision happened.
+CHEB_COLLECT_LUA = ("local r = _G.__probe_cheb_rec; "
+                    "if _G.__probe_cheb_restore then _G.__probe_cheb_restore() end; "
+                    "_G.__probe_cheb_rec = nil; "
+                    "if r == nil then return { missing = true } end; return r")
+
+
+def chebyshev_decision_verdict(rec, near, far):
+    """Grade 9h's FIRST observed selection against the geometry and
+    eligibility the DECISION itself saw (#2976, review round 1: a snapshot
+    taken before forceBreak says nothing about candidates that move before
+    the AI tick).
+
+    Answers (kind, detail): 'setup' (the observation is missing, malformed
+    or its preconditions did not hold: discard and restage), 'ok' (a held
+    setup selected the Chebyshev-nearer candidate) or 'policy' (a held setup
+    selected the other candidate, or none). The preconditions: the first
+    decision completed without raising; the subject's own position was
+    captured; both candidates' info, existence and pose were read by the
+    decision; the production predicate, replayed on those answers, admits
+    both; and on the decision's own positions the intended candidate is
+    Chebyshev-nearer and Euclidean-farther than the decoy."""
+    if not isinstance(rec, dict) or rec.get("missing") is True:
+        return "setup", "no decision record (the observer was never installed or already removed)"
+    if rec.get("tickRaised") is True:
+        return "setup", f"the subject's first lash-out tick raised ({rec.get('tickErr')})"
+    if rec.get("done") is not True:
+        return "setup", "no lash-out decision was observed"
+    me = rec.get("me")
+    if not (isinstance(me, dict) and _finite_num(me.get("gridX")) and _finite_num(me.get("gridY"))):
+        return "setup", "the subject position the decision measured from was not captured"
+    problems = []
+    dist = {}
+    for k, name in (("n", "the Chebyshev-nearer candidate"), ("f", "the Euclidean-nearer candidate")):
+        info = (rec.get("info") or {}).get(k) if isinstance(rec.get("info"), dict) else None
+        if not (isinstance(info, dict) and _finite_num(info.get("gridX")) and _finite_num(info.get("gridY"))):
+            problems.append(f"{name} was not read by the decision")
+            continue
+        if (rec.get("elig") or {}).get(k) is not True:
+            problems.append(f"{name} was not eligible on the decision's own reads (pose "
+                            f"{(rec.get('pose') or {}).get(k)!r}, exists {(rec.get('exists') or {}).get(k)!r})")
+        dx, dy = info["gridX"] - me["gridX"], info["gridY"] - me["gridY"]
+        dist[k] = (max(abs(dx), abs(dy)), dx * dx + dy * dy)
+    if len(dist) == 2:
+        if not dist["n"][0] < dist["f"][0]:
+            problems.append(f"at the decision the intended candidate is not Chebyshev-nearer "
+                            f"({dist['n'][0]:.2f} vs {dist['f'][0]:.2f})")
+        if not dist["n"][1] > dist["f"][1]:
+            problems.append(f"at the decision the intended candidate is not Euclidean-farther "
+                            f"({dist['n'][1]:.2f} vs {dist['f'][1]:.2f})")
+    if problems:
+        return "setup", "; ".join(problems)
+    target = rec.get("target")
+    if rec.get("nilSel") is True or rec.get("targetTyped") is not True:
+        return "policy", "the decision selected no target although both candidates were eligible"
+    if target == near:
+        return "ok", f"selected {near}"
+    return "policy", f"selected {target}, not the Chebyshev-nearer {near} (decoy {far})"
+
+
+_MULE_OBSERVER_TEMPLATE = r"""
+local L, V, M = @L@, @V@, @M@
+local atk = require('scripts.unit_ai_combat_attack')
+local pol = require('scripts.unit_ai_mental').lashoutPolicy
+local WINDOW = require('scripts.unit_ai_combat').RETALIATE_WINDOW_SEC
+local orig = atk.attackTargetExecute
+local calls = {}
+_G.__probe_mule_calls = calls
+_G.__probe_mule_restore = function() atk.attackTargetExecute = orig; _G.__probe_mule_restore = nil end
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+local function pos(i) if type(i) ~= 'table' then return { invalid = true } end return { gridX = i.gridX, gridY = i.gridY } end
+local function rangeOf(r) if r == nil then return 1.0 end if fin(r) then return r end return 'invalid' end
+local function reading()
+  local ok, r = pcall(function()
+    local me, mi, gla = unit.getInfo(L), unit.getInfo(M), unit.getLastAttacker(L)
+    return { now = engine.gameTime(), lpos = pos(me), mpos = pos(mi), mdef = mi and mi.defName or false,
+      range = rangeOf(unit.getAttackRange(L)), mexists = unit.exists(M) == true, mpose = unit.getPose(M),
+      glaUid = gla and gla.uid or false, glaAt = gla and gla.at or false, window = WINDOW,
+      victimElig = ((me ~= nil) and pol.eligible(L, me, V) == true) or false }
+  end)
+  if ok then return r end
+  return { err = tostring(r) }
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u ~= L or not s or #calls >= 200 then return orig(u, s, params) end
+  local c = { pre = s.attackTargetUid or -1, before = reading() }
+  local sGI, sGP, sGLA, sEx = unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists
+  local sGAR, sGT = unit.getAttackRange, engine.gameTime
+  local ex = { samples = {}, mpose = {}, mdef = {}, mexists = {}, gla = {}, mexec = {}, lexec = {}, rexec = {}, texec = {} }
+  local function sample()
+    if #ex.samples >= 40 then return end
+    local ok, r = pcall(function()
+      return { m = pos(sGI(M)), l = pos(sGI(L)), range = rangeOf(sGAR(L)), now = sGT() }
+    end)
+    ex.samples[#ex.samples + 1] = ok and r or { err = tostring(r) }
+  end
+  unit.getInfo = function(x)
+    local v = sGI(x)
+    if x == M then
+      ex.mdef[#ex.mdef + 1] = (type(v) == 'table' and v.defName) or false
+      ex.mexec[#ex.mexec + 1] = pos(v)
+      sample()
+    elseif x == L then
+      ex.lexec[#ex.lexec + 1] = pos(v)
+    end
+    return v
+  end
+  unit.getAttackRange = function(x)
+    local v = sGAR(x)
+    if x == L then ex.rexec[#ex.rexec + 1] = rangeOf(v) end
+    return v
+  end
+  engine.gameTime = function()
+    local v = sGT()
+    ex.texec[#ex.texec + 1] = v
+    return v
+  end
+  unit.getPose = function(x)
+    local v = sGP(x)
+    if x == M then ex.mpose[#ex.mpose + 1] = (type(v) == 'string') and v or 'invalid'; sample() end
+    return v
+  end
+  unit.exists = function(x)
+    local v = sEx(x)
+    if x == M then ex.mexists[#ex.mexists + 1] = (v == true) end
+    return v
+  end
+  unit.getLastAttacker = function(x)
+    local v = sGLA(x)
+    if x == L then
+      ex.gla[#ex.gla + 1] = (type(v) == 'table') and { uid = v.uid, at = v.at } or false
+      sample()
+    end
+    return v
+  end
+  local ok, err = pcall(orig, u, s, params)
+  unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists = sGI, sGP, sGLA, sEx
+  unit.getAttackRange, engine.gameTime = sGAR, sGT
+  c.after = reading()
+  c.post = s.attackTargetUid or -1
+  c.ex = ex
+  c.ok = ok
+  c.err = (not ok) and tostring(err) or false
+  calls[#calls + 1] = c
+  if not ok then error(err, 0) end
+end
+@FORCE@
+return 'mule-observer-installed'
+"""
+
+#: Removes the observer and answers the recorded calls ('none' when there
+#: were no calls, a marker when the observer was never installed).
+_MULE_COLLECT_LUA = ("local c = _G.__probe_mule_calls; "
+                     "local restore = _G.__probe_mule_restore; "
+                     "if restore then restore() end; "
+                     "_G.__probe_mule_calls = nil; "
+                     "if c == nil then return 'observer-missing' end; "
+                     "if restore == nil then return 'observer-restore-missing' end; "
+                     "return #c == 0 and 'none' or c")
+
+
+def mule_observer_chunk(subj, victim, mule, force=False):
+    """The one-line console text that pins the subject's last-attacker record
+    to the technomule (as 9k always did), installs the execute observer and,
+    with `force`, forces the lash-out break, all in the SAME chunk: the Lua
+    thread runs a chunk whole, so every lash-out execute from the very first
+    tick is recorded, while the intended target is still standing (a target
+    that is knocked out within half a second would otherwise leave the
+    window with no opportunity to grade).
+
+    Inside the wrapped execute (for the duration of the original call only)
+    pass-through recorders keep what its retaliation block reads about the
+    attacker (record, pose, existence, info); each time it reads the
+    attacker the recorder ALSO samples the subject's position and range and
+    the clock right there, so the reach and window are judged on the reads of
+    THIS decision rather than on the snapshots around it (the clock and
+    positions move while the Lua thread runs). The call's pcall result is
+    kept: an execute that raises is recorded, not just rethrown, because
+    engine update callbacks swallow Lua errors."""
+    pin = (f"if not _G.__probe_orig_getLastAttacker then "
+           f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
+           f"unit.getLastAttacker = function(u) "
+           f"if u == {subj} then return {{uid={mule}, at=engine.gameTime()}} end "
+           f"return _G.__probe_orig_getLastAttacker(u) end; ")
+    obs = " ".join(line.strip() for line in
+                   _MULE_OBSERVER_TEMPLATE.replace("@L@", str(int(subj)))
+                   .replace("@V@", str(int(victim))).replace("@M@", str(int(mule)))
+                   .replace("@FORCE@", f"require('scripts.mental_state').forceBreak({int(subj)}, 'lash_out')"
+                            if force else "").splitlines()
+                   if line.strip())
+    return pin + obs
+
+
+MULE_UNPIN_LUA = ("if _G.__probe_orig_getLastAttacker then "
+                  "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
+                  "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
+
+
+def _lua_list(v):
+    """A Lua array as a Python list: the console encodes one as a JSON array,
+    the self-test harness's encoder as an object keyed by index; an empty
+    table may also arrive as {}. Anything else is not a list (None)."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict):
+        try:
+            return [v[k] for k in sorted(v, key=int)]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def technomule_call_status(c, victim, mule):
+    """('valid', []) when one recorded lash-out execute was a REAL retaliation
+    opportunity that only the technomule exclusion could have refused;
+    ('invalid', misses) when it was not; ('malformed', why) when the record
+    cannot be judged; ('raised', why) when the execute itself raised.
+
+    The swap (scripts/unit_ai_combat_attack.lua:196-226) fires on a recent
+    attacker that is not the current target, exists, is neither dead nor
+    collapsed, is not a technomule, hit within RETALIATE_WINDOW_SEC, and is
+    within (attack range or 1.0) + 0.5 Chebyshev tiles. The technomule check
+    comes BEFORE the clock and distance tests, so with the exclusion in place
+    the execute never reads them; the observer therefore samples the
+    subject's position, range and the clock next to EACH read the execute
+    makes of the attacker (`ex`), and the opportunity must hold on every
+    such sample (and on the readings before and after the call, which only
+    bracket it). So a valid call has the intended victim as its target, the
+    mule recorded as the attacker, alive, within the window and in reach on
+    every sample, the victim eligible, and only 'defName == technomule' in
+    the way."""
+    if not isinstance(c, dict):
+        return "malformed", ["the call record is not an object"]
+    if c.get("ok") is not True:
+        return "raised", f"the execute raised: {c.get('err')!r}"
+    misses = []
+    if c.get("pre") != victim:
+        misses.append(f"the target before the call was {c.get('pre')!r}, not {victim}")
+    ex = c.get("ex")
+    if not isinstance(ex, dict):
+        return "malformed", ["no record of the execute's own reads"]
+    for side in ("before", "after"):
+        r = c.get(side)
+        if not isinstance(r, dict) or "err" in r:
+            return "malformed", [f"{side} reading missing or raised ({r!r})"]
+        nums = [r.get(k) for k in ("now", "glaAt", "range", "window")]
+        if not all(_finite_num(v) for v in nums):
+            return "malformed", [f"{side} reading has a non-numeric clock, hit time, range or window"]
+        lp, mp = r.get("lpos"), r.get("mpos")
+        if not all(isinstance(q, dict) and _finite_num(q.get("gridX")) and _finite_num(q.get("gridY"))
+                   for q in (lp, mp)):
+            return "malformed", [f"{side} reading has an unreadable position"]
+        if r.get("mexists") is not True:
+            misses.append(f"{side}: the mule did not exist")
+        if not isinstance(r.get("mpose"), str) or r["mpose"] in ("dead", "collapsed"):
+            misses.append(f"{side}: the mule's pose was {r.get('mpose')!r}")
+        if r.get("mdef") != "technomule":
+            misses.append(f"{side}: the mule's defName was {r.get('mdef')!r}")
+        if r.get("glaUid") != mule:
+            misses.append(f"{side}: the subject's recorded attacker was {r.get('glaUid')!r}")
+        age = r["now"] - r["glaAt"]
+        if not 0 <= age <= r["window"]:
+            misses.append(f"{side}: the hit was {age:.2f} s old (window {r['window']})")
+        dist = max(abs(lp["gridX"] - mp["gridX"]), abs(lp["gridY"] - mp["gridY"]))
+        if dist > r["range"] + 0.5:
+            misses.append(f"{side}: the mule was {dist:.2f} tiles away (reach {r['range']} + 0.5)")
+        if r.get("victimElig") is not True:
+            misses.append(f"{side}: the intended target was not eligible")
+    # The execute's OWN reads of the attacker.
+    glas = _lua_list(ex.get("gla"))
+    samples = _lua_list(ex.get("samples"))
+    if not glas or not samples:
+        return "malformed", ["the execute read the attacker record zero times, so nothing it saw is recorded"]
+    window = c["before"]["window"]
+    hit_at = []
+    for g in glas:
+        if not isinstance(g, dict) or not _finite_num(g.get("at")):
+            return "malformed", ["the execute's own last-attacker read is not a record"]
+        if g.get("uid") != mule:
+            misses.append(f"execute: the recorded attacker was {g.get('uid')!r}")
+        hit_at.append(g["at"])
+    # Everything the execute was ACTUALLY handed (the values its own reads returned)
+    # plus the observer's samples next to its attacker reads (the technomule check
+    # short-circuits the clock, subject-position and range reads, so those are
+    # sampled): the reach must hold for EVERY mule position against EVERY subject
+    # position within the SMALLEST range seen + 0.5, and the window on every clock.
+    mps, lps, rgs, nows = [], [], [], []
+    for q in samples:
+        if not isinstance(q, dict) or "err" in q:
+            return "malformed", [f"an execute-time sample raised or is not an object ({q!r})"]
+        if not (_finite_num(q.get("now")) and _finite_num(q.get("range"))
+                and all(isinstance(q.get(k), dict) and _finite_num(q[k].get("gridX"))
+                        and _finite_num(q[k].get("gridY")) for k in ("m", "l"))):
+            return "malformed", ["an execute-time sample has an unreadable clock, range or position"]
+        mps.append(q["m"]); lps.append(q["l"]); rgs.append(q["range"]); nows.append(q["now"])
+    for key, sink, kind in (("mexec", mps, "pos"), ("lexec", lps, "pos"),
+                            ("rexec", rgs, "num"), ("texec", nows, "num")):
+        got = _lua_list(ex.get(key))
+        if got is None:
+            return "malformed", [f"the execute's own {key} reads are not a list"]
+        for v in got:
+            if kind == "pos":
+                if not (isinstance(v, dict) and _finite_num(v.get("gridX")) and _finite_num(v.get("gridY"))):
+                    return "malformed", [f"the execute was handed an unreadable position ({v!r})"]
+            elif not _finite_num(v):
+                return "malformed", [f"the execute was handed a non-numeric {key} value ({v!r})"]
+            sink.append(v)
+    dmax = max(max(abs(m["gridX"] - l["gridX"]), abs(m["gridY"] - l["gridY"])) for m in mps for l in lps)
+    if dmax > min(rgs) + 0.5:
+        misses.append(f"execute: the mule was {dmax:.2f} tiles from the subject on the reads the execute "
+                      f"saw and the samples next to them (smallest range {min(rgs)} + 0.5)")
+    age = max(nows) - min(hit_at)
+    if not 0 <= age <= window:
+        misses.append(f"execute: the hit was {age:.2f} s old on the latest clock the execute read "
+                      f"(window {window})")
+    for what, vals, ok_fn in (
+            ("pose", _lua_list(ex.get("mpose")), lambda v: isinstance(v, str) and v not in ("dead", "collapsed")),
+            ("defName", _lua_list(ex.get("mdef")), lambda v: v == "technomule"),
+            ("existence", _lua_list(ex.get("mexists")), lambda v: v is True)):
+        if vals is not None and not all(ok_fn(v) for v in vals):
+            misses.append(f"execute: the mule's {what} read {vals!r}")
+    return ("valid", []) if not misses else ("invalid", misses)
+
+
+def technomule_swap_verdict(calls, victim, mule):
+    """9k's gate on the recorded executes (#2976). Answers (verdict, detail):
+    'raised' (an execute raised: engine update callbacks swallow Lua errors,
+    so the record is the only evidence, and no later call may erase it),
+    'setup' (no execute, or none was a valid opportunity: the exclusion was
+    never exercised, so nothing is proven), 'policy' (a VALID opportunity
+    left a target other than the victim: the technomule exclusion failed) or
+    'pass' (at least one valid opportunity and every one kept the victim)."""
+    if not isinstance(calls, list) or not calls:
+        return "setup", "no lash-out attackTargetExecute call on the subject during the window"
+    for c in calls:
+        status, why = technomule_call_status(c, victim, mule)
+        if status == "raised":
+            return "raised", why
+    valid, closest, counts = [], None, {}
+    for c in calls:
+        status, misses = technomule_call_status(c, victim, mule)
+        counts[status] = counts.get(status, 0) + 1
+        if status == "valid":
+            valid.append(c)
+        elif closest is None or len(misses) < len(closest[1]):
+            closest = (status, misses)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+    if not valid:
+        return "setup", (f"{len(calls)} call(s) ({summary}); closest {closest[0]}: "
+                         + "; ".join(closest[1]))
+    for c in valid:
+        if c["post"] != victim:
+            return "policy", f"target {c['pre']} -> {c['post']} on a valid retaliation opportunity"
+    return "pass", f"{len(valid)} valid opportunity call(s) of {len(calls)} ({summary}), all kept {victim}"
+
+
+#: 9k (#2976): bounded re-stages when the retaliation opportunity was never
+#: established, and where the technomule is snapped (inside the swap's reach
+#: of (attack range + 0.5) with room to drift).
+NINE_K_ATTEMPTS = 3
+NINE_K_MULE_OFFSET = 0.7
+
+
+def snap_mule_beside(port, subj, mule, target):
+    """Stop the technomule and the target and put the mule NINE_K_MULE_OFFSET
+    tiles west of the subject's CURRENT position and the target one tile
+    east (unit.setPos enqueues a teleport, so arrival is confirmed). A mule
+    spawned a tile away drifted to 1.78 tiles within a second in a traced run,
+    out of the 1.0 + 0.5 reach, so no retaliation opportunity ever existed.
+    True once both stand within 0.3 tiles of their spots."""
+    base = send_json(port, " ".join((
+        f"local S, M, T = {subj}, {mule}, {target}; local i = unit.getInfo(S);",
+        "if not i then return { ok = false } end;",
+        "unit.stop(M); unit.stop(T);",
+        f"unit.setPos(M, i.gridX - {NINE_K_MULE_OFFSET}, i.gridY);",
+        "unit.setPos(T, i.gridX + 1.0, i.gridY);",
+        "return { ok = true, x = i.gridX, y = i.gridY }")))
+    if not isinstance(base, dict) or base.get("ok") is not True:
+        return False
+    bx, by = base["x"], base["y"]
+
+    def arrived():
+        pos = send_json(port, " ".join((
+            f"local m, t = unit.getInfo({mule}), unit.getInfo({target});",
+            "if not m or not t then return { ok = false } end;",
+            "return { ok = true, mx = m.gridX, my = m.gridY, tx = t.gridX, ty = t.gridY }")))
+        if not isinstance(pos, dict) or pos.get("ok") is not True:
+            return None
+        return True if (math.hypot(pos["mx"] - (bx - NINE_K_MULE_OFFSET), pos["my"] - by) < 0.3
+                        and math.hypot(pos["tx"] - (bx + 1.0), pos["ty"] - by) < 0.3) else None
+    return poll_until(5, arrived) is not None
+
+
+def technomule_retaliation_phase(port):
+    """Phase 9k (#717, #2976): the shared retaliation swap must not redirect
+    lash-out onto a technomule. Graded only when a real retaliation
+    opportunity was OBSERVED (technomule_swap_verdict: the mule recorded as a
+    recent attacker, alive, in reach, the victim eligible, only the
+    technomule exclusion in the way). A setup that never produced one is
+    discarded, named and restaged (bounded); a swap onto the mule on a valid
+    opportunity is a policy failure and is never restaged. Answers
+    (ok, line)."""
+    reasons = []
+    for attempt in range(1, NINE_K_ATTEMPTS + 1):
+        subj = spawn_acolyte(port, -25, 25)
+        set_wellbeing(port, subj, 1.0, 0.0)
+        poll_until(5, lambda: mstate(port, subj) == "stable")
+        target = spawn_acolyte(port, -24, 25)   # eligible, adjacent
+        mule = spawn_acolyte(port, -26, 25, unit="technomule", clear_water=False)
+        # The subject strikes the adjacent target for real, and a full-strength
+        # acolyte swing can take it out of the fight (collapsed units are not
+        # eligible), after which lash-out would legitimately re-pick someone
+        # else. Neutered like 9a/9c2's fighters, with the neuter READ BACK, so
+        # the target stays the eligible unit this check is about (#2976).
+        neuter = neuter_fighters(port, subj, target)
+        snapped = snap_mule_beside(port, subj, mule, target)
+        # Fixture isolation, observed with the production eligibility rule:
+        # exactly the target may be eligible for the subject (never the mule).
+        stray = isolation_problem(port, subj, (target,))
+        problems = [p for p in (neuter, stray,
+                                None if snapped else "the mule/target teleport never took effect") if p]
+        installed = send(port, mule_observer_chunk(subj, target, mule, force=True))
+        # Sample rapidly through the retaliation-swap's own 3 s window: the
+        # subject must never swap onto the technomule.
+        samples = []
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            samples.append(lash_target(port, subj))
+            time.sleep(0.15)
+        status, calls = parse_swap_collection(send(port, _MULE_COLLECT_LUA))
+        send(port, MULE_UNPIN_LUA)
+        verdict, why = technomule_swap_verdict(calls, target, mule)
+        pose = send(port, f"return unit.getPose({target})")
+        eligible_now = eligible_neighbours(port, subj)
+        send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(port, subj) != "break")
+        destroy_confirmed(port, subj, target, mule)
+        if verdict == "raised":
+            return False, (f"  [FAIL] the lash-out execute raised during 9k's window: {why}; a raised "
+                           f"execute is never restaged (attempt {attempt})")
+        if str(mule) in samples or verdict == "policy":
+            return False, (f"  [FAIL] lash-out swapped onto the technomule {mule}: saw {samples}; "
+                           f"{verdict}: {why}")
+        if installed != "mule-observer-installed" or status != "ok":
+            problems.append(f"observer {installed!r}/{status}")
+        if verdict != "pass":
+            problems.append(why)
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            if attempt < NINE_K_ATTEMPTS:
+                print(f"  [setup] 9k attempt {attempt} discarded before grading "
+                      f"({'; '.join(problems)}); restaging")
+                continue
+            return False, (f"  [FAIL] setup: 9k never established a retaliation opportunity in "
+                           f"{NINE_K_ATTEMPTS} attempts ({' | '.join(reasons)}); saw {samples}, "
+                           f"eligible for the subject {eligible_now}, target pose {pose}")
+        return True, (f"  [pass] lash-out stayed on {target} and never swapped onto the "
+                      f"technomule {mule}: {samples[:4]}... ({why})")
+
+
+def _mule_harness_src():
+    """The 9c2 production-execute harness, with unit 3 a TECHNOMULE standing
+    at the attacker positions (its info answers defName 'technomule'; every
+    pose answers 'standing', no collapsed pin) and the 9k observer's own
+    reading function recognised as the probe's (so it gets the BEFORE/AFTER
+    clock and its positions come from attacker_x). The execute's reads, and
+    the observer's samples next to them, get the EXECUTE clock and answer
+    from attacker_seq / subject_seq / range_seq."""
+    h = _SWAP_HARNESS_LUA
+    old = "      if x == 'missing' then return nil end\n      return { gridX = x, gridY = 0.0, defName = 'acolyte' }"
+    assert h.count(old) == 1
+    h = h.replace(old, "      if x == 'missing' then return nil end\n      return { gridX = x, gridY = 0.0, defName = 'technomule' }")
+    assert h.count("i.name == 'swapReading'") == 1
+    h = h.replace("i.name == 'swapReading'", "i.name == 'reading'")
+    assert h.count("_G.__probe_swap_calls") == 1
+    return h.replace("_G.__probe_swap_calls", "_G.__probe_mule_calls")
+
+
+def mule_policy_harness(before=1.0, execute=1.01, after=1.02, attacker_x=1.0, attacker_seq=None,
+                        attack_patch=None, subject_seq=None, range_seq=None):
+    """Run the PRODUCTION attack execute once on subject 1 (target victim 2,
+    technomule 3 recorded as its attacker at game time 0) with the 9k observer
+    and no engine (needs `lua`); `attack_patch=(old, new)` runs a copy of
+    unit_ai_combat_attack.lua with that one substitution. Answers the same
+    dict as swap_policy_harness (calls, post, restored, clock, ok, err), or
+    None without lua."""
+    chunk = mule_observer_chunk(1, 2, 3)
+    return swap_policy_harness(before, execute, after, attacker_x=attacker_x,
+                               attacker_seq=attacker_seq, attack_patch=attack_patch,
+                               subject_seq=subject_seq, range_seq=range_seq,
+                               harness_src=_mule_harness_src(),
+                               observer_text=chunk[chunk.index("local L, V, M"):])
+
+
+def snap_chebyshev_candidates(port, subj, near, far):
+    """Stop both candidates and put them at their intended offsets from the
+    subject's CURRENT position (unit.setPos enqueues a teleport on the unit
+    thread, so arrival is confirmed). True once both stand within 0.3 tiles
+    of their targets."""
+    base = send_json(port, " ".join((
+        f"local S, N, F = {subj}, {near}, {far}; local i = unit.getInfo(S);",
+        "if not i then return { ok = false } end;",
+        "unit.stop(N); unit.stop(F);",
+        f"unit.setPos(N, i.gridX + {NINE_H_NEAR}, i.gridY + {NINE_H_NEAR});",
+        f"unit.setPos(F, i.gridX + {NINE_H_FAR}, i.gridY);",
+        "return { ok = true, x = i.gridX, y = i.gridY }")))
+    if not isinstance(base, dict) or base.get("ok") is not True:
+        return False
+    bx, by = base["x"], base["y"]
+
+    def arrived():
+        pos = send_json(port, " ".join((
+            f"local n, f = unit.getInfo({near}), unit.getInfo({far});",
+            "if not n or not f then return { ok = false } end;",
+            "return { ok = true, nx = n.gridX, ny = n.gridY, fx = f.gridX, fy = f.gridY }")))
+        if not isinstance(pos, dict) or pos.get("ok") is not True:
+            return None
+        return True if (math.hypot(pos["nx"] - (bx + NINE_H_NEAR), pos["ny"] - (by + NINE_H_NEAR)) < 0.3
+                        and math.hypot(pos["fx"] - (bx + NINE_H_FAR), pos["fy"] - by) < 0.3) else None
+    return poll_until(5, arrived) is not None
+
+
+_CHEB_HARNESS_LUA = r"""
+-- arg: picker mode ('cheb'|'euclid'), then the position / pose overrides as k=v
+local MODE = arg[1]
+local OV = {}
+for i = 2, #arg do local k, v = arg[i]:match('^(%w+)=(.*)$'); OV[k] = v end
+local S, N, F = 1, 2, 3
+local pos = { [S] = { 0, 0 }, [N] = { 5, 5 }, [F] = { 6, 0 } }
+local pose = { [S] = 'standing', [N] = 'standing', [F] = 'standing' }
+-- a candidate that has MOVED (or fallen) by the time the AI tick reads it
+if OV.nx then pos[N] = { tonumber(OV.nx), tonumber(OV.ny) } end
+if OV.fx then pos[F] = { tonumber(OV.fx), tonumber(OV.fy) } end
+if OV.npose then pose[N] = OV.npose end
+local def = { [N] = OV.ndef or 'acolyte' }
+unit = {}
+unit.getAllIds = function() return { S, N, F } end
+unit.exists = function(u) return pos[u] ~= nil end
+unit.getPose = function(u) return pose[u] end
+unit.getInfo = function(u) local p = pos[u]; return p and { gridX = p[1], gridY = p[2], defName = def[u] or 'acolyte' } end
+engine = { gameTime = function() return 1.0 end }
+local policy = { range = 8 }
+policy.eligible = function(uid, me, oid)
+  if oid == uid or not unit.exists(oid) then return false end
+  local ps = unit.getPose(oid)
+  if ps == 'dead' or ps == 'collapsed' then return false end
+  local info = unit.getInfo(oid)
+  if not info or info.defName == 'technomule' then return false end
+  return math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY)) <= 8
+end
+local atk = { attackTargetExecute = function(uid, s, params) s.executed = true end }
+local mental = { lashoutPolicy = policy }
+mental.shortCircuit = function(uid, s)
+  local me = unit.getInfo(uid)
+  local best, bestD = nil, math.huge
+  for _, oid in ipairs(unit.getAllIds()) do
+    if policy.eligible(uid, me, oid) then
+      local i = unit.getInfo(oid)
+      local dx, dy = math.abs(i.gridX - me.gridX), math.abs(i.gridY - me.gridY)
+      local d = (MODE == 'cheb') and math.max(dx, dy) or (dx * dx + dy * dy)
+      if d < bestD then best, bestD = oid, d end
+    end
+  end
+  if best then
+    s.attackTargetUid = best
+    atk.attackTargetExecute(uid, s, {})
+  end
+  return true
+end
+package.preload['scripts.unit_ai_mental'] = function() return mental end
+package.preload['scripts.unit_ai_combat_attack'] = function() return atk end
+package.preload['scripts.mental_state'] = function() return { forceBreak = function() end } end
+local function ser(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), ser(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%q', v)
+  elseif t == 'number' or t == 'boolean' then return tostring(v) end
+  return 'null'
+end
+local GI0, ATE0, SC0, GP0 = unit.getInfo, atk.attackTargetExecute, mental.shortCircuit, unit.getPose
+local chunk = assert(load(io.read('a')))
+chunk()
+-- the AI ticks go through the module table, exactly as unit_ai.lua does
+local s = {}
+package.loaded['scripts.unit_ai_mental'] = nil
+local m = require('scripts.unit_ai_mental')
+m.shortCircuit(S, s)
+local rec = _G.__probe_cheb_rec
+rec.restored = (unit.getInfo == GI0 and unit.getPose == GP0 and atk.attackTargetExecute == ATE0
+                and mental.shortCircuit == SC0)
+print(ser(rec))
+"""
+
+
+def run_cheb_harness(mode, **overrides):
+    """The 9h observer chunk, run under `lua` against a stub picker (Chebyshev
+    or the mutated Euclidean one), with candidates optionally moved or
+    collapsed by the time the AI tick reads them. Answers the record as a
+    dict, or None without a lua interpreter."""
+    import shutil as _sh, subprocess as _sp
+    lua_bin = _sh.which("lua")
+    if lua_bin is None:
+        return None
+    out = _sp.run([lua_bin, "-e", "arg = {" + ", ".join(
+        repr(a) for a in [mode] + [f"{k}={v}" for k, v in overrides.items()]) + "}",
+        "-e", _CHEB_HARNESS_LUA.replace("io.read('a')", repr(chebyshev_observer_chunk(1, 2, 3)))],
+        capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def chebyshev_ranking_phase(port):
+    """Phase 9h (#717, #2976): nearest-target ranking uses Chebyshev distance
+    (matching eligibility's metric), not squared Euclidean. (5,5) is nearer
+    than (6,0) under Chebyshev (5 vs 6) despite (6,0) being nearer under
+    squared Euclidean (36 vs 50).
+
+    The FIRST selection is observed where it is made (chebyshev_observer_
+    chunk, installed in the same console chunk that forces the break) and
+    graded on the geometry and eligibility the DECISION itself read
+    (chebyshev_decision_verdict): candidates move between any earlier
+    snapshot and the AI tick. A setup whose preconditions did not hold at the
+    decision is discarded, named and restaged (bounded); a wrong target on
+    a held setup is a policy failure and is never restaged. Answers
+    (ok, line)."""
+    reasons = []
+    for attempt in range(1, NINE_H_ATTEMPTS + 1):
+        subj = spawn_acolyte(port, -15, 40)
+        set_wellbeing(port, subj, 1.0, 0.0)
+        poll_until(5, lambda: mstate(port, subj) == "stable")
+        near = spawn_acolyte(port, -15 + NINE_H_NEAR, 40 + NINE_H_NEAR)   # (a, a)
+        far = spawn_acolyte(port, -15 + NINE_H_FAR, 40)                    # (b, 0)
+        snap_ok = snap_chebyshev_candidates(port, subj, near, far)
+        stray = isolation_problem(port, subj, (near, far))
+        send(port, chebyshev_observer_chunk(subj, near, far))
+        poll_until(10, lambda: send(
+            port, "local r = _G.__probe_cheb_rec; return (r and r.done) and 'done' or 'nil'") == "done")
+        rec = send_json(port, CHEB_COLLECT_LUA)
+        send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(port, subj) != "break")
+        destroy_confirmed(port, subj, near, far)
+        kind, detail = chebyshev_decision_verdict(rec, near, far)
+        problems = ([] if snap_ok else ["the candidates' teleport next to the subject never "
+                                        "took effect"]) + ([stray] if stray else [])
+        if kind == "setup":
+            problems.append(detail)
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            if attempt < NINE_H_ATTEMPTS:
+                print(f"  [setup] 9h attempt {attempt} discarded before grading "
+                      f"({'; '.join(problems)}); restaging")
+                continue
+            return False, (f"  [FAIL] setup: 9h never staged a gradable ranking in "
+                           f"{NINE_H_ATTEMPTS} attempts ({' | '.join(reasons)}); last record {rec}")
+        if kind == "ok":
+            return True, (f"  [pass] nearest-target ranking uses Chebyshev distance "
+                          f"({near} over the Euclidean-nearer {far}; {detail})")
+        return False, (f"  [FAIL] expected Chebyshev-nearer {near} ({detail}); decision record {rec}")
+
+
 #: 9j (#2975), episode end while delirious. Meander (delirium's aimless
 #: wander) is the slowest gait; the in-flight pursuit runs at the combat
 #: attack's sprint/ordered/comfort pace. Measured over 20 trials the
@@ -2490,31 +3784,32 @@ def flee_break_check(port, uid):
 
     The technomule's spawn is queued, and the flee only runs from units
     unit.getAllIds lists (with nobody in range it wanders instead), so the
-    break is forced only once the mule is PROVEN registered; if it never
-    registers, 4b is a named setup failure and no break is forced. The
-    baseline distance d0 is read BEFORE the break. The pass condition is
-    unchanged: farther than d0 + 2 tiles within the poll (#2773)."""
+    break is forced only once the mule is PROVEN registered AND is the unit
+    the production search would flee from (nearest other live unit within 15
+    tiles); otherwise 4b is a named setup failure and no break is forced.
+    The break is graded by flee_break_verdict (#2976): while it is active the
+    unit must run away from the mule at its ordered speed, in proportion to
+    that speed, from a unit that was stopped when the break began."""
     mule = spawn_acolyte(port, 6, 0, unit="technomule", clear_water=False)
     mpos = poll_until(FLEE_MULE_REGISTER_WAIT_S, lambda: unit_registered(port, mule))
     if not mpos:
         return False, (f"  [FAIL] setup: the technomule {mule} never registered within "
                        f"{FLEE_MULE_REGISTER_WAIT_S:.0f} s; flee break not tested")
+    near = nearest_other_uid(port, uid)
+    if near != mule:
+        return False, (f"  [FAIL] setup: the nearest unit to flee from is {near}, not the "
+                       f"registered technomule {mule}; flee break not tested")
     mx, my = mpos
     x0, y0 = unit_pos(port, uid)
     d0 = ((x0 - mx) ** 2 + (y0 - my) ** 2) ** 0.5
-    send(port, f"require('scripts.mental_state').forceBreak({uid},'flee'); "
-               f"return 'ok'")
-    s = msummary(port, uid)
-
-    def fled():
-        x, y = unit_pos(port, uid)
-        return ((x - mx) ** 2 + (y - my) ** 2) ** 0.5 > d0 + 2.0
-    away = poll_until(25, fled)
-    if s.get("state") == "break" and s.get("behavior") == "flee" and away:
+    samples, verdict, detail = run_break_phase(port, uid, "flee", flee_break_verdict, mule=mule)
+    if verdict == "ok":
         return True, (f"  [pass] forced flee break runs from the technomule "
-                      f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}))")
-    return False, (f"  [FAIL] flee break didn't flee: state={s} d0={d0:.1f} "
-                   f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}")
+                      f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}); {detail})")
+    return False, (f"  [FAIL] flee break didn't flee: {verdict} \u2014 {detail} d0={d0:.1f} "
+                   f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}\n"
+                   f"         trace (game t, brk, behavior, activity, speed, x, y, mule x, y): "
+                   f"{break_trace_line(samples)}")
 
 
 #: The activities unit_ai.lua's tick returns on before shortCircuit
@@ -3065,7 +4360,8 @@ io.write(enc({ calls = calls, post = s.attackTargetUid, restored = restored,
 
 def swap_policy_harness(before, execute, after, attacker_x=1.0,
                         attacker_seq=None, attack_patch=None,
-                        subject_seq=None, range_seq=None, missing_pose=None):
+                        subject_seq=None, range_seq=None, missing_pose=None,
+                        harness_src=None, observer_text=None):
     """Run the production attack execute once on lashB (1, target victim
     2, attacker 3 whose hit is stamped at game time 0) with the probe's
     swap observer and the 9c2 pose pin, and no engine (needs `lua`).
@@ -3100,8 +4396,8 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
     pin = ("if not _G.__probe_orig_getPose then _G.__probe_orig_getPose = unit.getPose end; "
            "unit.getPose = function(u) if u == 3 then return 'collapsed' end "
            "return _G.__probe_orig_getPose(u) end;")
-    observer = " ".join(line.strip() for line in
-                        swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
+    observer = observer_text if observer_text is not None else " ".join(
+        line.strip() for line in swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
     seq = attacker_seq if attacker_seq is not None else [attacker_x]
 
     def lua_list(v, default):
@@ -3109,7 +4405,7 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
     # missing_pose=(uid, reading): that unit's REAL pose answers nil in the
     # observer's BEFORE (1) or AFTER (2) reading.
     mp = "{}" if missing_pose is None else "{[%d] = %d}" % missing_pose
-    src = _SWAP_HARNESS_LUA % {
+    src = (harness_src or _SWAP_HARNESS_LUA) % {
         "missing_pose": mp,
         "subject_seq": lua_list(subject_seq, 0.0),
         "range_seq": lua_list(range_seq, 1.0),
@@ -3692,6 +4988,410 @@ def self_test():
           wander_episode_verdict([ws(None, None), ws(None, None),
                                   ws(None, None, brk=False, lash=False)])[0] == "still")
 
+    # landed_in_episode (#2976): 9b needs a hit ATTRIBUTABLE to the active
+    # lash-out episode, not just the attacker record naming the subject.
+    LR = {"uid": 3, "at": 105.0, "since": 100.0, "ends": 130.0, "state": "break"}
+    check("9b: a record naming the subject inside the episode passes", landed_in_episode(LR, 3) is True)
+    check("9b: the record naming the subject at the episode START boundary passes",
+          landed_in_episode(dict(LR, at=100.0), 3) is True)
+    check("9b: a record from BEFORE the episode (the staged fight) fails",
+          landed_in_episode(dict(LR, at=99.9), 3) is False)
+    check("9b: a hit AFTER the episode expired fails",
+          landed_in_episode(dict(LR, at=130.5), 3) is False)
+    check("9b: the record names someone else -> fails", landed_in_episode(dict(LR, uid=7), 3) is False)
+    check("9b: no record at all (attempted swings write none) -> fails",
+          landed_in_episode(dict(LR, uid=False, at=False), 3) is False)
+    check("9b: the episode already over (state not break) fails",
+          landed_in_episode(dict(LR, state="stressed"), 3) is False)
+    check("9b: an unreadable episode window fails",
+          landed_in_episode(dict(LR, since=None), 3) is False and landed_in_episode("x", 3) is False)
+
+    check("9h: the staged offsets separate the metrics and sit well inside the eight-tile range",
+          NINE_H_NEAR < NINE_H_FAR < NINE_H_NEAR * 2 ** 0.5 and NINE_H_FAR <= 6.0
+          and NINE_H_NEAR * 2 ** 0.5 <= 7.1)
+    def fake_snap(base, pos):
+        """snap_chebyshev_candidates with fakes: the base read answers `base`,
+        later reads answer `pos` (None = never arrives)."""
+        g = globals()
+        saved = {k: g[k] for k in ("send_json", "poll_until")}
+        calls = []
+
+        def fsj(port, lua, **kw):
+            calls.append(lua)
+            return base if "unit.setPos" in lua else pos
+        g.update(send_json=fsj, poll_until=lambda sec, fn, interval=0.3: fn())
+        try:
+            return snap_chebyshev_candidates(1, 9, 10, 11), calls
+        finally:
+            g.update(saved)
+    base = {"ok": True, "x": 0.0, "y": 0.0}
+    arrived = {"ok": True, "nx": NINE_H_NEAR, "ny": NINE_H_NEAR, "fx": NINE_H_FAR, "fy": 0.0}
+    check("9h snap: both candidates arriving at their offsets -> True, after a stop+setPos chunk",
+          fake_snap(base, arrived)[0] is True and "unit.stop(N)" in fake_snap(base, arrived)[1][0])
+    check("9h snap: a candidate still 1 tile from its offset -> False",
+          fake_snap(base, dict(arrived, nx=arrived["nx"] + 1.0))[0] is False)
+    check("9h snap: an unreadable subject -> False", fake_snap({"ok": False}, arrived)[0] is False)
+    check("9h snap: positions unreadable after the snap -> False",
+          fake_snap(base, {"ok": False})[0] is False)
+    # destroy_confirmed (#2976): a re-stage waits for the old units to leave before spawning on their spots.
+    def fake_destroy_confirmed(lists):
+        g = globals()
+        saved = {k: g[k] for k in ("live_unit_ids", "destroy_units", "poll_until")}
+        seq, destroyed = list(lists), []
+        g.update(live_unit_ids=lambda port: seq.pop(0) if len(seq) > 1 else seq[0],
+                 destroy_units=lambda port, *u: destroyed.extend(u),
+                 poll_until=lambda sec, fn, interval=0.3: next((v for _ in range(4) if (v := fn())), None))
+        try:
+            return destroy_confirmed(1, 5, 6, 7), destroyed
+        finally:
+            g.update(saved)
+    check("re-stage cleanup: units that leave the live list are confirmed gone",
+          fake_destroy_confirmed([[1, 5, 6, 7], [1, 7], [1]]) == ([], [5, 6, 7]))
+    check("re-stage cleanup: a unit that never leaves is reported",
+          fake_destroy_confirmed([[1, 5, 6, 7], [1, 6]])[0] == [6])
+    check("re-stage cleanup: an unreadable list is reported as None",
+          fake_destroy_confirmed([None])[0] is None)
+    # retire_other_units / retirement_problem (#2976): 9g's cleanup is confirmed.
+    def fake_retire(lists, keep=(1,)):
+        """retire_other_units with fakes: live_unit_ids answers `lists` in turn
+        (the last repeats); records the destroyed uids. Answers
+        (victims, remaining, destroyed)."""
+        g = globals()
+        saved = {k: g[k] for k in ("live_unit_ids", "destroy_units", "poll_until")}
+        seq, destroyed = list(lists), []
+
+        def f_live(port):
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+        g.update(live_unit_ids=f_live, destroy_units=lambda port, *u: destroyed.extend(u),
+                 poll_until=lambda sec, fn, interval=0.3: next((v for _ in range(4) if (v := fn())), None))
+        try:
+            v, r = retire_other_units(1, keep)
+            return v, r, destroyed
+        finally:
+            g.update(saved)
+    v, r, d = fake_retire([[1, 19, 20, 50], [1]])
+    check("9g cleanup: every unit but the kept subject is destroyed and, once gone, confirmed",
+          v == [19, 20, 50] and d == [19, 20, 50] and r == [] and retirement_problem(v, r) is None)
+    v, r, d = fake_retire([[1, 19, 20], [1, 20], [1]])
+    check("9g cleanup: a DELAYED removal (one unit still listed on the first re-read) is waited for",
+          r == [] and retirement_problem(v, r) is None)
+    v, r, d = fake_retire([[1, 19, 20], [1, 20]])
+    check("9g cleanup: a unit that never leaves is a named setup problem",
+          r == [20] and "cleanup unconfirmed" in (retirement_problem(v, r) or ""))
+    v, r, d = fake_retire([None])
+    check("9g cleanup: an unreadable unit list is a problem, and nothing is destroyed",
+          r is None and d == [] and retirement_problem(v, r) is not None)
+    v, r, d = fake_retire([[1]])
+    check("9g cleanup: nothing to retire is clean", v == [] and r == [] and retirement_problem(v, r) is None)
+    check("9g cleanup: the kept subject is never destroyed even when listed",
+          1 not in fake_retire([[1, 2], [1]])[2])
+
+    check("uid lists: an empty Lua table arrives as {} and reads as []", _id_list({}) == [])
+    check("uid lists: a list sorts; non-integers, bools and a missing list are unreadable",
+          _id_list([3, 1, 2]) == [1, 2, 3] and _id_list([1, "x"]) is None
+          and _id_list([True]) is None and _id_list(None) is None and _id_list({"a": 1}) is None)
+
+    # poll_new_hit (#2976): 9c2's staged-hit wait keeps the fighters' stamina up.
+    def fake_poll(answers):
+        g = globals()
+        saved = {k: g[k] for k in ("send", "time")}
+        sent, clock = [], [0.0]
+
+        class FakeTime:
+            def time(self):
+                return clock[0]
+
+            def sleep(self, d):
+                clock[0] += d
+        seq = list(answers)
+
+        def fsend(port, lua, **kw):
+            sent.append(lua)
+            if "unit.getLastAttacker" in lua:
+                return seq.pop(0) if seq else "nil"
+            return "ok"
+        g.update(send=fsend, time=FakeTime())
+        try:
+            return poll_new_hit(1, 5, 6, -1.0, timeout_s=10.0), sent
+        finally:
+            g.update(saved)
+    got, sent = fake_poll(["nil"] * 12 + ["hit"])
+    check("9c2 hit wait: a hit that arrives after several polls is returned, with stamina topped up "
+          "meanwhile for BOTH fighters",
+          got is True and any("stamina" in x and "unit.setStat(5," in x and "unit.setStat(6," in x for x in sent))
+    got, sent = fake_poll([])
+    check("9c2 hit wait: no hit within the timeout -> False (a named setup failure upstream)",
+          got is False)
+    check("9c2 hit wait: the top-up never sets stamina to 0 or to the full maximum",
+          0.0 < NINE_C2_TOPUP_FRACTION < 1.0 and "* 0.9" in topup_stamina_lua(1))
+    check("9c2 hit wait: the hit is still judged by the unchanged new-hit read of the last-attacker "
+          "record", "unit.getLastAttacker(5)" in new_hit_poll_lua(5, 6, -1.0))
+    check("9c2 hit wait: a dead subject with no hit recorded and an attempt left -> restage",
+          nine_c2_hit_wait_restage(False, True, 1) is True)
+    check("9c2 hit wait: the last attempt, a hit that landed, or a LIVING subject never restages",
+          nine_c2_hit_wait_restage(False, True, NINE_C2_ATTEMPTS) is False
+          and nine_c2_hit_wait_restage(True, True, 1) is False
+          and nine_c2_hit_wait_restage(False, False, 1) is False)
+    check("9b restage: a subject that died with 9a graded and the dressing held -> restage",
+          nine_b_should_restage(False, True, True, True, 1) is True)
+    check("9b restage: the last attempt never restages (the failure stands)",
+          nine_b_should_restage(False, True, True, True, NINE_B_ATTEMPTS) is False)
+    check("9b restage: a hit that landed needs no restage",
+          nine_b_should_restage(True, True, True, False, 1) is False)
+    check("9b restage: a LIVING subject that never landed a hit is a failure, never restaged",
+          nine_b_should_restage(False, True, True, False, 1) is False)
+    check("9b restage: a failed 9a decision is never erased by a restage",
+          nine_b_should_restage(False, False, True, True, 1) is False)
+    check("9b restage: a failed dressing is never restaged",
+          nine_b_should_restage(False, True, False, True, 1) is False)
+    # 9h decision observer (#2976, review round 1): graded on what the DECISION read.
+    held = run_cheb_harness("cheb")
+    if held is None:
+        print("  skip 9h observer harness: no lua interpreter")
+    else:
+        check("9h observer: the decision's own reads on the staged geometry -> ok (Chebyshev picker)",
+              chebyshev_decision_verdict(held, 2, 3)[0] == "ok")
+        check("9h observer: the same geometry with a Euclidean-mutated picker -> policy failure",
+              chebyshev_decision_verdict(run_cheb_harness("euclid"), 2, 3)[0] == "policy")
+        check("9h observer: the intended candidate DRIFTED to (4, 4) before the tick: the mutated "
+              "picker would still pick it, but the geometry the decision read no longer separates "
+              "the metrics -> setup (never a pass)",
+              chebyshev_decision_verdict(run_cheb_harness("euclid", nx=4, ny=4), 2, 3)[0] == "setup")
+        check("9h observer: the decoy drifted out of range (9 tiles) -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", fx=9, fy=0), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate collapsed by the tick -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", npose="collapsed"), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate farther than the decoy under Chebyshev "
+              "(6.5, 6.5 vs 6, 0) -> setup, whatever the picker chose",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", nx=6.5, ny=6.5), 2, 3)[0] == "setup")
+        check("9h observer: the intended candidate ineligible by the production rule although "
+              "read, standing and in range (a technomule) -> setup",
+              chebyshev_decision_verdict(run_cheb_harness("cheb", ndef="technomule"), 2, 3)[0] == "setup")
+        check("9h observer: the wrappers restore themselves and the record names the decision's reads",
+              held.get("done") is True and held["restored"] is True and held["target"] == 2
+              and held["info"]["n"]["gridX"] == 5
+              and held["elig"]["n"] is True and held["elig"]["f"] is True)
+    base = {"done": True, "me": {"gridX": 0, "gridY": 0}, "target": 2, "targetTyped": True, "nilSel": False,
+            "info": {"n": {"gridX": 5, "gridY": 5}, "f": {"gridX": 6, "gridY": 0}},
+            "elig": {"n": True, "f": True}, "pose": {"n": "standing", "f": "standing"}, "exists": {"n": True, "f": True}}
+    check("9h verdict: a held setup selecting the Chebyshev-nearer candidate -> ok",
+          chebyshev_decision_verdict(base, 2, 3)[0] == "ok")
+    check("9h verdict: a held setup selecting the decoy -> policy",
+          chebyshev_decision_verdict(dict(base, target=3), 2, 3)[0] == "policy")
+    check("9h verdict: a held setup that selected nothing -> policy",
+          chebyshev_decision_verdict(dict(base, nilSel=True, targetTyped=False, target=-1), 2, 3)[0] == "policy")
+    check("9h verdict: missing observer, an un-finished decision, a raised tick and an uncaptured "
+          "subject are all setup",
+          all(chebyshev_decision_verdict(r, 2, 3)[0] == "setup" for r in (
+              {"missing": True}, None, dict(base, done=False), dict(base, tickRaised=True, tickErr="x"),
+              dict(base, me=False))))
+    check("9h verdict: a candidate the decision never read -> setup",
+          chebyshev_decision_verdict(dict(base, info={"n": base["info"]["n"]}), 2, 3)[0] == "setup")
+    # 9k retaliation opportunity (#2976, review rounds 1-2): the PRODUCTION execute, run under
+    # lua, with the technomule exclusion present, removed, or replaced by a raise.
+    EXCL = 'and attInfo and attInfo.defName ~= "technomule"'
+    NOEXCL = (EXCL, 'and attInfo and true')
+    RAISES = (EXCL, 'and attInfo and (function() if attInfo.defName == "technomule" then '
+                    'error("boom") end return true end)()')
+    mh = mule_policy_harness()
+    if mh is None:
+        print("  skip 9k production-execute harness: no lua interpreter")
+    else:
+        kv = lambda h: technomule_swap_verdict(h["calls"], 2, 3)
+        check("9k production: a mule in reach, in window, alive, the victim eligible; the real "
+              "exclusion keeps the victim -> pass; wrappers restored",
+              kv(mh)[0] == "pass" and mh["post"] == 2 and mh["restored"] is True and mh["ok"] is True)
+        h = mule_policy_harness(attack_patch=NOEXCL)
+        check("9k production: the technomule exclusion REMOVED -> the swap fires on a valid "
+              "opportunity -> policy failure", kv(h)[0] == "policy" and h["post"] == 3)
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.49, attacker_seq=[1.51])
+        check("9k production: reach 1.49 on the snapshots but 1.51 on the execute's OWN reads "
+              "(review round 2): no swap happens, and the verdict must be setup, never a pass",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attacker_x=1.49, attacker_seq=[1.51])
+        check("9k production: the same drift with the REAL exclusion -> setup, not a pass",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.49, attacker_seq=[1.49, 1.49, 1.51, 1.49])
+        check("9k production (review round 3): the mule is 1.51 away on the position the execute itself "
+              "READ (the observer's adjacent reads say 1.49): no swap, verdict setup, never a pass",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, subject_seq=[0.0, 0.0, 0.0, -0.6])
+        check("9k production (round 3): only the execute's OWN read of the subject position moved it "
+              "out of reach -> no swap, verdict setup",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, range_seq=[1.0, 1.0, 1.0, 0.4])
+        check("9k production (round 3): only the execute's OWN read of the attack range shrank -> "
+              "no swap, verdict setup", h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, subject_seq=[0.0, 0.0, 0.0, 0.2])
+        check("9k production (round 3): the same decision-only subject change that KEEPS the mule in "
+              "reach still swaps -> policy", h["post"] == 3 and kv(h)[0] == "policy")
+        h = mule_policy_harness(attacker_x=4.0)
+        check("9k production: a mule four tiles away is no opportunity -> setup",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(before=1.0, execute=5.0, after=5.1)
+        check("9k production: the hit already outside the window when the execute read the clock "
+              "(snapshots inside it) -> setup",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=RAISES)
+        check("9k production: an execute that RAISES on the technomule (review round 2): the record "
+              "carries ok=false, the verdict is 'raised', never a pass",
+              h["ok"] is False and h["calls"][0]["ok"] is False and kv(h)[0] == "raised")
+        check("9k production: a raised call cannot be erased by a later valid one",
+              technomule_swap_verdict(h["calls"] + mh["calls"], 2, 3)[0] == "raised")
+    check("9k observer chunk: the break is forced inside the SAME chunk (after the wrap) only when asked",
+          "forceBreak(1, 'lash_out')" in mule_observer_chunk(1, 2, 3, force=True)
+          and mule_observer_chunk(1, 2, 3, force=True).index("attackTargetExecute = function")
+          < mule_observer_chunk(1, 2, 3, force=True).index("forceBreak")
+          and "forceBreak" not in mule_observer_chunk(1, 2, 3))
+    good_side = {"now": 10.0, "glaAt": 10.0, "range": 0.9, "window": 3.0, "mexists": True,
+                 "mpose": "standing", "mdef": "technomule", "glaUid": 3, "victimElig": True,
+                 "lpos": {"gridX": 0, "gridY": 0}, "mpos": {"gridX": -1, "gridY": 0}}
+    good_ex = {"samples": [{"m": {"gridX": -1, "gridY": 0}, "l": {"gridX": 0, "gridY": 0}, "range": 0.9, "now": 10.0}],
+               "mpose": ["standing"], "mdef": ["technomule"], "mexists": [True], "gla": [{"uid": 3, "at": 10.0}],
+               "mexec": [{"gridX": -1, "gridY": 0}], "lexec": [], "rexec": [], "texec": []}
+    good_call = {"pre": 2, "post": 2, "ok": True, "err": False, "ex": good_ex,
+                 "before": dict(good_side), "after": dict(good_side)}
+    check("9k call status: a complete valid opportunity", technomule_call_status(good_call, 2, 3)[0] == "valid")
+    for what, mutate, want in (
+            ("a stale hit (4 s old)", lambda c: c["after"].update(glaAt=6.0), "invalid"),
+            ("the hit already outside the window on the BEFORE reading", lambda c: c["before"].update(glaAt=5.0), "invalid"),
+            ("a mule out of reach on the AFTER reading", lambda c: c["after"].update(mpos={"gridX": -3, "gridY": 0}), "invalid"),
+            ("a different recorded attacker", lambda c: c["before"].update(glaUid=9), "invalid"),
+            ("a mule whose defName is not technomule", lambda c: c["before"].update(mdef="acolyte"), "invalid"),
+            ("a target other than the victim before the call", lambda c: c.update(pre=3), "invalid"),
+            ("an ineligible victim after the call", lambda c: c["after"].update(victimElig=False), "invalid"),
+            ("a reading that raised", lambda c: c.update(before={"err": "boom"}), "malformed"),
+            ("an unreadable mule position", lambda c: c["before"].update(mpos={"invalid": True}), "malformed"),
+            ("the mule out of reach on one of the EXECUTE's own samples (snapshots fine)",
+             lambda c: c["ex"]["samples"].append({"m": {"gridX": -1.51, "gridY": 0}, "l": {"gridX": 0, "gridY": 0},
+                                                  "range": 1.0, "now": 10.0}), "invalid"),
+            ("the hit outside the window on one of the execute's own clock reads",
+             lambda c: c["ex"]["samples"].append({"m": {"gridX": -1, "gridY": 0}, "l": {"gridX": 0, "gridY": 0},
+                                                  "range": 1.0, "now": 14.5}), "invalid"),
+            ("the attacker the execute itself read was someone else",
+             lambda c: c["ex"]["gla"].append({"uid": 9, "at": 10.0}), "invalid"),
+            ("the execute read the mule as collapsed", lambda c: c["ex"]["mpose"].append("collapsed"), "invalid"),
+            ("no record of the execute's own reads", lambda c: c.pop("ex"), "malformed"),
+            ("no sample at all next to the execute's attacker reads", lambda c: c["ex"].update(samples=[]), "malformed"),
+            ("the position the execute was HANDED for the mule is out of reach (1.51 vs 0.9 + 0.5)",
+             lambda c: c["ex"]["mexec"].append({"gridX": -1.51, "gridY": 0}), "invalid"),
+            ("the subject position the execute was handed moved it out of reach",
+             lambda c: c["ex"]["lexec"].append({"gridX": 0.6, "gridY": 0}), "invalid"),
+            ("the attack range the execute was handed shrank (0.4 + 0.5 < 1.0)",
+             lambda c: c["ex"]["rexec"].append(0.4), "invalid"),
+            ("the clock the execute read is past the window", lambda c: c["ex"]["texec"].append(14.5), "invalid"),
+            ("an unreadable value handed to the execute", lambda c: c["ex"]["rexec"].append("x"), "malformed"),
+            ("an execute that raised", lambda c: c.update(ok=False, err="boom"), "raised")):
+        c = __import__("copy").deepcopy(good_call)
+        mutate(c)
+        check(f"9k call status: {what} -> {want}", technomule_call_status(c, 2, 3)[0] == want)
+    check("9k verdict: a valid opportunity that left the mule as the target -> policy",
+          technomule_swap_verdict([dict(good_call, post=3)], 2, 3)[0] == "policy")
+    check("9k verdict: one valid call among invalid ones is enough to pass",
+          technomule_swap_verdict([dict(good_call, pre=7), good_call], 2, 3)[0] == "pass")
+
+    # snap_mule_beside + technomule_retaliation_phase (#2976, review round 1 follow-up).
+    def fake_mule_snap(base, pos):
+        g = globals()
+        saved = {k: g[k] for k in ("send_json", "poll_until")}
+        g.update(send_json=lambda port, lua, **kw: base if "unit.setPos" in lua else pos,
+                 poll_until=lambda sec, fn, interval=0.3: fn())
+        try:
+            return snap_mule_beside(1, 9, 10, 11)
+        finally:
+            g.update(saved)
+    arr = {"ok": True, "mx": -NINE_K_MULE_OFFSET, "my": 0.0, "tx": 1.0, "ty": 0.0}
+    check("9k snap: mule and target arriving at their spots -> True",
+          fake_mule_snap({"ok": True, "x": 0.0, "y": 0.0}, arr) is True)
+    check("9k snap: the mule still 1 tile from its spot -> False",
+          fake_mule_snap({"ok": True, "x": 0.0, "y": 0.0}, dict(arr, mx=arr["mx"] - 1.0)) is False)
+    check("9k snap: an unreadable subject -> False", fake_mule_snap({"ok": False}, arr) is False)
+    check("9k snap: the mule lands inside the swap's reach with room to drift",
+          NINE_K_MULE_OFFSET <= 0.8)
+
+    def fake_phase_k(verdicts, samples=("30",), neuter=None, installed="mule-observer-installed"):
+        """technomule_retaliation_phase with fakes; `verdicts` is the list of
+        (verdict, why) answered per attempt. Answers (ok, line, attempts, destroyed)."""
+        g = globals()
+        names = ("spawn_acolyte", "set_wellbeing", "poll_until", "mstate", "neuter_fighters", "snap_mule_beside",
+                 "isolation_problem", "send", "lash_target", "parse_swap_collection", "technomule_swap_verdict",
+                 "eligible_neighbours", "destroy_units", "time")
+        saved = {k: g[k] for k in names}
+        seq, attempts, destroyed, uid = list(verdicts), [0], [], [100]
+
+        class FakeTime:
+            t = 0.0
+
+            def time(self):
+                FakeTime.t += 1.0
+                return FakeTime.t
+
+            def sleep(self, d):
+                pass
+
+        def f_spawn(*a, **k):
+            uid[0] += 1
+            return uid[0]
+
+        def f_send(port, lua, **kw):
+            if "mule-observer" in lua or "__probe_mule_calls" in lua or "attackTargetExecute" in lua:
+                if "forceBreak" in lua:
+                    attempts[0] += 1
+                    return installed
+                return "[]"
+            return "ok"
+        g.update(spawn_acolyte=f_spawn, set_wellbeing=lambda *a, **k: None, poll_until=lambda *a, **k: True,
+                 mstate=lambda *a: "stable", neuter_fighters=lambda *a: neuter, snap_mule_beside=lambda *a: True,
+                 isolation_problem=lambda *a: None, send=f_send, lash_target=lambda *a: samples[0],
+                 parse_swap_collection=lambda raw: ("ok", [{}]),
+                 technomule_swap_verdict=lambda *a: seq.pop(0),
+                 eligible_neighbours=lambda *a: [], destroy_units=lambda port, *u: destroyed.extend(u),
+                 time=FakeTime())
+        try:
+            r = technomule_retaliation_phase(1)
+            return r[0], r[1], attempts[0], destroyed
+        finally:
+            g.update(saved)
+    okk, line, n, d = fake_phase_k([("pass", "19 valid")])
+    check("9k phase: a valid opportunity kept the victim -> pass on attempt 1", okk is True and n == 1)
+    okk, line, n, d = fake_phase_k([("setup", "no valid call"), ("pass", "ok")])
+    check("9k phase: an unestablished opportunity restages on fresh units and then grades",
+          okk is True and n == 2 and len(d) == 6)
+    okk, line, n, d = fake_phase_k([("setup", "a"), ("setup", "b"), ("setup", "c")])
+    check("9k phase: three unestablished attempts -> a named setup FAIL",
+          okk is False and n == 3 and "setup: 9k never established a retaliation opportunity" in line)
+    okk, line, n, d = fake_phase_k([("policy", "target 30 -> 31")])
+    check("9k phase: a swap on a valid opportunity is a policy failure, never restaged",
+          okk is False and n == 1 and "swapped onto the technomule" in line)
+    okk, line, n, d = fake_phase_k([("raised", "the execute raised: 'boom'"), ("pass", "ok")])
+    check("9k phase: a raised execute fails the phase at once and is never restaged away "
+          "(a later passing attempt cannot erase it)",
+          okk is False and n == 1 and "execute raised" in line)
+    okk, line, n, d = fake_phase_k([("pass", "ok")], samples=("103",))
+    check("9k phase: the mule seen as the subject's target fails even when the observer passed, "
+          "and never restages", okk is False and n == 1)
+    okk, line, n, d = fake_phase_k([("pass", "ok")] * 3, installed="error: x")
+    check("9k phase: an observer that did not install is a setup problem (restaged three times, then "
+          "a named failure), never a pass", okk is False and n == 3 and "setup: 9k never established" in line)
+    okk, line, n, d = fake_phase_k([("pass", "ok")] * 3, neuter="neuter not established: x")
+    check("9k phase: a neuter that did not take is a setup problem too",
+          okk is False and n == 3 and "neuter not established" in line)
+    # isolation_problem (#2976): exactly the intended units may be eligible.
+    def iso(got, allowed):
+        g = globals()
+        saved = g["eligible_neighbours"]
+        g["eligible_neighbours"] = lambda port, subj: got
+        try:
+            return isolation_problem(1, 9, allowed)
+        finally:
+            g["eligible_neighbours"] = saved
+    check("isolation: exactly the intended unit eligible -> no problem", iso([30], (30,)) is None)
+    check("isolation: a leftover unit eligible (9i's target) -> named",
+          "unrelated [26]" in (iso([26, 30], (30,)) or ""))
+    check("isolation: the intended unit not eligible -> named",
+          "intended-but-ineligible [30]" in (iso([], (30,)) or ""))
+    check("isolation: an unreadable read -> a problem", iso(None, (30,)) is not None)
+
     # episode_end_verdict (#2975): 9j grades from the OBSERVED cleanup tick.
     MEAN = 0.30                      # delirium's meander speed for these traces
     TGT = 7
@@ -3775,6 +5475,15 @@ def self_test():
         chunks = {"episode_end_sample_lua": episode_end_sample_lua(1),
                   "episode_end_sample_lua(pin)": episode_end_sample_lua(1, True),
                   "wander_sample_lua": wander_sample_lua(1),
+                  "break_sample_lua": break_sample_lua(1),
+                  "landed_poll_lua": landed_poll_lua(1, 2),
+                  "nine_b_diag_lua": nine_b_diag_lua(1, 2),
+                  "wounds_lua": wounds_lua(1),
+                  "topup_stamina_lua": topup_stamina_lua(1, 2),
+                  "chebyshev_observer_chunk": chebyshev_observer_chunk(1, 2, 3),
+                  "mule_observer_chunk": mule_observer_chunk(1, 2, 3),
+                  "mule_observer_chunk(force)": mule_observer_chunk(1, 2, 3, force=True),
+                  "break_sample_lua(mule)": break_sample_lua(1, 50),
                   "dressing_read_lua": dressing_read_lua(1),
                   "dressing_exclude_lua": dressing_exclude_lua(1),
                   "DRESSING_RESTORE_LUA": DRESSING_RESTORE_LUA}
@@ -4895,64 +6604,215 @@ def self_test():
             ("an error reply", "error: x", None)):
         check(f"4b registration: {name} -> {want}", registered_position(r) == want)
 
-    def fake_flee(register_after, end_dist, state=None):
-        """Drive flee_break_check with fakes: the mule (uid 50) at (6, 0)
-        registers on read number `register_after` (None = never); the
-        subject (uid 1) stands at (2, 0) (d0 = 4) until the break, then at
-        `end_dist` from the mule. Answers (ok, line, log)."""
+    def fake_flee(mule_pos, nearest, verdict):
+        """Drive flee_break_check with fakes: the mule (uid 50) registers at
+        `mule_pos` (None = never), the production nearest-unit search answers
+        `nearest`, and the break phase answers (verdict, detail). Answers
+        (ok, line, log)."""
         g = globals()
-        saved = {k: g[k] for k in ("spawn_acolyte", "send", "send_json", "unit_pos",
-                                   "msummary", "poll_until")}
-        log, reads, broke = [], [0], [False]
-
-        def f_send_json(port, lua, **kw):
-            reads[0] += 1
-            log.append("registration-read")
-            if register_after is not None and reads[0] >= register_after:
-                return {"listed": True, "x": 6.0, "y": 0.0}
-            return {"listed": False, "x": "nil", "y": "nil"}
-
-        def f_send(port, lua, **kw):
-            if "forceBreak" in lua:
-                broke[0] = True
-                log.append("forceBreak")
-            return "ok"
-
-        def f_unit_pos(port, u):
-            log.append(f"pos-{u}")
-            return (2.0, 0.0) if not broke[0] else (6.0 - end_dist, 0.0)
-
-        def f_poll(seconds, fn, interval=0.3):
-            for _ in range(int(seconds)):
-                v = fn()
-                if v:
-                    return v
-            return None
+        saved = {k: g[k] for k in ("spawn_acolyte", "unit_registered", "nearest_other_uid",
+                                   "unit_pos", "run_break_phase", "poll_until")}
+        log = []
         g.update(spawn_acolyte=lambda *a, **k: (log.append("spawn-mule"), 50)[1],
-                 send=f_send, send_json=f_send_json, unit_pos=f_unit_pos,
-                 msummary=lambda port, u: state or {"state": "break", "behavior": "flee"},
-                 poll_until=f_poll)
+                 unit_registered=lambda port, u: mule_pos,
+                 nearest_other_uid=lambda port, u: nearest,
+                 unit_pos=lambda port, u: (2.0, 0.0),
+                 poll_until=lambda seconds, fn, interval=0.3: fn(),
+                 run_break_phase=lambda *a, **k: (log.append("break"),
+                                                  ([], verdict[0], verdict[1]))[1])
         try:
             ok_, line = flee_break_check(7, 1)
         finally:
             g.update(saved)
         return ok_, line, log
-    ok4, line4, log4 = fake_flee(3, 6.5)
-    check("4b: a mule that registers on the 3rd read -> 4b WAITS for it, then forces the break",
-          log4[:4] == ["spawn-mule", "registration-read", "registration-read", "registration-read"]
-          and "forceBreak" in log4)
-    check("4b: ... the baseline d0 is read BEFORE the break (subject position read precedes "
-          "forceBreak)", log4.index("pos-1") < log4.index("forceBreak") and "d0=4.0" in line4)
-    check("4b: ... a subject ending 6.5 from the mule (> d0 + 2 = 6) passes", ok4 is True)
-    ok4, line4, log4 = fake_flee(1, 5.9)
-    check("4b: the pass condition is unchanged: 5.9 from the mule (<= d0 + 2) FAILS",
-          ok4 is False and "flee break didn't flee" in line4 and "from=(2.0,0.0)" in line4)
-    ok4, line4, log4 = fake_flee(1, 6.5, state={"state": "stable"})
-    check("4b: no flee break in the summary still FAILS", ok4 is False)
-    ok4, line4, log4 = fake_flee(None, 9.0)
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 50, ("ok", "gained 2.6"))
+    check("4b: a registered mule that is the nearest unit, a passing verdict -> pass, d0 "
+          "read before the break", ok4 is True and "d0=4.0" in line4 and log4 == ["spawn-mule", "break"])
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 50, ("not_away", "gained 0.5"))
+    check("4b: a failing verdict FAILS, naming the verdict",
+          ok4 is False and "flee break didn't flee: not_away" in line4 and "from=(2.0,0.0)" in line4)
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 51, ("ok", "x"))
+    check("4b: the mule not the nearest unit -> a named setup FAIL and NO break is forced",
+          ok4 is False and "[FAIL] setup: the nearest unit to flee from is 51" in line4
+          and "break" not in log4)
+    ok4, line4, log4 = fake_flee(None, 50, ("ok", "x"))
     check("4b: a mule that NEVER registers -> a named setup FAIL, and NO break is forced",
           ok4 is False and "[FAIL] setup: the technomule 50 never registered" in line4
-          and "forceBreak" not in log4 and "pos-1" not in log4)
+          and "break" not in log4)
+
+    # wander_break_verdict / flee_break_verdict (#2976): 4a and 4b grade the
+    # unit's own pace WHILE the break is active, from a unit stopped at the
+    # break's start. Slow acolytes (endurance 0.4) failed the old fixed 0.9 /
+    # 2.0 tile thresholds while doing what the contract says.
+    def bs(now, x, y, brk=True, beh="wander", act="walking", sp=0.3, ordr=0.5, mx=6.0, my=0.0):
+        return {"now": now, "x": x, "y": y, "brk": brk, "beh": beh if brk else False,
+                "act": act, "sp": sp, "ord": ordr, "mx": mx, "my": my}
+    wend = bs(6.5, 1.0, 0.0, brk=False)
+    check("4a: walking while the wander break is active -> moved",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.1, 0), bs(2, 0.25, 0.05), bs(3, 0.4, 0.1)])[0] == "moved")
+    check("4a: a slow walker that goes out and back (net ~0) still moved",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.2, 0), bs(2, 0.4, 0), bs(3, 0.2, 0), bs(4, 0, 0)])[0] == "moved")
+    check("4a: still but the break not over -> waiting",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0.01)])[0] == "waiting")
+    check("4a: stationary until the break ended -> still",
+          wander_break_verdict([bs(0, 0, 0, act="idle", sp=0), bs(1, 0, 0, act="idle", sp=0), wend])[0] == "still")
+    check("4a: movement only AFTER the break ended does not count",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0), bs(6.5, 0, 0, brk=False),
+                                bs(7, 2, 2, brk=False)])[0] == "still")
+    # Review round 1: an early scaled success would end the break. Feed every prefix of
+    # a normal unit's (meander 0.25) nearly stationary six-second trace: no prefix may
+    # read 'moved' while under the fixed 0.3 tiles, and the complete trace fails.
+    trace_still = [dict(bs(t * 0.5, 0.002 * t, 0), mean=0.25) for t in range(13)]
+    prefixes = [wander_break_verdict(trace_still[:k])[0] for k in range(1, len(trace_still) + 1)]
+    check("4a: no prefix of a (nearly) stationary trace reads 'moved' before the break ends",
+          "moved" not in prefixes and all(v in ("waiting", "never_active") for v in prefixes[:-1]))
+    check("4a: ... and the complete trace, once the break has ended, is 'still'",
+          wander_break_verdict(trace_still + [bs(6.5, 0.02, 0, brk=False)])[0] == "still")
+    check("4a: a capped wait that never saw the break end is held to the FIXED minimum",
+          wander_break_verdict([dict(bs(t, 0.04 * t, 0), mean=0.06) for t in range(6)], capped=True)[0] == "still")
+
+    def fake_phase(trace_fn):
+        """run_break_phase's sampling loop over a scripted console: sample k answers
+        trace_fn(k); returns (samples, verdict) and how many samples were taken."""
+        g = globals()
+        saved = {k: g[k] for k in ("send", "send_json", "time")}
+        n, clock = [0], [0.0]
+
+        class FakeTime:
+            def time(self):
+                return clock[0]
+
+            def sleep(self, d):
+                clock[0] += d
+
+        def fsj(port, lua, **kw):
+            n[0] += 1
+            return trace_fn(n[0] - 1)
+        g.update(send=lambda *a, **k: "ok", send_json=fsj, time=FakeTime())
+        try:
+            smp, v, _ = run_break_phase(1, 2, "wander", wander_break_verdict, cap_s=20.0)
+            return smp, v, n[0]
+        finally:
+            g.update(saved)
+    tiny = lambda k: (dict(bs(k * 0.15, 0.001 * k, 0), mean=0.25) if k < 40
+                      else bs(7.0, 0.04, 0, brk=False))
+    smp, v, taken = fake_phase(tiny)
+    check("4a: the sampling loop does NOT stop early on tiny movement; it samples through the "
+          "break and fails it", v == "still" and taken >= 40)
+    steady = lambda k: dict(bs(k * 0.5, 0.2 * k, 0), mean=0.25)
+    smp, v, taken = fake_phase(steady)
+    check("4a: a normal unit that really walks 0.3 tiles ends the wait early with 'moved'",
+          v == "moved" and taken <= 4)
+    slow = [dict(bs(t, 0.04 * t, 0), mean=0.06) for t in (0, 1, 2, 3, 4, 5)]
+    check("4a: a very slow unit (meander 0.06) that walks what it can in 5 s passes the scaled path",
+          wander_break_verdict(slow + [bs(6.5, 0.2, 0, brk=False)])[0] == "moved"
+          and wander_break_verdict(slow)[0] == "waiting")
+    check("4a: a normal unit (meander 0.25) that walks only 0.2 tiles in 5 s still FAILS the full "
+          "WANDER_MIN_PATH once the break is over",
+          wander_break_verdict([dict(bs(t, 0.04 * t, 0), mean=0.25) for t in (0, 1, 2, 3, 4, 5)]
+                               + [bs(6.5, 0.2, 0, brk=False)])[0] == "still")
+    check("4a: a very slow unit that does not move at all still FAILS",
+          wander_break_verdict([dict(bs(t, 0, 0, act="idle", sp=0), mean=0.06) for t in range(6)]
+                               + [bs(6.5, 0, 0, brk=False)])[0] == "still")
+    check("4a: a break that never ran -> waiting, then never_active once capped",
+          wander_break_verdict([bs(0, 0, 0, brk=False)])[0] == "waiting"
+          and wander_break_verdict([bs(0, 0, 0, brk=False)], capped=True)[0] == "never_active")
+    check("4a: walking under a FLEE break is not a wander break -> wrong_behavior",
+          wander_break_verdict([bs(0, 0, 0, beh="flee"), bs(1, 2, 0, beh="flee")])[0] == "wrong_behavior")
+    check("4a: a jump between two ACTIVE stretches is not one walk",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0, brk=False), bs(2, 5, 5), bs(3, 5, 5),
+                                bs(4, 5, 5, brk=False)])[0] == "still")
+    check("4a: unreadable positions are not walking",
+          wander_break_verdict([bs(0, None, None), bs(1, None, None), bs(6.5, 0, 0, brk=False)])[0]
+          == "never_active")
+    check("4a: a capped wait with too little walked -> still",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.05, 0)], capped=True)[0] == "still")
+
+    def fleeing(ordr, gain_frac=0.9, n=13, sp=None, span=6.0, **kw):
+        """A flee at fraction `gain_frac` of ordered pace, straight away from a mule at x=6."""
+        out = []
+        for k in range(n):
+            t = span * k / (n - 1)
+            x = 2.0 - gain_frac * ordr * t
+            out.append(bs(t, x, 0.0, beh="flee", sp=ordr if sp is None else sp, ordr=ordr, **kw))
+        return out
+    fend = bs(6.5, -2.0, 0.0, brk=False)
+    check("4b: a normal flee (ordered 0.66, 6 s, ~3.6 tiles away) passes",
+          flee_break_verdict(fleeing(0.66) + [fend])[0] == "ok")
+    check("4b: a SLOW unit fleeing exactly per contract (ordered 0.36) passes although it gains "
+          "under the old fixed 2.0 tiles",
+          flee_break_verdict(fleeing(0.36) + [fend])[0] == "ok"
+          and 0.9 * 0.36 * 6.0 < 2.0)
+    check("4b: the same slow unit standing still -> no_run",
+          flee_break_verdict(fleeing(0.36, gain_frac=0.0, sp=0.0) + [fend])[0] == "no_run")
+    check("4b: walking at the meander pace (0.3 of ordered) -> no_run",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.3, sp=0.2) + [fend])[0] == "no_run")
+    check("4b: running at pace but TOWARD the mule -> not_away",
+          flee_break_verdict([dict(x, x=-x["x"] + 4.0) for x in fleeing(0.66)] + [fend])[0] == "not_away")
+    sideways = [dict(x, x=2.0, y=0.9 * 0.66 * x["now"]) for x in fleeing(0.66)]
+    check("4b: running at pace but SIDEWAYS (distance from the mule barely grows) -> not_away",
+          flee_break_verdict(sideways + [fend])[0] == "not_away")
+    check("4b: a unit that fled only a little (gain well under 0.6 x ordered x s) -> not_away",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.35) + [fend])[0] == "not_away")
+    check("4b: movement only AFTER the break ended does not count -> no_run",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.0, sp=0.0)
+                             + [fend, bs(7, -3, 0, brk=False, sp=0.66)])[0] == "no_run")
+    check("4b: a break that never ran -> waiting, then never_active once capped",
+          flee_break_verdict([bs(0, 2, 0, brk=False)])[0] == "waiting"
+          and flee_break_verdict([bs(0, 2, 0, brk=False)], capped=True)[0] == "never_active")
+    check("4b: still running -> waiting; capped before it ended -> graded on what was seen",
+          flee_break_verdict(fleeing(0.66))[0] == "waiting"
+          and flee_break_verdict(fleeing(0.66), capped=True)[0] == "ok")
+    check("4b: fewer than FLEE_MIN_ACTIVE_S active game seconds -> uncovered",
+          flee_break_verdict(fleeing(0.66, span=2.0) + [fend])[0] == "uncovered")
+    check("4b: an unreadable mule -> uncovered",
+          flee_break_verdict(fleeing(0.66, mx=None, my=None) + [fend])[0] == "uncovered")
+    zig = [dict(x, y=(1.0 if k % 2 else -1.0)) for k, x in enumerate(fleeing(0.66, gain_frac=0.7))]
+    check("4b: running at pace and gaining distance, but on a zigzag far longer than the gain "
+          "(gain < 0.7 x path) -> not_away",
+          flee_break_verdict(zig + [fend])[0] == "not_away")
+    far_mule = [dict(x, x=2.0, mx=6.0 + 0.9 * 0.66 * x["now"]) for x in fleeing(0.66)]
+    check("4b: the unit stays put while the MULE walks away (distance grows, its own path ~0) "
+          "-> not_away",
+          flee_break_verdict(far_mule + [fend])[0] == "not_away")
+    drift = [dict(x, mx=6.0 - 0.5 * x["now"]) for x in fleeing(0.66)]
+    check("4b: the unit runs straight away while the mule walks TOWARD it (the distance grows "
+          "less than the old fixed threshold) -> still ok: direction is judged per step",
+          flee_break_verdict(drift + [fend])[0] == "ok")
+    flee_then_back = ([dict(x) for x in fleeing(0.66, n=7, span=3.0)]
+                      + [dict(x, x=2.0 - 0.9 * 0.66 * 3.0 + 0.9 * 0.66 * (x["now"] - 3.0))
+                         for x in fleeing(0.66, n=7, span=6.0)[4:]])
+    check("4b: a unit that runs away then turns back toward the mule nets ~0 away-path -> not_away",
+          flee_break_verdict(flee_then_back + [fend])[0] == "not_away")
+    def heading(ordr, frac, theta, n=13, span=6.0):
+        """Walks `frac` x ordered x t along a heading `theta` rad off straight-away from a
+        mule at (6, 0), the sampled speed reading ordered."""
+        out = []
+        for k in range(n):
+            t = span * k / (n - 1)
+            out.append(bs(t, 2.0 - frac * ordr * t * math.cos(theta), frac * ordr * t * math.sin(theta),
+                          beh="flee", sp=ordr, ordr=ordr))
+        return out
+    check("4b: the same heading helper passes when it runs nearly straight away at near full pace",
+          flee_break_verdict(heading(0.66, 0.9, 0.1) + [fend])[0] == "ok")
+    check("4b: path and pace fine, enough of it away for the gain fraction, but under 0.7 of the "
+          "path (a 63-degree heading) -> not_away",
+          flee_break_verdict(heading(0.66, 0.95, 1.1) + [fend])[0] == "not_away")
+    check("4b: a straight run too short for the gain fraction (0.66 of an ordered run, 30 degrees "
+          "off: away 0.57 x ordered x s, path fine) -> not_away",
+          flee_break_verdict(heading(0.66, 0.65, 0.52) + [fend])[0] == "not_away")
+    ahead = [dict(x, x=2.0, y=6.0 + 0.9 * 0.66 * x["now"], mx=2.0, my=9.0 + 0.9 * 0.66 * x["now"])
+             for x in fleeing(0.66)]
+    check("4b: the unit walks at pace TOWARD a mule that stays 3 tiles ahead of it (judged against "
+          "the mule's CURRENT position each step) -> not_away",
+          flee_break_verdict(ahead + [fend])[0] == "not_away")
+    check("4b: a wander break is not a flee break -> wrong_behavior",
+          flee_break_verdict([dict(x, beh="wander") for x in fleeing(0.66)] + [fend])[0] == "wrong_behavior")
+    check("4b: too few walking samples -> no_run",
+          flee_break_verdict([dict(x, act="idle") for x in fleeing(0.66)] + [fend])[0] == "no_run")
+    check("4b/4a: the sample chunk reads the mule only when given one",
+          "unit.getInfo(50)" in break_sample_lua(1, 50) and "unit.getInfo(50)" not in break_sample_lua(1)
+          and "local mi = nil" in break_sample_lua(1))
     import shutil as _sh, subprocess as _sp
     if _sh.which("lua"):
         harness = ("unit = { getAllIds = function() return LISTED and {1, 50} or {1} end, "
@@ -5147,17 +7007,18 @@ def main():
         # ---- 4a. Forced wander break moves the unit. ----
         set_wellbeing(P, uid, 1.0, 0.0)   # heal the ladder back up
         poll_until(5, lambda: mstate(P, uid) == "stable")
-        send(P, f"require('scripts.mental_state').forceBreak({uid},'wander'); "
-                f"return 'ok'")
-        s = msummary(P, uid)
         x0, y0 = unit_pos(P, uid)
-        moved = poll_until(12, lambda: (lambda x, y:
-                (x - x0) ** 2 + (y - y0) ** 2 > 0.8)(*unit_pos(P, uid)))
-        if s.get("state") == "break" and s.get("behavior") == "wander" and moved:
-            print(f"  [pass] forced wander break moves the unit (from {x0:.1f},{y0:.1f})")
+        wsamples, wverdict, wdetail = run_break_phase(
+            P, uid, "wander", wander_break_verdict)
+        if wverdict == "moved":
+            print(f"  [pass] forced wander break moves the unit (from {x0:.1f},{y0:.1f}; "
+                  f"{wdetail})")
         else:
             ok = False
-            print(f"  [FAIL] wander break didn't move: state={s} moved={bool(moved)}")
+            print(f"  [FAIL] wander break didn't move: {wverdict} \u2014 {wdetail} "
+                  f"(from {x0:.1f},{y0:.1f}, {len(wsamples)} samples)")
+            print("         trace (game t, brk, behavior, activity, speed, x, y, mule x, y): "
+                  + break_trace_line(wsamples))
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, uid) != "break")
 
@@ -5395,24 +7256,49 @@ def main():
             # 9a. Prefers a recent eligible attacker over a closer decoy —
             # graded only on a selection whose preconditions held at the
             # moment it was made (#2773). See lashout_attacker_preference.
-            graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
-                P, case=args.lashout_case)
+            # 9b. Produces real attack behavior through the short-circuit —
+            # confirm lash actually lands a swing on its chosen target, inside
+            # its own episode (landed_in_episode). A subject that DIED before
+            # it could swing (a neutered attacker's single head strike can be
+            # fatal: jaw fracture 1.07 and brain trauma 1.6 were read off one
+            # such hit) cannot be graded, so when 9a had graded fine the
+            # cluster is discarded and 9a/9b are re-staged on a fresh one
+            # (bounded, named); a living subject that never lands a hit, a
+            # failed 9a and a failed dressing are failures and are never
+            # restaged (#2976).
+            for attempt9 in range(1, NINE_B_ATTEMPTS + 1):
+                graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
+                    P, case=args.lashout_case)
+                dressed_ok = lash is None or dress_staged_wound(P, lash)
+                lastB = {}
+
+                def landed_b():
+                    lastB.clear()
+                    got = send_json(P, landed_poll_lua(lash, attacker))
+                    if isinstance(got, dict):
+                        lastB.update(got)
+                    return True if landed_in_episode(got, lash) else None
+                landed = poll_until(20, landed_b)
+                subject_dead = (not landed and lash is not None
+                                and send(P, f"return unit.getPose({lash})") == "dead")
+                if not nine_b_should_restage(landed, graded_ok, dressed_ok, subject_dead, attempt9):
+                    break
+                print(f"  [setup] 9b attempt {attempt9}: the subject {lash} died before it could land "
+                      f"a hit (wounds: {send_json(P, wounds_lua(lash))}); discarding the cluster and "
+                      f"re-staging 9a/9b on fresh units")
+                destroy_confirmed(P, lash, attacker, decoy)
             if not graded_ok:
                 ok = False
-            if lash is not None and not dress_staged_wound(P, lash):
+            if not dressed_ok:
                 ok = False
-
-            # 9b. Produces real attack behavior through the short-circuit —
-            # confirm lash actually lands a swing on its chosen target.
-            landed = poll_until(20, lambda: send(
-                P, f"local a=unit.getLastAttacker({attacker}); "
-                   f"return a and a.uid or 'nil'"
-            ) == str(lash))
             if landed:
-                print(f"  [pass] lash-out produced a real landed attack on {attacker}")
+                print(f"  [pass] lash-out produced a real landed attack on {attacker} "
+                      f"(hit at game t={lastB.get('at')}, episode {lastB.get('since')}.."
+                      f"{lastB.get('ends')})")
             else:
                 ok = False
-                print(f"  [FAIL] lash-out never landed an attack on {attacker}")
+                print(f"  [FAIL] lash-out never landed an attack on {attacker} during its "
+                      f"episode: last record {lastB}; {send_json(P, nine_b_diag_lua(lash, attacker))}")
 
             # Narration distinguishable from wander/flee (#717 requirement 7).
             evs = send(P, "return engine.getEventLog()")
@@ -5501,23 +7387,10 @@ def main():
         # so a collapsed unit that hit us moments ago and stands in
         # melee range could otherwise bypass lash-out's own eligibility
         # policy via that shared path.
-        lashB = spawn_acolyte(P, 0, 20)
-        set_wellbeing(P, lashB, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, lashB) == "stable")
-        victimB = spawn_acolyte(P, 1, 20)     # eligible target, stays live
-        attackerB = spawn_acolyte(P, -1, 20)  # becomes the disqualified
-                                               # "recent attacker"
-        # See the neutered-strength note in the 9a setup above — same
-        # one-shot-kill risk applies here, in both directions, and the
-        # same fix (#2773): strength_base + unit.recomputeBody, because a
-        # 'strength' write is re-derived away before the hit (a traced run
-        # had this staged hit bleed lashB out before the break).
-        send(P, f"unit.setStat({attackerB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-                f"unit.setStat({attackerB},'toughness',100); "
-                f"unit.recomputeBody({attackerB}); "
-                f"unit.setStat({lashB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-                f"unit.setStat({lashB},'toughness',100); "
-                f"unit.recomputeBody({lashB}); return 'ok'")
+        # Both fighters are neutered with the neuter read back (see
+        # stage_nine_c2_units, and the neutered-strength note in the 9a setup
+        # above: the same one-shot-kill risk applies in both directions).
+        lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
         # 9c2 runs as a BOUNDED re-stage loop (#2773). Its FAIR-TEST
         # precondition: the subject must be able to act on a tick at the
         # break (standing, no tick-blocking activity, not knockedDown, not
@@ -5534,16 +7407,40 @@ def main():
         # attempts, 9c2 is a named SETUP failure.
         prevHitAtB = -1.0
         gradedB = abortedB = False
+        if neuterB:
+            ok = False
+            abortedB = True
+            print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
         for attemptB in range(1, NINE_C2_ATTEMPTS + 1):
+            if abortedB:
+                break
             # Committed, like stage_lashout_cluster's order (#2973).
             send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB},true); "
                     f"return 'ok'")
-            hitB = poll_until(35, lambda: send(
-                P, new_hit_poll_lua(lashB, attackerB, prevHitAtB)) == "hit")
+            hitB = poll_new_hit(P, lashB, attackerB, prevHitAtB)
+            if not hitB and nine_c2_hit_wait_restage(
+                    hitB, send(P, f"return unit.getPose({lashB})") == "dead", attemptB):
+                # The subject died (a neutered strike can be fatal, and a dead
+                # unit's last-attacker record is not readable), so no new hit
+                # could ever be seen on it: ungradable setup, not a swap
+                # failure. Discard the cluster and stage fresh units (#2976).
+                print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before a hit could "
+                      f"be recorded (wounds: {send_json(P, wounds_lua(lashB))}); discarding the "
+                      f"cluster, restaging on fresh units")
+                destroy_confirmed(P, lashB, victimB, attackerB)
+                lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
+                prevHitAtB = -1.0
+                if neuterB:
+                    ok = False
+                    abortedB = True
+                    print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
+                    break
+                continue
             if not hitB:
                 ok = False
                 print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
-                      f"— can't test the retaliation-swap exclusion (attempt {attemptB})")
+                      f"— can't test the retaliation-swap exclusion (attempt {attemptB}); "
+                      f"{send_json(P, nine_b_diag_lua(lashB, attackerB))}")
                 abortedB = True
                 break
 
@@ -5679,6 +7576,23 @@ def main():
                         f"unit.setStat({attackerB}, 'stamina', st.get({attackerB}, 'max_stamina')); "
                         f"return 'ok'")
                 poll_until(5, lambda: mstate(P, lashB) != "break")
+                if send(P, f"return unit.getPose({lashB})") == "dead":
+                    # A dead subject never acts again: waiting for it is
+                    # pointless, so this setup is discarded whole and the
+                    # next attempt stages on fresh units (#2976). The death
+                    # is ungradable setup; no decision was observed.
+                    print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before "
+                          f"the break (wounds: {send_json(P, wounds_lua(lashB))}); discarding "
+                          f"the cluster, restaging on fresh units")
+                    destroy_confirmed(P, lashB, victimB, attackerB)
+                    lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
+                    prevHitAtB = -1.0
+                    if neuterB:
+                        ok = False
+                        abortedB = True
+                        print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
+                        break
+                    continue
                 readyB = poll_until(NINE_C2_READY_WAIT_S, lambda: _ready_ok(
                     subject_ready(P, lashB)) is True)
                 if not readyB:
@@ -5847,31 +7761,12 @@ def main():
                 f"return 'ok'")
         poll_until(5, lambda: mstate(P, subj4) != "break")
 
-        # 9h. Nearest-target ranking uses Chebyshev distance — matching
-        # eligibility's own metric — not squared Euclidean. (6,6) is
-        # nearer than (8,0) under Chebyshev (6 vs 8) despite (8,0) being
-        # nearer under squared Euclidean (64 vs 72).
-        subjH = spawn_acolyte(P, -15, 40)
-        set_wellbeing(P, subjH, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, subjH) == "stable")
-        nearChebyshev = spawn_acolyte(P, -9, 46)   # +6,+6
-        nearEuclidean = spawn_acolyte(P, -7, 40)   # +8,0
-        send(P, f"require('scripts.mental_state').forceBreak({subjH},'lash_out'); "
-                f"return 'ok'")
-
-        def h_target():
-            t = lash_target(P, subjH)
-            return t if t != "nil" else None
-        targetH = poll_until(10, h_target)
-        if targetH == str(nearChebyshev):
-            print(f"  [pass] nearest-target ranking uses Chebyshev distance "
-                  f"({nearChebyshev} over the Euclidean-nearer {nearEuclidean})")
-        else:
+        # 9h. Nearest-target ranking uses Chebyshev distance — see
+        # chebyshev_ranking_phase (graded on a held setup, units removed after).
+        okH, lineH = chebyshev_ranking_phase(P)
+        print(lineH)
+        if not okH:
             ok = False
-            print(f"  [FAIL] expected Chebyshev-nearer {nearChebyshev}, got "
-                  f"{targetH} (Euclidean-nearer would be {nearEuclidean})")
-        send(P, f"unit.setStat({subjH},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, subjH) != "break")
 
         # 9i. A lost target with no replacement stops the stale pursuit
         # immediately rather than walking out the old leg toward the
@@ -5926,6 +7821,9 @@ def main():
                   f"position: closed_gap={closed_gap:.2f} cleared={cleared_i}")
         send(P, f"unit.setStat({subjI},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, subjI) != "break")
+        # Left alive, targetI (teleported to (-19, 25)) wanders into 9k's
+        # range, 6 tiles from where 9k stages its subject (#2976).
+        destroy_units(P, subjI, targetI)
 
         # 9j. Delirium overlapping episode expiry must not skip
         # episode-end cleanup. Cleanup is tracked via s.mentalLashoutActive
@@ -5962,6 +7860,7 @@ def main():
         poll_until(10, lambda: not json.loads(send(P,
             f"local b=require('scripts.brain'); "
             f"return {{d=b.isDelirious({subjJ})}}"))["d"])
+        destroy_units(P, subjJ, targetJ)
 
         # 9k. The shared retaliation-swap must not redirect lash-out onto
         # a technomule either — mirrors the collapsed-attacker test, but
@@ -5971,52 +7870,28 @@ def main():
         # instead — the same wrap-and-delegate technique the collapsed-
         # attacker test uses, applied to the attacker-memory getter this
         # time rather than getPose.
-        subjK = spawn_acolyte(P, -25, 25)
-        set_wellbeing(P, subjK, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, subjK) == "stable")
-        targetK = spawn_acolyte(P, -24, 25)   # eligible, adjacent
-        muleK = spawn_acolyte(P, -26, 25, unit="technomule", clear_water=False)
-        send(P, f"require('scripts.mental_state').forceBreak({subjK},'lash_out'); "
-                f"return 'ok'")
-
-        def k_target():
-            t = lash_target(P, subjK)
-            return t if t != "nil" else None
-        if poll_until(10, k_target) != str(targetK):
+        okK, lineK = technomule_retaliation_phase(P)
+        print(lineK)
+        if not okK:
             ok = False
-            print(f"  [FAIL] setup: {subjK} never targeted {targetK}")
-
-        send(P, f"if not _G.__probe_orig_getLastAttacker then "
-                f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
-                f"unit.getLastAttacker = function(u) "
-                f"if u == {subjK} then return {{uid={muleK}, at=engine.gameTime()}} end "
-                f"return _G.__probe_orig_getLastAttacker(u) end; return 'ok'")
-
-        # Sample rapidly through the retaliation-swap's own 3s window —
-        # subjK must stay on targetK and never swap onto the technomule.
-        samplesK = []
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            samplesK.append(lash_target(P, subjK))
-            time.sleep(0.15)
-        send(P, "if _G.__probe_orig_getLastAttacker then "
-                "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
-                "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
-
-        if str(targetK) in samplesK and str(muleK) not in samplesK:
-            print(f"  [pass] lash-out stayed on {targetK} and never swapped "
-                  f"onto the technomule {muleK}: {samplesK[:4]}...")
-        else:
-            ok = False
-            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}")
-
-        send(P, f"unit.setStat({subjK},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, subjK) != "break")
 
         # 9g. No eligible target: agitated wander, keep searching.
+        # Every earlier phase's leftover unit is retired first, with the removal
+        # CONFIRMED (#2976): 9f's surviving subject wandered into this range,
+        # and nothing but a position, once, ever kept it out. The main subject
+        # stays for the final contamination guard.
+        victims9g, remaining9g = retire_other_units(P, keep=(uid,))
+        cleanup9g = retirement_problem(victims9g, remaining9g)
+        if cleanup9g:
+            ok = False
+            print(f"  [FAIL] setup: 9g's isolation not established ({cleanup9g})")
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles
         set_wellbeing(P, subj5, 1.0, 0.0)
         poll_until(5, lambda: mstate(P, subj5) == "stable")
+        stray9g = isolation_problem(P, subj5, ())
+        if stray9g and not cleanup9g:
+            ok = False
+            print(f"  [FAIL] setup: 9g's subject is not isolated ({stray9g})")
         wx0, wy0 = unit_pos(P, subj5)
         send(P, f"require('scripts.mental_state').forceBreak({subj5},'lash_out'); "
                 f"return 'ok'")
