@@ -88,10 +88,16 @@ failure never restages.
   non-lash break, a target and unreadable positions fail); 9j (clean stop and delirious
   wander pass; big pre-end travel is not charged; a leg still running past the grace, a
   closing creep, no live pursuit, no delirium overlap and uncleared combat state fail;
-  not-yet-covered windows wait).
-- `--lashout-case stale`: exit 0, stale discard then a valid passing restage.
-  `--lashout-case ineligible`: MET 3/3, exit 1 (2 of 3 runs; the first run hit the
-  known hit-staging flake in attempt 1 and its fixture then aborted, #2976 class).
+  not-yet-covered windows wait), plus the review-round cases (a leg that finishes between two
+  samples fails, the same leg stopped passes, pursuit while lucid then a stationary delirious
+  unit and pursuit/delirium only on earlier samples are not gradable); restage membership,
+  the blood_oxygen pin only when asked, and every console chunk the probe sends compiles
+  under `lua`.
+- `--lashout-case stale`: exit 0, stale discard then a valid passing restage (final probe).
+  `--lashout-case ineligible`: MET 3/3, exit 1 (final probe). Across all invocations during
+  the work it was MET in 4 of 6; each other invocation was a 9a staging failure before the
+  perturbation (a staged subject found dead, or a hit that never landed), code this PR does
+  not touch.
 
 ## Before and after (`run_probes --only mental_state --exact`, alone, sequential)
 
@@ -199,5 +205,5 @@ before batches (8 of 30).
   previous verdict returned `ok` for both traces). The stricter precondition then failed one
   run (`no_pursuit`): at 6 tiles the unit had arrived and fallen (`pose=falling`) before the
   episode was ended, so nothing was in flight. That is the staging race the restaging above
-  closes; the final probe's 17 runs carry one restage (extra attempt printed
-  `9j attempt 1 discarded ... restaging`) and no 9j failure.
+  closes; the final probe's 17 runs carry one restage (run 9 printed
+  `9j attempt 1 discarded ... restaging`, then passed) and no 9j failure.
