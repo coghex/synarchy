@@ -57,9 +57,9 @@ Replayed 18 trials of phases 1-4b with a 0.2 s sampler (`ENGINE_DEBUG=Lua`):
   break still running. A record from before the episode, a hit after expiry, an attempted
   swing and a missing record all fail. #2975's dressing guard is untouched.
 - **9c2**: both fighters neutered with the neuter read back; the hit wait tops both
-  fighters' stamina up each second (never 0, 0.9 of max); a dead subject discards the
-  cluster and restages on fresh units (bounded by the existing three attempts, naming each
-  discard and printing the wounds); committed staging orders, the new-hit proof, subject
+  fighters' stamina up each second (never 0, 0.9 of max); a dead subject (before the break, or during the hit wait) discards the
+  cluster and restages on fresh units once the old units are confirmed gone (bounded by the existing
+  three attempts, naming each discard and printing the wounds and stamina); committed staging orders, the new-hit proof, subject
   readiness and the observer are unchanged.
 - **9h** `chebyshev_ranking_phase`: candidates at (5, 5) and (6, 0) (Chebyshev 5 vs 6,
   squared Euclidean 50 vs 36) inside the range, snapped next to the subject with arrival
@@ -74,8 +74,12 @@ Replayed 18 trials of phases 1-4b with a 0.2 s sampler (`ENGINE_DEBUG=Lua`):
 - **9k**: fighters neutered with the neuter read back; the technomule and target snapped into reach;
   exactly the intended target eligible by the production predicate; the execute observer is installed
   in the forcing chunk and must see at least one VALID retaliation opportunity (the mule recorded as a
-  recent attacker within the window, alive, in reach, the victim eligible and the current target, on both
-  the before and after readings) with only the technomule exclusion in the way. A valid opportunity that
+  recent attacker within the window, alive, the victim eligible and the current target; the reach and window
+  judged on the values the execute itself was handed (mule and subject positions, attack range, clock) and
+  on samples taken next to each attacker read it makes, because the technomule check short-circuits the
+  later reads; the readings before and after only bracket the call) with only the technomule exclusion in
+  the way. An execute that raises is recorded, fails the phase at once and cannot be erased by a later call or
+  attempt (engine update callbacks swallow Lua errors). A valid opportunity that
   swapped is a policy failure; none observed is ungradable and restaged (3 attempts). Negative cases:
   out-of-reach mule, no execute, ineligible target, dead mule, exclusion removed. 9h's, 9i's, 9j's and
   9k's own units are destroyed after use.
@@ -149,12 +153,15 @@ Each is a run of the probe as committed at the head named; none is the acceptanc
 | dev6 | `c9c90b849` / `8b5e4469` | 2 (aborted) | 1 PASS | 9k once (run 2): the technomule had drifted to 1.78 tiles from the subject, outside the 1.0 + 0.5 reach, so no retaliation opportunity was ever observed (the new observer called it ungradable); the observer was first installed after the break (a smoke run saw the target knocked out within half a second), then moved into the forcing chunk |
 | dev7 | `6222348c1` / `b3eefdf7` | 15 | 15 PASS | every listed check observed passing 15/15; superseded because review round 1 then required the 4a, 9h and 9k changes below (a 9c2 dead-subject restage and one 9j restage occurred in run 8) |
 | dev8 | `9d78abd55` / `d0764fee` | 15 | 14 PASS | every check listed in #2976 passed 15/15; **9j** failed once (run 12, the #2979-class leak below). After this batch review round 2 found two 9k false-pass paths (the opportunity was judged on snapshots, not the execute's own reads; a raised execute was not preserved), fixed in the head above |
+| dev9 | `c96354991` / `85767a3e` | 15 | 15 PASS | superseded: review round 3 found 9k's observer still judged values adjacent to the execute rather than the ones it was handed (decision-only changes to the subject position, attack range or clock read passed); fixed by recording what the execute's own reads returned, plus samples for the reads the technomule short-circuit skips |
+| dev10 | `0358cea17` / `c9834bbb` | 13 (aborted) | 12 PASS | 9c2 once (run 13): the subject died during the staged-hit wait (no wounds read), so no new hit could ever be recorded on it; now restaged like the dead-before-break case |
+| dev11 | `a6b94b57a` / `46dd8235` | 5 (aborted) | 4 PASS | run 5 crashed (`unit 11 never got AI state`): a re-stage spawned onto the spots of units whose queued destroy had not taken effect; re-stages now wait until `unit.getAllIds` no longer lists the old units |
 
 Round-1 review (Codex) found three false-pass gaps in that head, all fixed since: the pace-scaled 4a threshold
 could end the wait on a few early samples; 9h's geometry was a snapshot taken before the break rather than what
 the AI tick read; 9k passed on sampled target ids without proving a retaliation opportunity occurred.
 
-### After: head `c96354991`, probe sha `85767a3e` (15 runs)
+### After: head `2a1e15267`, probe sha `a58f04b3` (15 runs)
 
 | run | overall | 4a wander | 4b flee | 9b dressing | 9b landed | 9c2 | 9g wander | 9h Chebyshev | 9j end pursuit | 9k technomule | other failing |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -185,10 +192,8 @@ runs=15 overall-fail=0
   9j end pursuit: pass=15 FAIL=0 not-observed=0
   9k technomule: pass=15 FAIL=0 not-observed=0
 
-All 15 runs PASS and every listed check (4a, 4b, 9b dressing and landed attack, 9c2, 9g, 9h, 9k) plus
-9j was observed passing in every run (0 not observed). Observed restages: 9j once in runs 2 and 3
-(the existing #2975 restage, `27 never pursued 28`) and 9c2 once in run 15 (the subject died, a fresh
-cluster passed).
+All 15 runs PASS and every check, the listed ones (4a, 4b, 9b dressing and landed attack, 9c2, 9g, 9h, 9k)
+and 9j, was observed passing in every run (0 not observed).
 
 ### The 9j failure of development batch dev8 (out of scope, #2979)
 
