@@ -410,6 +410,8 @@ def stage_lashout_cluster(port, x, y):
 
 #: 9c2's staged hit (#2976): how often the waiting loop tops the fighters up.
 NINE_C2_TOPUP_S = 1.0
+#: 9a/9b's bounded re-stage when the subject dies before 9b can grade (#2976).
+NINE_B_ATTEMPTS = 3
 #: Fraction of max stamina the fighters are topped up to (never 0: stamina 0
 #: is the engine's universal death rule, and a full-set is avoided too).
 NINE_C2_TOPUP_FRACTION = 0.9
@@ -448,6 +450,16 @@ def poll_new_hit(port, lash, attacker, prev_at, timeout_s=35.0):
             send(port, topup_stamina_lua(lash, attacker))
         time.sleep(0.3)
     return False
+
+
+def nine_b_should_restage(landed, graded_ok, dressed_ok, subject_dead, attempt):
+    """Whether 9a/9b are re-staged on a fresh cluster (#2976): only when no hit
+    was landed because the subject DIED (nothing was decided), 9a graded fine
+    (so no observed wrong decision is erased) and the dressing held, and an
+    attempt is left. A living subject that never lands a hit, a failed 9a and
+    a failed dressing are failures."""
+    return bool(not landed and subject_dead and graded_ok and dressed_ok
+                and attempt < NINE_B_ATTEMPTS)
 
 
 def stand_down_attacker(port, lash, attacker):
@@ -4418,6 +4430,18 @@ def self_test():
           0.0 < NINE_C2_TOPUP_FRACTION < 1.0 and "* 0.9" in topup_stamina_lua(1))
     check("9c2 hit wait: the hit is still judged by the unchanged new-hit read of the last-attacker "
           "record", "unit.getLastAttacker(5)" in new_hit_poll_lua(5, 6, -1.0))
+    check("9b restage: a subject that died with 9a graded and the dressing held -> restage",
+          nine_b_should_restage(False, True, True, True, 1) is True)
+    check("9b restage: the last attempt never restages (the failure stands)",
+          nine_b_should_restage(False, True, True, True, NINE_B_ATTEMPTS) is False)
+    check("9b restage: a hit that landed needs no restage",
+          nine_b_should_restage(True, True, True, False, 1) is False)
+    check("9b restage: a LIVING subject that never landed a hit is a failure, never restaged",
+          nine_b_should_restage(False, True, True, False, 1) is False)
+    check("9b restage: a failed 9a decision is never erased by a restage",
+          nine_b_should_restage(False, False, True, True, 1) is False)
+    check("9b restage: a failed dressing is never restaged",
+          nine_b_should_restage(False, True, False, True, 1) is False)
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -6251,24 +6275,41 @@ def main():
             # 9a. Prefers a recent eligible attacker over a closer decoy —
             # graded only on a selection whose preconditions held at the
             # moment it was made (#2773). See lashout_attacker_preference.
-            graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
-                P, case=args.lashout_case)
+            # 9b. Produces real attack behavior through the short-circuit —
+            # confirm lash actually lands a swing on its chosen target, inside
+            # its own episode (landed_in_episode). A subject that DIED before
+            # it could swing (a neutered attacker's single head strike can be
+            # fatal: jaw fracture 1.07 and brain trauma 1.6 were read off one
+            # such hit) cannot be graded, so when 9a had graded fine the
+            # cluster is discarded and 9a/9b are re-staged on a fresh one
+            # (bounded, named); a living subject that never lands a hit, a
+            # failed 9a and a failed dressing are failures and are never
+            # restaged (#2976).
+            for attempt9 in range(1, NINE_B_ATTEMPTS + 1):
+                graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
+                    P, case=args.lashout_case)
+                dressed_ok = lash is None or dress_staged_wound(P, lash)
+                lastB = {}
+
+                def landed_b():
+                    lastB.clear()
+                    got = send_json(P, landed_poll_lua(lash, attacker))
+                    if isinstance(got, dict):
+                        lastB.update(got)
+                    return True if landed_in_episode(got, lash) else None
+                landed = poll_until(20, landed_b)
+                subject_dead = (not landed and lash is not None
+                                and send(P, f"return unit.getPose({lash})") == "dead")
+                if not nine_b_should_restage(landed, graded_ok, dressed_ok, subject_dead, attempt9):
+                    break
+                print(f"  [setup] 9b attempt {attempt9}: the subject {lash} died before it could land "
+                      f"a hit (wounds: {send_json(P, wounds_lua(lash))}); discarding the cluster and "
+                      f"re-staging 9a/9b on fresh units")
+                destroy_units(P, lash, attacker, decoy)
             if not graded_ok:
                 ok = False
-            if lash is not None and not dress_staged_wound(P, lash):
+            if not dressed_ok:
                 ok = False
-
-            # 9b. Produces real attack behavior through the short-circuit —
-            # confirm lash actually lands a swing on its chosen target.
-            lastB = {}
-
-            def landed_b():
-                lastB.clear()
-                got = send_json(P, landed_poll_lua(lash, attacker))
-                if isinstance(got, dict):
-                    lastB.update(got)
-                return True if landed_in_episode(got, lash) else None
-            landed = poll_until(20, landed_b)
             if landed:
                 print(f"  [pass] lash-out produced a real landed attack on {attacker} "
                       f"(hit at game t={lastB.get('at')}, episode {lastB.get('since')}.."
