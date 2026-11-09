@@ -1733,12 +1733,12 @@ def episode_end_verdict(samples, meander, target, tpos):
     Answers (verdict, detail); verdict is 'ok', 'waiting' (not enough
     observed yet) or a failure:
       * 'no_boundary'  — the episode flag never cleared;
-      * 'no_pursuit'   — before the boundary the unit was never seen
-                         pursuing `target` at a pursuit pace under an
-                         active episode (nothing to leak: not gradable);
-      * 'no_overlap'   — delirium was not active together with the active
-                         episode before the boundary, or not on the
-                         boundary sample itself;
+      * 'no_pursuit'   — on the sample just before the boundary the unit
+                         was not pursuing `target` at a pursuit pace under
+                         an active episode (nothing in flight to cancel:
+                         not gradable);
+      * 'no_overlap'   — delirium was not active on that sample, or not on
+                         the boundary sample itself;
       * 'not_cleaned'  — from the boundary on, a target, an attack goal or
                          a committed order was still set;
       * 'leaked'       — past EPISODE_END_GRACE_S, the unit kept heading for
@@ -1762,16 +1762,21 @@ def episode_end_verdict(samples, meander, target, tpos):
                 else "the lash-out episode was never active")
     if not _num(meander) or meander <= 0:
         return "no_pursuit", f"no meander speed to judge against ({meander!r})"
-    pre = samples[:b]
-    live = [x for x in pre if x.get("lash") and x.get("tgt") == target
-            and _num(x.get("sp")) and x["sp"] > EPISODE_END_PURSUIT_FACTOR * meander]
-    if not live:
-        return "no_pursuit", (f"before the boundary the unit was never seen "
-                              f"pursuing {target} above "
-                              f"{EPISODE_END_PURSUIT_FACTOR * meander:.2f} tiles/s")
-    if not (any(x.get("lash") and x.get("delir") for x in pre)
-            and samples[b].get("delir")):
+    # The pursuit and the delirium must BOTH hold on the sample taken
+    # immediately before the cleanup: a leg that finished earlier, or a unit
+    # that only became delirious after it had stopped, gives the cleanup
+    # nothing in flight to cancel (an earlier sample cannot stand in for it).
+    before = samples[b - 1]
+    if not (before.get("lash") and before.get("tgt") == target
+            and _num(before.get("sp"))
+            and before["sp"] > EPISODE_END_PURSUIT_FACTOR * meander):
+        return "no_pursuit", (f"on the sample just before the cleanup the unit was "
+                              f"not pursuing {target} above "
+                              f"{EPISODE_END_PURSUIT_FACTOR * meander:.2f} tiles/s "
+                              f"(speed {before.get('sp')!r}, target {before.get('tgt')!r})")
+    if not (before.get("delir") and samples[b].get("delir")):
         return "no_overlap", "delirium did not span the episode-end boundary"
+    pace = before["sp"]
     post = samples[b:]
     for x in post:
         if x.get("tgt") not in (False, None) or x.get("goal") == "attack" \
@@ -1789,19 +1794,29 @@ def episode_end_verdict(samples, meander, target, tpos):
     # toward it is something else (an ordinary move once delirium blinks off
     # for a tick, a different gait) and is not a leak, so the pace test needs
     # the heading test beside it.
-    for u, v in zip(judged, judged[1:]):
+    # Intervals run from the boundary sample, so the movement leading INTO
+    # the first post-grace sample is judged too (a leg that has only a short
+    # way left would otherwise finish unseen inside the gap between samples).
+    # Within the grace the unit may still be finishing what it was doing when
+    # the stop was issued: that stretch is allowed at the pursuit pace.
+    for u, v in zip(post, post[1:]):
         if not all(_num(q.get(k)) for q in (u, v) for k in ("x", "y", "now")):
+            continue
+        if v["now"] < tb + EPISODE_END_GRACE_S:
             continue
         dt = v["now"] - u["now"]
         step = math.hypot(v["x"] - u["x"], v["y"] - u["y"])
         if dt <= 0 or step <= 0:
             continue
+        free = max(0.0, min(v["now"], tb + EPISODE_END_GRACE_S) - u["now"])
+        allowed = pace * free + EPISODE_END_LEAK_FACTOR * meander * (dt - free) + 0.05
         closing = (math.hypot(u["x"] - tpos[0], u["y"] - tpos[1])
                    - math.hypot(v["x"] - tpos[0], v["y"] - tpos[1]))
-        if step / dt > EPISODE_END_LEAK_FACTOR * meander and closing >= 0.7 * step:
-            return "leaked", (f"still heading for the old target at {step / dt:.2f} "
-                              f"tiles/s {u['now'] - tb:.2f}-{v['now'] - tb:.2f} s after "
-                              f"the cleanup (delirium's wander tops out at {meander:.2f})")
+        if step > allowed and closing >= 0.7 * step:
+            return "leaked", (f"still heading for the old target: {step:.2f} tiles "
+                              f"{u['now'] - tb:.2f}-{v['now'] - tb:.2f} s after the "
+                              f"cleanup, more than the stop's grace and delirium's "
+                              f"wander ({meander:.2f} tiles/s) explain ({allowed:.2f})")
     first, last = samples[b], judged[-1]
     if all(_num(v) for v in (first.get("x"), first.get("y"), last.get("x"),
                              last.get("y"))):
@@ -3638,6 +3653,23 @@ def self_test():
                  clean(2.4, 1.6, 0.5), clean(3.2, 2.0, 0.5)]
     check("episode end: a leg leaked at a tired pace (0.5 tiles/s) toward the target -> leaked",
           episode_end_verdict(pre + slow_leak, MEAN, TGT, TPOS)[0] == "leaked")
+    # round-1 review regressions: the leg that finishes inside the gap between
+    # two samples, and a pursuit that ended before the delirium began
+    short_leg = [es(0.0, 8.0, 1.2), es(0.5, 8.6, 1.2), clean(1.0, 9.1, 1.2),
+                 clean(1.65, 9.88, 1.2), clean(2.30, 10.0, 0.0), clean(2.95, 10.0, 0.0)]
+    check("episode end: a leg with a short way left that finishes between samples -> leaked",
+          episode_end_verdict(short_leg, MEAN, TGT, TPOS)[0] == "leaked")
+    check("episode end: the same short leg stopped at the cleanup passes",
+          episode_end_verdict([es(0.0, 8.0, 1.2), es(0.5, 8.6, 1.2), clean(1.0, 9.1, 1.2),
+                               clean(1.65, 9.15, 0.3), clean(2.30, 9.2, 0.3),
+                               clean(2.95, 9.3, 0.3)], MEAN, TGT, TPOS)[0] == "ok")
+    check("episode end: pursuit while lucid, then a stationary delirious unit -> no_pursuit",
+          episode_end_verdict([es(0.0, 0.0, 1.2, delir=False), es(0.6, 0.8, 0.0, delir=True)]
+                              + good_post, MEAN, TGT, TPOS)[0] == "no_pursuit")
+    check("episode end: pursuit and delirium only on EARLIER samples -> no_pursuit",
+          episode_end_verdict([es(0.0, 0.0, 1.2), es(0.3, 0.4, 0.0, delir=False),
+                               es(0.6, 0.8, 0.0, delir=False)] + good_post,
+                              MEAN, TGT, TPOS)[0] == "no_pursuit")
     check("episode end: a unit never seen pursuing is not gradable -> no_pursuit",
           episode_end_verdict([es(0.0, 0.0, 0.0), es(0.6, 0.0, 0.0)] + good_post,
                               MEAN, TGT, TPOS)[0] == "no_pursuit")
