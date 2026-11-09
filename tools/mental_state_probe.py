@@ -2568,6 +2568,107 @@ def run_mule_harness(mode, **overrides):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+#: 9k (#2976): bounded re-stages when the retaliation opportunity was never
+#: established, and where the technomule is snapped (inside the swap's reach
+#: of (attack range + 0.5) with room to drift).
+NINE_K_ATTEMPTS = 3
+NINE_K_MULE_OFFSET = 0.7
+
+
+def snap_mule_beside(port, subj, mule, target):
+    """Stop the technomule and the target and put the mule NINE_K_MULE_OFFSET
+    tiles west of the subject's CURRENT position and the target one tile
+    east (unit.setPos enqueues a teleport, so arrival is confirmed). A mule
+    spawned a tile away drifted to 1.78 tiles within a second in a traced run,
+    out of the 1.0 + 0.5 reach, so no retaliation opportunity ever existed.
+    True once both stand within 0.3 tiles of their spots."""
+    base = send_json(port, " ".join((
+        f"local S, M, T = {subj}, {mule}, {target}; local i = unit.getInfo(S);",
+        "if not i then return { ok = false } end;",
+        "unit.stop(M); unit.stop(T);",
+        f"unit.setPos(M, i.gridX - {NINE_K_MULE_OFFSET}, i.gridY);",
+        "unit.setPos(T, i.gridX + 1.0, i.gridY);",
+        "return { ok = true, x = i.gridX, y = i.gridY }")))
+    if not isinstance(base, dict) or base.get("ok") is not True:
+        return False
+    bx, by = base["x"], base["y"]
+
+    def arrived():
+        pos = send_json(port, " ".join((
+            f"local m, t = unit.getInfo({mule}), unit.getInfo({target});",
+            "if not m or not t then return { ok = false } end;",
+            "return { ok = true, mx = m.gridX, my = m.gridY, tx = t.gridX, ty = t.gridY }")))
+        if not isinstance(pos, dict) or pos.get("ok") is not True:
+            return None
+        return True if (math.hypot(pos["mx"] - (bx - NINE_K_MULE_OFFSET), pos["my"] - by) < 0.3
+                        and math.hypot(pos["tx"] - (bx + 1.0), pos["ty"] - by) < 0.3) else None
+    return poll_until(5, arrived) is not None
+
+
+def technomule_retaliation_phase(port):
+    """Phase 9k (#717, #2976): the shared retaliation swap must not redirect
+    lash-out onto a technomule. Graded only when a real retaliation
+    opportunity was OBSERVED (technomule_swap_verdict: the mule recorded as a
+    recent attacker, alive, in reach, the victim eligible, only the
+    technomule exclusion in the way). A setup that never produced one is
+    discarded, named and restaged (bounded); a swap onto the mule on a valid
+    opportunity is a policy failure and is never restaged. Answers
+    (ok, line)."""
+    reasons = []
+    for attempt in range(1, NINE_K_ATTEMPTS + 1):
+        subj = spawn_acolyte(port, -25, 25)
+        set_wellbeing(port, subj, 1.0, 0.0)
+        poll_until(5, lambda: mstate(port, subj) == "stable")
+        target = spawn_acolyte(port, -24, 25)   # eligible, adjacent
+        mule = spawn_acolyte(port, -26, 25, unit="technomule", clear_water=False)
+        # The subject strikes the adjacent target for real, and a full-strength
+        # acolyte swing can take it out of the fight (collapsed units are not
+        # eligible), after which lash-out would legitimately re-pick someone
+        # else. Neutered like 9a/9c2's fighters, with the neuter READ BACK, so
+        # the target stays the eligible unit this check is about (#2976).
+        neuter = neuter_fighters(port, subj, target)
+        snapped = snap_mule_beside(port, subj, mule, target)
+        # Fixture isolation, observed with the production eligibility rule:
+        # exactly the target may be eligible for the subject (never the mule).
+        stray = isolation_problem(port, subj, (target,))
+        problems = [p for p in (neuter, stray,
+                                None if snapped else "the mule/target teleport never took effect") if p]
+        installed = send(port, mule_observer_chunk(subj, target, mule, force=True))
+        # Sample rapidly through the retaliation-swap's own 3 s window: the
+        # subject must never swap onto the technomule.
+        samples = []
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            samples.append(lash_target(port, subj))
+            time.sleep(0.15)
+        status, calls = parse_swap_collection(send(port, _MULE_COLLECT_LUA))
+        send(port, MULE_UNPIN_LUA)
+        verdict, why = technomule_swap_verdict(calls, target, mule)
+        pose = send(port, f"return unit.getPose({target})")
+        eligible_now = eligible_neighbours(port, subj)
+        send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(port, subj) != "break")
+        destroy_units(port, subj, target, mule)
+        if str(mule) in samples or verdict == "policy":
+            return False, (f"  [FAIL] lash-out swapped onto the technomule {mule}: saw {samples}; "
+                           f"{verdict}: {why}")
+        if installed != "mule-observer-installed" or status != "ok":
+            problems.append(f"observer {installed!r}/{status}")
+        if verdict != "pass":
+            problems.append(why)
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            if attempt < NINE_K_ATTEMPTS:
+                print(f"  [setup] 9k attempt {attempt} discarded before grading "
+                      f"({'; '.join(problems)}); restaging")
+                continue
+            return False, (f"  [FAIL] setup: 9k never established a retaliation opportunity in "
+                           f"{NINE_K_ATTEMPTS} attempts ({' | '.join(reasons)}); saw {samples}, "
+                           f"eligible for the subject {eligible_now}, target pose {pose}")
+        return True, (f"  [pass] lash-out stayed on {target} and never swapped onto the "
+                      f"technomule {mule}: {samples[:4]}... ({why})")
+
+
 def snap_chebyshev_candidates(port, subj, near, far):
     """Stop both candidates and put them at their intended offsets from the
     subject's CURRENT position (unit.setPos enqueues a teleport on the unit
@@ -4977,6 +5078,88 @@ def self_test():
     check("9k verdict: one valid call among invalid ones is enough to pass",
           technomule_swap_verdict([dict(good_call, pre=7), good_call], 2, 3)[0] == "pass")
 
+    # snap_mule_beside + technomule_retaliation_phase (#2976, review round 1 follow-up).
+    def fake_mule_snap(base, pos):
+        g = globals()
+        saved = {k: g[k] for k in ("send_json", "poll_until")}
+        g.update(send_json=lambda port, lua, **kw: base if "unit.setPos" in lua else pos,
+                 poll_until=lambda sec, fn, interval=0.3: fn())
+        try:
+            return snap_mule_beside(1, 9, 10, 11)
+        finally:
+            g.update(saved)
+    arr = {"ok": True, "mx": -NINE_K_MULE_OFFSET, "my": 0.0, "tx": 1.0, "ty": 0.0}
+    check("9k snap: mule and target arriving at their spots -> True",
+          fake_mule_snap({"ok": True, "x": 0.0, "y": 0.0}, arr) is True)
+    check("9k snap: the mule still 1 tile from its spot -> False",
+          fake_mule_snap({"ok": True, "x": 0.0, "y": 0.0}, dict(arr, mx=arr["mx"] - 1.0)) is False)
+    check("9k snap: an unreadable subject -> False", fake_mule_snap({"ok": False}, arr) is False)
+    check("9k snap: the mule lands inside the swap's reach with room to drift",
+          NINE_K_MULE_OFFSET <= 0.8)
+
+    def fake_phase_k(verdicts, samples=("30",), neuter=None, installed="mule-observer-installed"):
+        """technomule_retaliation_phase with fakes; `verdicts` is the list of
+        (verdict, why) answered per attempt. Answers (ok, line, attempts, destroyed)."""
+        g = globals()
+        names = ("spawn_acolyte", "set_wellbeing", "poll_until", "mstate", "neuter_fighters", "snap_mule_beside",
+                 "isolation_problem", "send", "lash_target", "parse_swap_collection", "technomule_swap_verdict",
+                 "eligible_neighbours", "destroy_units", "time")
+        saved = {k: g[k] for k in names}
+        seq, attempts, destroyed, uid = list(verdicts), [0], [], [100]
+
+        class FakeTime:
+            t = 0.0
+
+            def time(self):
+                FakeTime.t += 1.0
+                return FakeTime.t
+
+            def sleep(self, d):
+                pass
+
+        def f_spawn(*a, **k):
+            uid[0] += 1
+            return uid[0]
+
+        def f_send(port, lua, **kw):
+            if "mule-observer" in lua or "__probe_mule_calls" in lua or "attackTargetExecute" in lua:
+                if "forceBreak" in lua:
+                    attempts[0] += 1
+                    return installed
+                return "[]"
+            return "ok"
+        g.update(spawn_acolyte=f_spawn, set_wellbeing=lambda *a, **k: None, poll_until=lambda *a, **k: True,
+                 mstate=lambda *a: "stable", neuter_fighters=lambda *a: neuter, snap_mule_beside=lambda *a: True,
+                 isolation_problem=lambda *a: None, send=f_send, lash_target=lambda *a: samples[0],
+                 parse_swap_collection=lambda raw: ("ok", [{}]),
+                 technomule_swap_verdict=lambda *a: seq.pop(0),
+                 eligible_neighbours=lambda *a: [], destroy_units=lambda port, *u: destroyed.extend(u),
+                 time=FakeTime())
+        try:
+            r = technomule_retaliation_phase(1)
+            return r[0], r[1], attempts[0], destroyed
+        finally:
+            g.update(saved)
+    okk, line, n, d = fake_phase_k([("pass", "19 valid")])
+    check("9k phase: a valid opportunity kept the victim -> pass on attempt 1", okk is True and n == 1)
+    okk, line, n, d = fake_phase_k([("setup", "no valid call"), ("pass", "ok")])
+    check("9k phase: an unestablished opportunity restages on fresh units and then grades",
+          okk is True and n == 2 and len(d) == 6)
+    okk, line, n, d = fake_phase_k([("setup", "a"), ("setup", "b"), ("setup", "c")])
+    check("9k phase: three unestablished attempts -> a named setup FAIL",
+          okk is False and n == 3 and "setup: 9k never established a retaliation opportunity" in line)
+    okk, line, n, d = fake_phase_k([("policy", "target 30 -> 31")])
+    check("9k phase: a swap on a valid opportunity is a policy failure, never restaged",
+          okk is False and n == 1 and "swapped onto the technomule" in line)
+    okk, line, n, d = fake_phase_k([("pass", "ok")], samples=("103",))
+    check("9k phase: the mule seen as the subject's target fails even when the observer passed, "
+          "and never restages", okk is False and n == 1)
+    okk, line, n, d = fake_phase_k([("pass", "ok")] * 3, installed="error: x")
+    check("9k phase: an observer that did not install is a setup problem (restaged three times, then "
+          "a named failure), never a pass", okk is False and n == 3 and "setup: 9k never established" in line)
+    okk, line, n, d = fake_phase_k([("pass", "ok")] * 3, neuter="neuter not established: x")
+    check("9k phase: a neuter that did not take is a setup problem too",
+          okk is False and n == 3 and "neuter not established" in line)
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -7453,51 +7636,10 @@ def main():
         # instead — the same wrap-and-delegate technique the collapsed-
         # attacker test uses, applied to the attacker-memory getter this
         # time rather than getPose.
-        subjK = spawn_acolyte(P, -25, 25)
-        set_wellbeing(P, subjK, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, subjK) == "stable")
-        targetK = spawn_acolyte(P, -24, 25)   # eligible, adjacent
-        muleK = spawn_acolyte(P, -26, 25, unit="technomule", clear_water=False)
-        # The subject strikes the adjacent target for real, and a full-strength
-        # acolyte swing can take it out of the fight (collapsed units are not
-        # eligible), after which lash-out would legitimately re-pick someone
-        # else. Neutered like 9a/9c2's fighters, with the neuter READ BACK, so
-        # the target stays the eligible unit this check is about (#2976).
-        neuterK = neuter_fighters(P, subjK, targetK)
-        # Fixture isolation, observed with the production eligibility rule:
-        # exactly targetK may be eligible for subjK (the technomule never is).
-        strayK = isolation_problem(P, subjK, (targetK,))
-        if neuterK or strayK:
+        okK, lineK = technomule_retaliation_phase(P)
+        print(lineK)
+        if not okK:
             ok = False
-            print(f"  [FAIL] setup: 9k not staged ({neuterK or strayK})")
-        installK = send(P, mule_observer_chunk(subjK, targetK, muleK, force=True))
-
-        # Sample rapidly through the retaliation-swap's own 3s window —
-        # subjK must stay on targetK and never swap onto the technomule, and
-        # the observer must have seen real retaliation opportunities (#2976).
-        samplesK = []
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            samplesK.append(lash_target(P, subjK))
-            time.sleep(0.15)
-        statusK, callsK = parse_swap_collection(send(P, _MULE_COLLECT_LUA))
-        send(P, MULE_UNPIN_LUA)
-        verdictK, whyK = technomule_swap_verdict(callsK, targetK, muleK)
-
-        if (installK == "mule-observer-installed" and statusK == "ok"
-                and str(muleK) not in samplesK and verdictK == "pass"):
-            print(f"  [pass] lash-out stayed on {targetK} and never swapped "
-                  f"onto the technomule {muleK}: {samplesK[:4]}... ({whyK})")
-        else:
-            ok = False
-            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}; observer {installK!r}/"
-                  f"{statusK}; {verdictK}: {whyK}; eligible for {subjK} now: "
-                  f"{eligible_neighbours(P, subjK)}, {targetK} pose "
-                  f"{send(P, f'return unit.getPose({targetK})')}")
-
-        send(P, f"unit.setStat({subjK},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, subjK) != "break")
-        destroy_units(P, subjK, targetK, muleK)
 
         # 9g. No eligible target: agitated wander, keep searching.
         # Every earlier phase's leftover unit is retired first, with the removal
