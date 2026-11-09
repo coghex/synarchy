@@ -63,11 +63,19 @@ travel was 1.0-1.5 tiles, and the old measure read 0.53-1.71 (the kept failure r
 tiles/s against a meander of 0.15-0.34), i.e. the in-flight leg is cancelled and delirium's own wander follows.
 
 Fix: grade from the observed boundary, the first sample on which `mentalLashoutActive`
-is clear after it was set. Required: a live pursuit of the target at more than twice the
-meander speed before the boundary; delirium active with the episode and on the boundary
-sample; no target, attack goal or committed order from the boundary on; and, after a
-0.3 s grace, no sample above 1.5x the meander speed and no closing on the old target
-beyond what a meander explains over 1.5 s. Pre-end travel is never counted.
+is clear after it was set. Required: on the sample just before the boundary the unit is
+pursuing the target at more than twice the meander speed under an active episode with
+delirium active, and delirium also on the boundary sample; no target, attack goal or
+committed order from the boundary on; and, judging every interval from the boundary
+sample on (so a leg that finishes between two samples is seen), no movement toward the old
+target beyond the pursuit pace for the 0.3 s grace plus 1.5x the meander afterwards, and no
+closing on it beyond what a meander explains over 1.5 s. Fast movement that is not toward
+the old target is not a leaked leg. Pre-end travel is never counted. A pair whose pursuit
+had already ended when the episode was ended (the unit arrived and fell in one run) is not
+gradable: 9j stages at 7 tiles, reads the gaits and target position before the break,
+holds delirium from the sample chunk itself, and restages up to three times on a
+`no_pursuit`, `no_overlap` or `setup` verdict, naming each discarded attempt; a real
+failure never restages.
 
 ## Validation
 
@@ -126,10 +134,10 @@ The three targeted checks passed wherever they were observed in this batch (9g a
 not observed in run 4, which stopped at the 9c2 setup). Across the two before batches the dressing
 guard failed in 2 of 30 runs; 4a/4b and 9c2 failed in 5 of 30 and 2 of 30.
 
-### After: final probe (sha `ff0bfc37`, 15 runs then 2 extra)
+### After: final probe (sha `f6482e75`, 15 runs then 2 extra)
 
-The first batch had one run (6) that stopped at the out-of-scope 9c2 setup before 9g and 9j,
-so two extra runs on the same probe were added to reach 15 fully observed runs.
+Run 15 stopped at the out-of-scope 9c2 setup before 9g and 9j, and the first extra run
+reached them, so there are 15 fully observed runs among the 17.
 
 | run | overall | 9b dressing guard | 9g final wander | 9j episode-end pursuit | other failing checks |
 |---|---|---|---|---|---|
@@ -138,32 +146,35 @@ so two extra runs on the same probe were added to reach 15 fully observed runs.
 | 3 | PASS | pass | pass | pass | - |
 | 4 | PASS | pass | pass | pass | - |
 | 5 | PASS | pass | pass | pass | - |
-| 6 | FAIL | pass | NOT OBSERVED | NOT OBSERVED | [FAIL] setup: 10 never landed a hit on 8 — can't test the retaliation-swap exclusion (atte |
+| 6 | PASS | pass | pass | pass | - |
 | 7 | PASS | pass | pass | pass | - |
-| 8 | PASS | pass | pass | pass | - |
-| 9 | PASS | pass | pass | pass | - |
+| 8 | FAIL | pass | pass | pass | [FAIL] expected only 30, saw: ['26', '26', '26', '26', '26', '26', '26']; [FAIL] setup: 29 never targeted 30 |
+| 9 | FAIL | pass | pass | pass | [FAIL] lash-out never landed an attack on 7 |
 | 10 | PASS | pass | pass | pass | - |
 | 11 | PASS | pass | pass | pass | - |
-| 12 | FAIL | pass | pass | pass | [FAIL] expected only 30, saw: ['26', '26', '26', '26', '26', '26', '26'] |
+| 12 | FAIL | pass | pass | pass | [FAIL] expected Chebyshev-nearer 26, got 27 (Euclidean-nearer would be 27) |
 | 13 | PASS | pass | pass | pass | - |
 | 14 | PASS | pass | pass | pass | - |
-| 15 | PASS | pass | pass | pass | - |
+| 15 | FAIL | pass | NOT OBSERVED | NOT OBSERVED | [FAIL] setup: 10 never landed a hit on 8 — can't test the retaliation-swap exclusion (atte; [FAIL] wander break didn't move: state={'state': 'break', 'endsAt': 36.150032043457, 'stat |
 
-runs=15 overall-fail=2 9b dressing guard: not-pass=0 9g final wander: not-pass=1 9j episode-end pursuit: not-pass=1
+runs=15 overall-fail=4 9b dressing guard: not-pass=0 9g final wander: not-pass=1 9j episode-end pursuit: not-pass=1
 
 | run | overall | 9b dressing guard | 9g final wander | 9j episode-end pursuit | other failing checks |
 |---|---|---|---|---|---|
-| 1 | FAIL | pass | pass | pass | [FAIL] expected only 30, saw: ['26', '26', '26', '26', '26', '26', '26']; [FAIL] wander break didn't move: state={'behavior': 'wander', 'state': 'break', 'stateOfMi |
+| 1 | FAIL | pass | pass | pass | [FAIL] lash-out never landed an attack on 4 |
 | 2 | PASS | pass | pass | pass | - |
 
 runs=2 overall-fail=1 9b dressing guard: not-pass=0 9g final wander: not-pass=0 9j episode-end pursuit: not-pass=0
 
 Result on the final probe: 17 runs; 9b, 9g and 9j were each observed passing in 16 and
-never failed (run 6 did not reach 9g/9j). The overall probe still exits nonzero when an excluded
-check fails, as before: run 6 failed at the 9c2 setup, run 12 at 9k (the shared retaliation-swap must not
-redirect lash-out onto a technomule: `expected only 30, saw 26`), and extra run 1 at 9k and the 4a
-wander break.
-Those are #2976 and were not touched.
+never failed (run 15 did not reach 9g/9j). The overall probe still exits nonzero when an
+excluded check fails, as before. Failures at other checks, reported and not touched (#2976):
+the 9c2 staged-hit setup (run 15), 9k `expected only 30, saw 26` (run 8; unit 26 appears to be
+9i's target, teleported to 6 tiles from the 9k subject and left alive), 9b's separate
+landed-attack check `lash-out never landed an attack on 7`/`4` (run 9 and extra run 1; the
+dressing guard had excluded 0 strikes in both), 9h `expected Chebyshev-nearer 26, got 27`
+(run 12) and the 4a wander break (run 15). The overall failure rate, 5 of 17, matches the
+before batches (8 of 30).
 
 ### History of the fix (every targeted-check failure seen while building it)
 
@@ -182,4 +193,11 @@ Those are #2976 and were not touched.
   a leaked pursuit is; a leg at a tired pace toward the target still fails (self-test). The
   trace now prints pose, activity, stamina, live meander and position for any 9j failure.
   None of the 17 runs on the final probe failed 9j.
-
+- Review round 1 (two valid 9j gaps, both reproduced): pairing only post-grace samples
+  hid a leg that finished between two samples, and the live pursuit and the delirium were
+  accepted from any earlier samples. Both fixed with mutation-checked regression cases (the
+  previous verdict returned `ok` for both traces). The stricter precondition then failed one
+  run (`no_pursuit`): at 6 tiles the unit had arrived and fallen (`pose=falling`) before the
+  episode was ended, so nothing was in flight. That is the staging race the restaging above
+  closes; the final probe's 17 runs carry one restage (extra attempt printed
+  `9j attempt 1 discarded ... restaging`) and no 9j failure.
