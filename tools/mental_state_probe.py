@@ -70,7 +70,7 @@ Usage: python3 tools/mental_state_probe.py [--port 9352]
 Exit 0 = pass.
 """
 from __future__ import annotations
-import argparse, json, math, sys, time
+import argparse, json, math, os, sys, time
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
                       quit_engine, send, send_json, spawn_acolyte,
                       load_definitions)
@@ -1608,6 +1608,289 @@ def stanch(port, uid):
     return got if isinstance(got, dict) else None
 
 
+#: 9g (#2975): the least path an agitated-wander subject must walk while its
+#: lash-out episode is ACTIVE. Acolytes meander at 0.2-0.35 tiles/s and a
+#: wander leg is uniform on [0, 3) tiles, so a six-second episode can leave
+#: the unit within 0.8 tiles of where it began even though it walked all the
+#: time (a measured 1 trial in 20 never reached 0.8 net in 22 s); path
+#: length counts that walking, net displacement does not.
+WANDER_MIN_PATH = 0.3
+#: Ceiling on the 9g wait, wall-clock seconds. The episode lasts six GAME
+#: seconds and game time falls behind the wall clock when the host is
+#: starved (a failed run's engine log showed 'Audio output underruns' for the
+#: whole stage, ~37 s of them), so this is a hang ceiling, far above the
+#: ordinary wait; a normal run leaves the loop at the first observed walk.
+WANDER_WAIT_CAP_S = 45.0
+
+#: One console read of what 9g judges (#2975): the clock, where the subject
+#: stands, whether it is mid-break, whether the lash-out episode is ACTIVE
+#: (unit_ai's mentalLashoutActive, set while the episode owns the unit and
+#: cleared by the episode-end cleanup), and its attack target.
+def wander_sample_lua(uid):
+    return " ".join((
+        f"local u = {uid};",
+        "local ai = require('scripts.unit_ai'); local s = ai.getState(u);",
+        "local i = unit.getInfo(u);",
+        "return { now = engine.gameTime(), x = i and i.gridX or nil,",
+        " y = i and i.gridY or nil,",
+        " brk = require('scripts.mental_state').isBreaking(u) == true,",
+        " lash = (s ~= nil and s.mentalLashoutActive == true),",
+        " tgt = (s and s.attackTargetUid) or false }"))
+
+
+def wander_episode_verdict(samples):
+    """Grade 9g's samples (oldest first; each {x, y, brk, lash, tgt}).
+
+    Answers (verdict, detail), verdict one of:
+      * 'waiting'      — the episode has not ended and nothing decided yet;
+      * 'moved'        — while the lash-out episode was ACTIVE and the unit
+                         had no target, it walked at least WANDER_MIN_PATH
+                         tiles (path length summed over consecutive active
+                         samples): agitated wander, observed;
+      * 'targeted'     — an active sample carries an attack target, which
+                         is not what an empty arena should produce;
+      * 'still'        — the episode ended (or the wait capped) with the
+                         active unit having walked less than that;
+      * 'never_active' — the episode ended or the wait capped without the
+                         lash-out episode ever being active.
+    Movement outside the active episode never counts: once the episode has
+    ended the unit is back under ordinary AI, which wanders by itself, so
+    movement then says nothing about lash-out. A sample whose position is
+    unreadable is not walking evidence either."""
+    active = [x for x in samples if x.get("brk") and x.get("lash")]
+    if any(x.get("tgt") not in (False, None) for x in active):
+        return "targeted", f"target {active[-1].get('tgt')!r} while no target was eligible"
+    path = 0.0
+    prev = None
+    for x in samples:
+        on = bool(x.get("brk") and x.get("lash")
+                  and isinstance(x.get("x"), (int, float))
+                  and isinstance(x.get("y"), (int, float)))
+        if on and prev is not None:
+            path += math.hypot(x["x"] - prev["x"], x["y"] - prev["y"])
+        prev = x if on else None
+    if path >= WANDER_MIN_PATH:
+        return "moved", f"walked {path:.2f} tiles while lash-out was active"
+    seen_break = any(x.get("brk") for x in samples)
+    ended = bool(samples) and not samples[-1].get("brk") and seen_break
+    if not ended:
+        return "waiting", f"walked {path:.2f} tiles so far"
+    if not active:
+        return "never_active", "the lash-out episode was never active"
+    return "still", f"walked only {path:.2f} tiles while lash-out was active"
+
+
+#: 9j (#2975), episode end while delirious. Meander (delirium's aimless
+#: wander) is the slowest gait; the in-flight pursuit runs at the combat
+#: attack's sprint/ordered/comfort pace. Measured over 20 trials the
+#: pursuit read 0.98-1.43 tiles/s against a meander of 0.15-0.34, and after
+#: the cleanup the unit never exceeded its meander speed.
+EPISODE_END_PURSUIT_FACTOR = 2.0   # a LIVE pursuit runs above this x meander
+EPISODE_END_LEAK_FACTOR = 1.5      # past the grace, above this x meander = leaked leg
+EPISODE_END_GRACE_S = 0.3          # game s after the cleanup tick for the queued stop to land
+EPISODE_END_WINDOW_S = 1.5         # game s observed after the grace
+#: Wall-clock ceiling on the whole 9j observation. The verdict needs
+#: EPISODE_END_GRACE_S + EPISODE_END_WINDOW_S GAME seconds after the cleanup
+#: tick, and game time lags the wall clock on a starved host (see
+#: WANDER_WAIT_CAP_S); a normal run leaves the loop within a few seconds.
+EPISODE_END_WAIT_CAP_S = 60.0
+
+
+def episode_end_sample_lua(uid):
+    """One console read of what 9j judges (#2975): the clock, position,
+    locomotion speed (unit.getInfo's moveSpeed, 0 when not walking), the
+    episode flag, break and delirium state, and the episode-owned combat
+    state (target, goal, committed)."""
+    return " ".join((
+        f"local u = {uid};",
+        "local s = require('scripts.unit_ai').getState(u); local i = unit.getInfo(u);",
+        "return { now = engine.gameTime(), x = i and i.gridX or nil, y = i and i.gridY or nil,",
+        " sp = i and i.moveSpeed or nil,",
+        " brk = require('scripts.mental_state').isBreaking(u) == true,",
+        " lash = (s ~= nil and s.mentalLashoutActive == true),",
+        " delir = require('scripts.brain').isDelirious(u) == true,",
+        " tgt = (s and s.attackTargetUid) or false,",
+        " goal = (s and s.activeGoal) or false,",
+        " committed = (s and s.committed) or false,",
+        " pose = tostring(unit.getPose(u)), act = tostring(unit.getActivity(u)),",
+        " kd = (i and i.knockedDown == true) or false,",
+        " mean = require('scripts.movement_speed').meander(u),",
+        " comf = require('scripts.movement_speed').comfort(u),",
+        " stam = unit.getStat(u, 'stamina') }"))
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+
+
+def episode_end_verdict(samples, meander, target, tpos):
+    """Grade 9j's samples (oldest first) against the OBSERVED episode-end
+    boundary, not a wall-clock window (#2975). The boundary is the first
+    sample on which the lash-out episode flag is clear after it was set:
+    the tick that ran the episode-end cleanup, which also issues the
+    unit.stop that must end the in-flight pursuit.
+
+    Answers (verdict, detail); verdict is 'ok', 'waiting' (not enough
+    observed yet) or a failure:
+      * 'no_boundary'  — the episode flag never cleared;
+      * 'no_pursuit'   — before the boundary the unit was never seen
+                         pursuing `target` at a pursuit pace under an
+                         active episode (nothing to leak: not gradable);
+      * 'no_overlap'   — delirium was not active together with the active
+                         episode before the boundary, or not on the
+                         boundary sample itself;
+      * 'not_cleaned'  — from the boundary on, a target, an attack goal or
+                         a committed order was still set;
+      * 'leaked'       — past EPISODE_END_GRACE_S, the unit kept heading for
+                         the old target faster than delirium's own wander
+                         moves, or closed on it by more than that wander
+                         explains.
+    Travel BEFORE the boundary is legitimate and never counted: the old
+    check measured from before delirium began and so charged the unit for
+    pursuit it was entitled to run."""
+    b = None
+    seen_active = False
+    for i, x in enumerate(samples):
+        if x.get("lash"):
+            seen_active = True
+        elif seen_active:
+            b = i
+            break
+    if b is None:
+        return ("waiting" if seen_active else "no_boundary",
+                "the lash-out episode flag has not cleared yet" if seen_active
+                else "the lash-out episode was never active")
+    if not _num(meander) or meander <= 0:
+        return "no_pursuit", f"no meander speed to judge against ({meander!r})"
+    pre = samples[:b]
+    live = [x for x in pre if x.get("lash") and x.get("tgt") == target
+            and _num(x.get("sp")) and x["sp"] > EPISODE_END_PURSUIT_FACTOR * meander]
+    if not live:
+        return "no_pursuit", (f"before the boundary the unit was never seen "
+                              f"pursuing {target} above "
+                              f"{EPISODE_END_PURSUIT_FACTOR * meander:.2f} tiles/s")
+    if not (any(x.get("lash") and x.get("delir") for x in pre)
+            and samples[b].get("delir")):
+        return "no_overlap", "delirium did not span the episode-end boundary"
+    post = samples[b:]
+    for x in post:
+        if x.get("tgt") not in (False, None) or x.get("goal") == "attack" \
+                or x.get("committed") not in (False, None):
+            return "not_cleaned", (f"target {x.get('tgt')!r}, goal {x.get('goal')!r}, "
+                                   f"committed {x.get('committed')!r} after the cleanup")
+    tb = samples[b].get("now")
+    if not _num(tb):
+        return "no_boundary", "the boundary sample carries no clock"
+    judged = [x for x in post if _num(x.get("now")) and x["now"] >= tb + EPISODE_END_GRACE_S]
+    if not judged or judged[-1]["now"] < tb + EPISODE_END_GRACE_S + EPISODE_END_WINDOW_S:
+        return "waiting", "the post-cleanup window is not covered yet"
+    # A leaked leg is the OLD pursuit still running: movement toward the old
+    # target's position above delirium's own pace. Fast movement that is NOT
+    # toward it is something else (an ordinary move once delirium blinks off
+    # for a tick, a different gait) and is not a leak, so the pace test needs
+    # the heading test beside it.
+    for u, v in zip(judged, judged[1:]):
+        if not all(_num(q.get(k)) for q in (u, v) for k in ("x", "y", "now")):
+            continue
+        dt = v["now"] - u["now"]
+        step = math.hypot(v["x"] - u["x"], v["y"] - u["y"])
+        if dt <= 0 or step <= 0:
+            continue
+        closing = (math.hypot(u["x"] - tpos[0], u["y"] - tpos[1])
+                   - math.hypot(v["x"] - tpos[0], v["y"] - tpos[1]))
+        if step / dt > EPISODE_END_LEAK_FACTOR * meander and closing >= 0.7 * step:
+            return "leaked", (f"still heading for the old target at {step / dt:.2f} "
+                              f"tiles/s {u['now'] - tb:.2f}-{v['now'] - tb:.2f} s after "
+                              f"the cleanup (delirium's wander tops out at {meander:.2f})")
+    first, last = samples[b], judged[-1]
+    if all(_num(v) for v in (first.get("x"), first.get("y"), last.get("x"),
+                             last.get("y"))):
+        d0 = math.hypot(first["x"] - tpos[0], first["y"] - tpos[1])
+        d1 = math.hypot(last["x"] - tpos[0], last["y"] - tpos[1])
+        dt = last["now"] - tb
+        allowed = EPISODE_END_LEAK_FACTOR * meander * dt + 0.25
+        if d0 - d1 > allowed:
+            return "leaked", (f"closed {d0 - d1:.2f} tiles on the old target in "
+                              f"{dt:.2f} s after the cleanup (delirium's wander "
+                              f"explains at most {allowed:.2f})")
+    return "ok", (f"cleanup at game t={tb:.2f}; no pursuit-pace movement after "
+                  f"{EPISODE_END_GRACE_S:g} s grace over "
+                  f"{judged[-1]['now'] - tb:.2f} s")
+
+
+def dressing_exclude_lua(lash):
+    """Console chunk: for the dressing window, drop every combat.attack
+    onto the subject `lash` from any other unit (#2975).
+
+    Every production strike goes through the global combat.attack
+    (unit_ai_combat_attack.lua, the lunge), and the combat thread resolves
+    a queued command on its next 60 Hz tick, so a strike the attacker
+    orders after this chunk can never land. That is how the window EXCLUDES
+    the attacker's legitimate retaliation (self-defense after the
+    subject's fresh hit), which used to advance the very record the
+    guard compares while the subject was dressed. The subject's own swings
+    are untouched, so 9b's landed-attack check is not affected. Idempotent:
+    the original is saved once. Answers 'excluded'."""
+    return " ".join((
+        "_G.__probe_dress_orig = _G.__probe_dress_orig or combat.attack;",
+        "_G.__probe_dress_dropped = {};",
+        "local orig = _G.__probe_dress_orig;",
+        "combat.attack = function(a, t, ...)",
+        f" if t == {lash} and a ~= {lash} then",
+        "  local d = _G.__probe_dress_dropped;",
+        "  d[#d + 1] = a; return false end;",
+        " return orig(a, t, ...) end;",
+        "return 'excluded'"))
+
+
+#: Console chunk: put combat.attack back and answer how many strikes the
+#: window dropped. Safe to run when nothing was installed.
+DRESSING_RESTORE_LUA = " ".join((
+    "if _G.__probe_dress_orig then combat.attack = _G.__probe_dress_orig;",
+    " _G.__probe_dress_orig = nil end;",
+    "local d = _G.__probe_dress_dropped or {};",
+    "_G.__probe_dress_dropped = nil;",
+    "return #d"))
+
+#: Pause after installing the exclusion, for a strike already queued to
+#: resolve (the combat thread ticks at 60 Hz; this is many ticks, with room
+#: for a loaded host).
+DRESSING_EXCLUDE_SETTLE_S = 0.3
+
+
+def dressing_read_lua(lash):
+    """ONE console read of the subject's real attacker record (who, when),
+    `at` formatted to the microsecond so an unchanged record compares as an
+    equal string. Answers {uid, at}; both null when there is no record."""
+    return " ".join((
+        f"local a = unit.getLastAttacker({lash});",
+        "return { uid = a and a.uid or nil,",
+        " at = a and string.format('%.6f', a.at or -1) or nil }"))
+
+
+def _dressing_read_ok(r):
+    return (isinstance(r, dict) and (r.get("uid") is None) == (r.get("at") is None)
+            and (r.get("at") is None or isinstance(r.get("at"), str)))
+
+
+def dressing_record_problems(before, after):
+    """Everything wrong with the subject's attacker record across the
+    dressing; empty only when it is unchanged and both reads are valid.
+
+    The dressing must not touch what lash-out reads. The subject is dressed
+    mid-episode, so the attacker's retaliation could advance the record for
+    reasons that have nothing to do with the treatment (#2975); the window
+    therefore EXCLUDES such strikes (dressing_exclude_lua) instead of
+    trying to explain them afterwards — a wound is gone within a second and
+    the combat-event stream has other consumers, so neither can prove a
+    hit. With the strikes excluded, ANY change is the treatment's."""
+    if not (_dressing_read_ok(before) and _dressing_read_ok(after)):
+        return [f"unreadable attacker-record read ({before!r} -> {after!r})"]
+    if (before["uid"], before["at"]) != (after["uid"], after["at"]):
+        return [f"{before['uid']}@{before['at']} -> {after['uid']}@{after['at']}"]
+    return []
+
+
 def dress_staged_wound(port, lash):
     """After 9a is graded, before 9b's window: dress the wound the staged
     hit left on the subject (#2773).
@@ -1621,21 +1904,29 @@ def dress_staged_wound(port, lash):
 
     The dressing must not touch what lash-out reads: the subject's real
     attacker record — who, and when — is read before and after, and any
-    change is a fixture failure. Answers True when the record is
-    unchanged.
+    change is a fixture failure. The attacker's own retaliation, a
+    legitimate self-defense strike, is EXCLUDED for the window (#2975, see
+    dressing_exclude_lua) so that only the treatment can change the record.
+    Answers True when the record is unchanged.
     """
-    record = (f"local a=unit.getLastAttacker({lash}); "
-              f"return a and string.format('%s@%.6f', tostring(a.uid), a.at or -1) "
-              f"or 'nil'")
-    before = send(port, record)
-    dressed = stanch(port, lash)
-    after = send(port, record)
-    if before != after:
+    send(port, dressing_exclude_lua(lash))
+    dropped = None
+    try:
+        time.sleep(DRESSING_EXCLUDE_SETTLE_S)
+        before = send_json(port, dressing_read_lua(lash))
+        dressed = stanch(port, lash)
+        after = send_json(port, dressing_read_lua(lash))
+    finally:
+        dropped = send_json(port, DRESSING_RESTORE_LUA)
+    problems = dressing_record_problems(before, after)
+    if problems:
         print(f"  [FAIL] setup: dressing {lash}'s staged wound changed its "
-              f"attacker record ({before} -> {after})")
+              f"attacker record ({'; '.join(problems)}), with every strike "
+              f"onto it excluded ({dropped!r} dropped)")
         return False
     print(f"  [setup] dressed {lash}'s staged wound before 9b: {dressed}; "
-          f"attacker record unchanged ({after})")
+          f"attacker record unchanged ({after['uid']}@{after['at']}); "
+          f"{dropped!r} strike(s) onto it excluded meanwhile")
     return True
 
 
@@ -3191,6 +3482,52 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
     return got["selection"] or None, got["clockCallers"]
 
 
+def dressing_exclusion_harness():
+    """Run dressing_exclude_lua / DRESSING_RESTORE_LUA against a stub
+    combat.attack with no engine (needs a `lua` interpreter). Answers a dict
+    of what the stub saw, or None when no lua is installed."""
+    import shutil, subprocess, os, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    install = dressing_exclude_lua(5)
+    restore = DRESSING_RESTORE_LUA
+    prog = "\n".join((
+        "local calls = 0; local last = {}",
+        "local function stub(a, t, ...) calls = calls + 1;",
+        " last = { a, t, ... }; return 'orig' end",
+        "combat = { attack = stub }",
+        "local function run(chunk) return assert(load(chunk))() end",
+        "local out = {}",
+        f"run({install!r})",
+        "out.dropped_call = tostring(combat.attack(4, 5, 'quick'))",
+        "out.calls_after_drop = calls",
+        "out.own_swing = combat.attack(5, 4, 'quick')",
+        "out.other_target = combat.attack(4, 6, 'quick')",
+        "out.calls_after_passes = calls",
+        "combat.attack(5, 4, 'quick', 7, 9)",
+        "out.varargs = tostring(last[4]) .. '|' .. tostring(last[5])",
+        "combat.attack(8, 5, 'heavy')",
+        "out.dropped_count = run(" + repr(restore) + ")",
+        "out.restored_same = tostring(combat.attack == stub)",
+        "out.after_restore = combat.attack(4, 5, 'quick')",
+        "out.restore_idle = run(" + repr(restore) + ")",
+        f"run({install!r}); run({install!r}); run({restore!r})",
+        "out.restored_same_twice = tostring(combat.attack == stub)",
+        "for _, k in ipairs({ 'dropped_call', 'calls_after_drop', 'own_swing',",
+        " 'other_target', 'calls_after_passes', 'varargs', 'dropped_count',",
+        " 'restored_same', 'after_restore', 'restore_idle', 'restored_same_twice' }) do",
+        " print(k .. '=' .. tostring(out[k])) end"))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "dress.lua")
+        with open(path, "w") as fh:
+            fh.write(prog)
+        res = subprocess.run([lua, path], capture_output=True, text=True, timeout=30)
+    if res.returncode != 0:
+        raise RuntimeError(f"dressing exclusion harness failed: {res.stderr.strip()}")
+    return dict(line.split("=", 1) for line in res.stdout.splitlines() if "=" in line)
+
+
 def self_test():
     """No-engine regression cases for #2773's pure setup validators and
     gates (`--self-test`). Exit 0 when every case holds."""
@@ -3227,6 +3564,145 @@ def self_test():
     check("neuter: a non-positive body_mass fails",
           neuter_snapshot_problems({"u2": dict(good, mass=0.0), "u1": good}, (2, 1)) != [])
     check("neuter: no answer fails", neuter_snapshot_problems(None, (2, 1)) != [])
+
+    # wander_episode_verdict (#2975): 9g waits on movement observed WHILE
+    # the lash-out episode is active, and nothing else counts.
+    def ws(x, y, brk=True, lash=True, tgt=False):
+        return {"x": x, "y": y, "brk": brk, "lash": lash, "tgt": tgt}
+    walk = [ws(0, 0), ws(0.1, 0), ws(0.25, 0.05), ws(0.4, 0.1)]
+    check("wander: walking while the episode is active -> moved",
+          wander_episode_verdict(walk)[0] == "moved")
+    check("wander: a unit that walks out and back (net ~0) still moved",
+          wander_episode_verdict([ws(0, 0), ws(0.2, 0), ws(0.4, 0), ws(0.2, 0), ws(0, 0)])[0] == "moved")
+    check("wander: still but the episode not over -> waiting",
+          wander_episode_verdict([ws(0, 0), ws(0, 0.01)])[0] == "waiting")
+    check("wander: stationary until the episode ended -> still (bounded failure)",
+          wander_episode_verdict([ws(0, 0), ws(0, 0), ws(0, 0, brk=False, lash=False)])[0] == "still")
+    check("wander: movement only AFTER the episode ended does not count",
+          wander_episode_verdict([ws(0, 0), ws(0, 0), ws(0, 0, brk=False, lash=False),
+                                  ws(2, 2, brk=False, lash=False)])[0] == "still")
+    check("wander: movement in a break that is not lash-out-active does not count",
+          wander_episode_verdict([ws(0, 0, lash=False), ws(1, 1, lash=False),
+                                  ws(2, 2, lash=False, brk=False)])[0] == "never_active")
+    check("wander: a unit that never broke -> waiting, then never_active once over",
+          wander_episode_verdict([ws(0, 0, brk=False, lash=False)])[0] == "waiting")
+    check("wander: an attack target while active -> targeted",
+          wander_episode_verdict([ws(0, 0), ws(0.5, 0, tgt=7)])[0] == "targeted")
+    check("wander: a jump between two ACTIVE stretches is not one walk",
+          wander_episode_verdict([ws(0, 0), ws(0, 0, lash=False), ws(5, 5), ws(5, 5),
+                                  ws(5, 5, brk=False, lash=False)])[0] == "still")
+    check("wander: unreadable positions are not walking",
+          wander_episode_verdict([ws(None, None), ws(None, None),
+                                  ws(None, None, brk=False, lash=False)])[0] == "still")
+
+    # episode_end_verdict (#2975): 9j grades from the OBSERVED cleanup tick.
+    MEAN = 0.30                      # delirium's meander speed for these traces
+    TGT = 7
+    TPOS = (10.0, 0.0)               # the old target
+
+    def es(now, x, sp, lash=True, delir=True, tgt=TGT, goal="attack",
+           committed=False, y=0.0):
+        return {"now": now, "x": x, "y": y, "sp": sp, "brk": lash, "lash": lash,
+                "delir": delir, "tgt": tgt, "goal": goal, "committed": committed}
+
+    def clean(now, x, sp, delir=True):
+        return es(now, x, sp, lash=False, delir=delir, tgt=False, goal=False)
+    pre = [es(0.0, 0.0, 1.2), es(0.3, 0.4, 1.2), es(0.6, 0.8, 1.2)]
+    # a correct cleanup: pursuit pace before, meander-pace wander after
+    good_post = [clean(0.9, 1.0, 0.0), clean(1.3, 1.0, 0.3), clean(1.8, 1.1, 0.3),
+                 clean(2.4, 1.2, 0.29), clean(2.9, 1.3, 0.3), clean(3.2, 1.3, 0.3)]
+    check("episode end: clean stop, delirious wander afterwards -> ok",
+          episode_end_verdict(pre + good_post, MEAN, TGT, TPOS)[0] == "ok")
+    check("episode end: big legitimate travel BEFORE the boundary is not charged",
+          episode_end_verdict([es(0.0, 0.0, 1.2), es(0.3, 2.5, 1.2), es(0.6, 5.0, 1.2),
+                               clean(0.9, 5.2, 0.0), clean(1.3, 5.2, 0.3),
+                               clean(2.4, 5.3, 0.3), clean(3.2, 5.4, 0.3)],
+                              MEAN, TGT, TPOS)[0] == "ok")
+    leak = [clean(0.9, 1.0, 1.2), clean(1.3, 1.5, 1.2), clean(1.8, 2.1, 1.2),
+            clean(2.4, 2.8, 1.2), clean(3.2, 3.8, 1.2)]
+    check("episode end: the old leg still running past the grace -> leaked",
+          episode_end_verdict(pre + leak, MEAN, TGT, TPOS)[0] == "leaked")
+    check("episode end: pursuit pace only INSIDE the grace is tolerated",
+          episode_end_verdict(pre + [clean(0.9, 1.0, 1.2), clean(1.1, 1.2, 0.6)] + good_post[1:],
+                              MEAN, TGT, TPOS)[0] == "ok")
+    creep = [clean(0.9, 1.0, 0.3), clean(1.3, 1.4, 0.3), clean(1.8, 2.4, 0.3),
+             clean(2.4, 3.6, 0.3), clean(3.2, 5.0, 0.3)]
+    check("episode end: closing on the old target faster than meandering can -> leaked",
+          episode_end_verdict(pre + creep, MEAN, TGT, TPOS)[0] == "leaked")
+    sideways = [clean(0.9, 1.0, 0.0), clean(1.3, 1.0, 0.3), clean(1.8, 1.0, 0.5),
+                clean(2.4, 1.0, 0.5), clean(3.2, 1.0, 0.5)]
+    sideways = [dict(x, y=y) for x, y in zip(sideways, (0.0, 0.0, 0.4, 0.9, 1.5))]
+    check("episode end: fast movement NOT toward the old target is not a leaked leg",
+          episode_end_verdict(pre + sideways, MEAN, TGT, TPOS)[0] == "ok")
+    slow_leak = [clean(0.9, 1.0, 0.0), clean(1.3, 1.0, 0.3), clean(1.8, 1.25, 0.5),
+                 clean(2.4, 1.6, 0.5), clean(3.2, 2.0, 0.5)]
+    check("episode end: a leg leaked at a tired pace (0.5 tiles/s) toward the target -> leaked",
+          episode_end_verdict(pre + slow_leak, MEAN, TGT, TPOS)[0] == "leaked")
+    check("episode end: a unit never seen pursuing is not gradable -> no_pursuit",
+          episode_end_verdict([es(0.0, 0.0, 0.0), es(0.6, 0.0, 0.0)] + good_post,
+                              MEAN, TGT, TPOS)[0] == "no_pursuit")
+    check("episode end: delirium not spanning the boundary -> no_overlap",
+          episode_end_verdict([es(0.0, 0.0, 1.2, delir=False), es(0.6, 0.8, 1.2, delir=False),
+                               clean(0.9, 1.0, 0.0, delir=False)] + good_post[1:],
+                              MEAN, TGT, TPOS)[0] == "no_overlap")
+    check("episode end: an attack goal still set after the cleanup -> not_cleaned",
+          episode_end_verdict(pre + [dict(good_post[0], goal="attack")] + good_post[1:],
+                              MEAN, TGT, TPOS)[0] == "not_cleaned")
+    check("episode end: a target still set after the cleanup -> not_cleaned",
+          episode_end_verdict(pre + [dict(good_post[0], tgt=TGT)] + good_post[1:],
+                              MEAN, TGT, TPOS)[0] == "not_cleaned")
+    check("episode end: the flag never clearing -> waiting (and never a pass)",
+          episode_end_verdict(pre, MEAN, TGT, TPOS)[0] == "waiting")
+    check("episode end: a flag that was never active -> no_boundary",
+          episode_end_verdict([clean(0.0, 0.0, 0.0)], MEAN, TGT, TPOS)[0] == "no_boundary")
+    check("episode end: the window not yet covered -> waiting",
+          episode_end_verdict(pre + good_post[:3], MEAN, TGT, TPOS)[0] == "waiting")
+
+    # dressing guard (#2975): retaliation is EXCLUDED for the window, then
+    # the record must be unchanged.
+    def drec(uid, at):
+        return {"uid": uid, "at": at}
+    d0 = drec(4, "81.312626")
+    check("dressing guard: an unchanged record passes",
+          dressing_record_problems(d0, dict(d0)) == [])
+    check("dressing guard: unchanged with no record at all passes",
+          dressing_record_problems(drec(None, None), drec(None, None)) == [])
+    check("dressing guard: a record whose time moved fails (treatment-induced)",
+          dressing_record_problems(d0, drec(4, "85.756604")) != [])
+    check("dressing guard: a record whose uid moved fails",
+          dressing_record_problems(d0, drec(3, "81.312626")) != [])
+    check("dressing guard: a record that vanished fails",
+          dressing_record_problems(d0, drec(None, None)) != [])
+    check("dressing guard: a record that appeared fails",
+          dressing_record_problems(drec(None, None), d0) != [])
+    check("dressing guard: a record that moved backwards fails",
+          dressing_record_problems(d0, drec(4, "80.000000")) != [])
+    check("dressing guard: an unreadable read fails",
+          dressing_record_problems(None, dict(d0)) != []
+          and dressing_record_problems(d0, "boom") != []
+          and dressing_record_problems(d0, drec(4, None)) != [])
+
+    # The exclusion chunk, run against a stub combat.attack (needs `lua`).
+    harness = dressing_exclusion_harness()
+    if harness is None:
+        print("  skip dressing exclusion: no lua interpreter")
+    else:
+        check("dressing exclusion: an attacker's strike onto the subject is dropped",
+              harness["dropped_call"] == "false" and harness["calls_after_drop"] == "0")
+        check("dressing exclusion: the subject's own swing passes through",
+              harness["own_swing"] == "orig")
+        check("dressing exclusion: a strike onto another unit passes through",
+              harness["other_target"] == "orig" and harness["calls_after_passes"] == "2")
+        check("dressing exclusion: extra arguments (lunge reach/speed) are passed on",
+              harness["varargs"] == "7|9")
+        check("dressing exclusion: the restore reports each dropped strike",
+              harness["dropped_count"] == "2")
+        check("dressing exclusion: restore puts the original back",
+              harness["restored_same"] == "true" and harness["after_restore"] == "orig")
+        check("dressing exclusion: installing twice keeps the real original",
+              harness["restored_same_twice"] == "true")
+        check("dressing exclusion: restore with nothing installed is harmless",
+              harness["restore_idle"] == "0")
 
     # stale_dressing_problems
     rgood = {"uid": 2, "at": 10.5, "typed": True}
@@ -4351,7 +4827,35 @@ def self_test():
     return 1 if fails else 0
 
 
+class _Tee:
+    """Write-through copy of stdout into a transcript file (#2975)."""
+
+    def __init__(self, out, fh):
+        self._out, self._fh = out, fh
+
+    def write(self, text):
+        self._out.write(text)
+        self._fh.write(text)
+        self._fh.flush()
+        return len(text)
+
+    def flush(self):
+        self._out.flush()
+        self._fh.flush()
+
+
+def _open_transcript():
+    """run_probes prints a passing probe's output nowhere, so a batch that
+    must report each check's outcome per run (#2975) sets
+    MENTAL_STATE_PROBE_TRANSCRIPT=<file>: every line this probe prints is
+    also appended there. Unset, nothing changes."""
+    path = os.environ.get("MENTAL_STATE_PROBE_TRANSCRIPT")
+    if path:
+        sys.stdout = _Tee(sys.stdout, open(path, "a"))
+
+
 def main():
+    _open_transcript()
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9352)
     ap.add_argument("--self-test", action="store_true",
@@ -5297,8 +5801,18 @@ def main():
             ok = False
             print(f"  [FAIL] setup: {subjJ} never pursued {targetJ}")
 
-        jx0, jy0 = unit_pos(P, subjJ)
-        d_to_target_start = ((jx0 - (-19)) ** 2 + (jy0 - (-10)) ** 2) ** 0.5
+        # The unit's own gaits, read once: delirium's wander is the slowest
+        # thing it does, the pursuit the fastest (see episode_end_verdict).
+        meander_j = send_json(P, f"return require('scripts.movement_speed')"
+                                 f".meander({subjJ})")
+        tpos_j = unit_pos(P, targetJ)
+        jsamples = []
+
+        def j_sample():
+            got = send_json(P, episode_end_sample_lua(subjJ))
+            if isinstance(got, dict):
+                jsamples.append(got)
+            return jsamples[-1] if jsamples else {}
 
         # Drive consciousness into the delirious band (brain.lua:
         # 0.15..0.40) via blood_oxygen — the same technique
@@ -5311,52 +5825,45 @@ def main():
         # than recovering before the overlap it's testing occurs.
         def j_pin_and_check_delirious():
             send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
-            return json.loads(send(P,
-                f"local b=require('scripts.brain'); "
-                f"return {{d=b.isDelirious({subjJ})}}"))["d"]
-        if not poll_until(10, j_pin_and_check_delirious):
+            return bool(j_sample().get("delir"))
+        if not poll_until(10, j_pin_and_check_delirious, interval=0.1):
             ok = False
             print(f"  [FAIL] setup: {subjJ} never became delirious")
 
-        # End the episode, re-pinning blood_oxygen on every poll so
-        # delirium doesn't clear out from under this before mental_tick
-        # actually ends the episode.
+        # End the episode while the pursuit is live and delirium holds, and
+        # grade from the OBSERVED cleanup tick (#2975) — never from a
+        # baseline taken before delirium began, which charged the unit for
+        # the pursuit it was entitled to run until the episode ended.
         send(P, f"unit.setStat({subjJ},'mental_until',0); return 'ok'")
-        if not poll_until(5, lambda: (j_pin_and_check_delirious(),
-                                       mstate(P, subjJ) != "break")[-1]):
-            ok = False
-            print(f"  [FAIL] setup: {subjJ}'s episode never ended")
-
-        still_delirious = j_pin_and_check_delirious()
-
-        def j_cleaned():
+        jverdict, jdetail = "waiting", ""
+        jdeadline = time.time() + EPISODE_END_WAIT_CAP_S
+        while time.time() < jdeadline:
             send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
-            f = lash_ai_flags(P, subjJ)
-            return f if (not f["tgt"] and f["goal"] != "attack"
-                         and not f["committed"]) else None
-        cleared_j = poll_until(10, j_cleaned)
+            j_sample()
+            jverdict, jdetail = episode_end_verdict(
+                jsamples, meander_j, targetJ, tpos_j)
+            if jverdict != "waiting":
+                break
+            time.sleep(0.05)
+        else:
+            jverdict = jverdict if jverdict != "waiting" else "no_boundary"
+            jdetail = "wait capped; " + jdetail
 
-        # The Lua-side target/goal clearing above isn't the whole story:
-        # the in-flight moveTo pursuit toward targetJ must actually stop
-        # too, not just ride out its old leg while delirium's own no-spam
-        # gate (already walking -> no replacement move) leaves it alone.
-        time.sleep(1.5)
-        jx1, jy1 = unit_pos(P, subjJ)
-        d_to_target_end = ((jx1 - (-19)) ** 2 + (jy1 - (-10)) ** 2) ** 0.5
-        closed_gap_j = d_to_target_start - d_to_target_end
-
-        if cleared_j and still_delirious and closed_gap_j < 2.0:
+        if jverdict == "ok":
             print(f"  [pass] episode-end cleanup fires even while still "
-                  f"delirious AND stops the in-flight pursuit "
-                  f"(still_delirious={still_delirious}, "
-                  f"closed only {closed_gap_j:.2f} tiles toward the old "
-                  f"target): {cleared_j}")
+                  f"delirious AND stops the in-flight pursuit: {jdetail}")
         else:
             ok = False
             print(f"  [FAIL] lash-out state or pursuit leaked while delirium "
-                  f"overlapped episode end: {lash_ai_flags(P, subjJ)} "
-                  f"(still_delirious={still_delirious}, "
-                  f"closed_gap={closed_gap_j:.2f})")
+                  f"overlapped episode end: {jverdict} — {jdetail} "
+                  f"({len(jsamples)} samples)")
+            print("         trace (game t, lash, brk, delir, tgt, speed, meander, comfort, "
+                  "stamina, pose, activity, knockedDown, x, y): " + " ".join(
+                f"({x.get('now', float('nan')):.2f},{int(bool(x.get('lash')))},"
+                f"{int(bool(x.get('brk')))},{int(bool(x.get('delir')))},"
+                f"{x.get('tgt')},{x.get('sp')},{x.get('mean')},{x.get('comf')},"
+                f"{x.get('stam')},{x.get('pose')},{x.get('act')},{x.get('kd')},"
+                f"{x.get('x')},{x.get('y')})" for x in jsamples))
 
         send(P, f"unit.setStat({subjJ},'blood_oxygen',1.0); return 'ok'")
         poll_until(10, lambda: not json.loads(send(P,
@@ -5420,16 +5927,34 @@ def main():
         wx0, wy0 = unit_pos(P, subj5)
         send(P, f"require('scripts.mental_state').forceBreak({subj5},'lash_out'); "
                 f"return 'ok'")
-        moved = poll_until(15, lambda: (lambda x, y:
-                (x - wx0) ** 2 + (y - wy0) ** 2 > 0.8)(*unit_pos(P, subj5)))
-        target5 = lash_target(P, subj5)
-        if moved and target5 == "nil":
+        # Wait on OBSERVED movement while the lash-out episode is active
+        # (#2975), not on net displacement inside a fixed window: see
+        # wander_episode_verdict.
+        wsamples = []
+        wverdict, wdetail = "waiting", ""
+        wdeadline = time.time() + WANDER_WAIT_CAP_S
+        while time.time() < wdeadline:
+            got = send_json(P, wander_sample_lua(subj5))
+            if isinstance(got, dict):
+                wsamples.append(got)
+            wverdict, wdetail = wander_episode_verdict(wsamples)
+            if wverdict != "waiting":
+                break
+            time.sleep(0.15)
+        else:
+            wverdict, wdetail = ("still" if any(x.get("lash") for x in wsamples)
+                                 else "never_active"), "wait capped; " + wdetail
+        if wverdict == "moved":
             print(f"  [pass] no eligible target -> agitated wander, no attack "
-                  f"goal (from {wx0:.1f},{wy0:.1f})")
+                  f"goal (from {wx0:.1f},{wy0:.1f}): {wdetail}")
         else:
             ok = False
-            print(f"  [FAIL] expected wander w/ no target: moved={bool(moved)} "
-                  f"target={target5!r}")
+            print(f"  [FAIL] expected wander w/ no target: {wverdict} — {wdetail} "
+                  f"(from {wx0:.1f},{wy0:.1f}, {len(wsamples)} samples)")
+            print("         trace (game t, lash, brk, tgt, x, y): " + " ".join(
+                f"({x.get('now', float('nan')):.2f},{int(bool(x.get('lash')))},"
+                f"{int(bool(x.get('brk')))},{x.get('tgt')},{x.get('x')},{x.get('y')})"
+                for x in wsamples))
         send(P, f"unit.setStat({subj5},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, subj5) != "break")
 
