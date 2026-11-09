@@ -462,6 +462,14 @@ def nine_b_should_restage(landed, graded_ok, dressed_ok, subject_dead, attempt):
                 and attempt < NINE_B_ATTEMPTS)
 
 
+def nine_c2_hit_wait_restage(hit, subject_dead, attempt):
+    """Whether 9c2's staged-hit wait is discarded and re-staged on fresh units
+    (#2976): only when no new hit was seen BECAUSE the subject is dead (nothing
+    was decided and nothing about the swap was observed) and an attempt is
+    left. A living subject that was never hit is a setup failure."""
+    return bool(not hit and subject_dead and attempt < NINE_C2_ATTEMPTS)
+
+
 def stand_down_attacker(port, lash, attacker):
     """End the attacker's own fight and keep both fighters standing.
 
@@ -5075,6 +5083,12 @@ def self_test():
           0.0 < NINE_C2_TOPUP_FRACTION < 1.0 and "* 0.9" in topup_stamina_lua(1))
     check("9c2 hit wait: the hit is still judged by the unchanged new-hit read of the last-attacker "
           "record", "unit.getLastAttacker(5)" in new_hit_poll_lua(5, 6, -1.0))
+    check("9c2 hit wait: a dead subject with no hit recorded and an attempt left -> restage",
+          nine_c2_hit_wait_restage(False, True, 1) is True)
+    check("9c2 hit wait: the last attempt, a hit that landed, or a LIVING subject never restages",
+          nine_c2_hit_wait_restage(False, True, NINE_C2_ATTEMPTS) is False
+          and nine_c2_hit_wait_restage(True, True, 1) is False
+          and nine_c2_hit_wait_restage(False, False, 1) is False)
     check("9b restage: a subject that died with 9a graded and the dressing held -> restage",
           nine_b_should_restage(False, True, True, True, 1) is True)
     check("9b restage: the last attempt never restages (the failure stands)",
@@ -7361,6 +7375,24 @@ def main():
             send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB},true); "
                     f"return 'ok'")
             hitB = poll_new_hit(P, lashB, attackerB, prevHitAtB)
+            if not hitB and nine_c2_hit_wait_restage(
+                    hitB, send(P, f"return unit.getPose({lashB})") == "dead", attemptB):
+                # The subject died (a neutered strike can be fatal, and a dead
+                # unit's last-attacker record is not readable), so no new hit
+                # could ever be seen on it: ungradable setup, not a swap
+                # failure. Discard the cluster and stage fresh units (#2976).
+                print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before a hit could "
+                      f"be recorded (wounds: {send_json(P, wounds_lua(lashB))}); discarding the "
+                      f"cluster, restaging on fresh units")
+                destroy_units(P, lashB, victimB, attackerB)
+                lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
+                prevHitAtB = -1.0
+                if neuterB:
+                    ok = False
+                    abortedB = True
+                    print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
+                    break
+                continue
             if not hitB:
                 ok = False
                 print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
