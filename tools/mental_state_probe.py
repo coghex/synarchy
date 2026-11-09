@@ -2040,9 +2040,13 @@ NINE_H_ATTEMPTS = 3
 #: boundary, and the units meander ~0.3 tiles/s from the moment they spawn:
 #: a traced run read it at dx 8.96 (ineligible), which leaves one candidate
 #: and no ranking to grade (and, with the intended one drifting out instead,
-#: picks the decoy). Both candidates now sit well inside the range.
-NINE_H_NEAR = 4.5
-NINE_H_FAR = 5.8
+#: picks the decoy). Both candidates now sit well inside the range, and the
+#: offsets are SNAPPED (unit.setPos next to the subject's current position,
+#: arrival confirmed) just before the decision, because a few seconds of
+#: spawn-time wandering moved the 0.6-tile Euclidean margin of a first
+#: attempt by more than that in three attempts out of three.
+NINE_H_NEAR = 5.0
+NINE_H_FAR = 6.0
 
 
 def chebyshev_geometry_lua(subj, near, far):
@@ -2086,11 +2090,90 @@ def chebyshev_geometry_problems(geom):
     return out
 
 
+def live_unit_ids(port):
+    """Every uid unit.getAllIds lists right now (None when unreadable)."""
+    r = send_json(port, "return { ids = unit.getAllIds() or {} }")
+    ids = r.get("ids") if isinstance(r, dict) else None
+    if not isinstance(ids, list):
+        return None
+    return sorted(i for i in ids if isinstance(i, int) and not isinstance(i, bool))
+
+
+#: How long retire_other_units waits for the queued destroys to take effect.
+RETIRE_WAIT_S = 10.0
+
+
+def retire_other_units(port, keep, wait_s=RETIRE_WAIT_S):
+    """Remove every unit except `keep` (the run's main subject, which the
+    final contamination guard still reads) and CONFIRM they are gone.
+
+    unit.destroy only queues a UnitDestroy (Units/Spawn.hs), so an
+    acknowledged call proves nothing: the units are polled until
+    unit.getAllIds no longer lists any of them. Answers (victims, remaining):
+    `remaining` is what was still listed when the wait ended (empty = clean;
+    None = the id list could not be read). Taking the live list rather than a
+    hand-kept list of handles is what covers units a phase left behind
+    without naming them (#2976: 9f's surviving subject, 4b's technomule)."""
+    before = live_unit_ids(port)
+    if before is None:
+        return [], None
+    victims = [u for u in before if u not in set(keep)]
+    destroy_units(port, *victims)
+    left = {"v": victims}
+
+    def settled():
+        now = live_unit_ids(port)
+        if now is None:
+            return None
+        left["v"] = [u for u in victims if u in set(now)]
+        return True if not left["v"] else None
+    poll_until(wait_s, settled)
+    return victims, left["v"]
+
+
+def retirement_problem(victims, remaining):
+    """None when every retired unit is confirmed gone; otherwise a sentence."""
+    if remaining is None:
+        return "the live-unit list could not be read to confirm the cleanup"
+    if remaining:
+        return (f"{len(remaining)} of {len(victims)} retired unit(s) {remaining} were still "
+                f"listed after the wait; cleanup unconfirmed")
+    return None
+
+
+def snap_chebyshev_candidates(port, subj, near, far):
+    """Stop both candidates and put them at their intended offsets from the
+    subject's CURRENT position (unit.setPos enqueues a teleport on the unit
+    thread, so arrival is confirmed). True once both stand within 0.3 tiles
+    of their targets."""
+    base = send_json(port, " ".join((
+        f"local S, N, F = {subj}, {near}, {far}; local i = unit.getInfo(S);",
+        "if not i then return { ok = false } end;",
+        "unit.stop(N); unit.stop(F);",
+        f"unit.setPos(N, i.gridX + {NINE_H_NEAR}, i.gridY + {NINE_H_NEAR});",
+        f"unit.setPos(F, i.gridX + {NINE_H_FAR}, i.gridY);",
+        "return { ok = true, x = i.gridX, y = i.gridY }")))
+    if not isinstance(base, dict) or base.get("ok") is not True:
+        return False
+    bx, by = base["x"], base["y"]
+
+    def arrived():
+        pos = send_json(port, " ".join((
+            f"local n, f = unit.getInfo({near}), unit.getInfo({far});",
+            "if not n or not f then return { ok = false } end;",
+            "return { ok = true, nx = n.gridX, ny = n.gridY, fx = f.gridX, fy = f.gridY }")))
+        if not isinstance(pos, dict) or pos.get("ok") is not True:
+            return None
+        return True if (math.hypot(pos["nx"] - (bx + NINE_H_NEAR), pos["ny"] - (by + NINE_H_NEAR)) < 0.3
+                        and math.hypot(pos["fx"] - (bx + NINE_H_FAR), pos["fy"] - by) < 0.3) else None
+    return poll_until(5, arrived) is not None
+
+
 def chebyshev_ranking_phase(port):
     """Phase 9h (#717, #2976): nearest-target ranking uses Chebyshev distance
-    (matching eligibility's metric), not squared Euclidean. (4.5,4.5) is
-    nearer than (5.8,0) under Chebyshev (4.5 vs 5.8) despite (5.8,0) being
-    nearer under squared Euclidean (33.6 vs 40.5).
+    (matching eligibility's metric), not squared Euclidean. (5,5) is nearer
+    than (6,0) under Chebyshev (5 vs 6) despite (6,0) being nearer under
+    squared Euclidean (36 vs 50).
 
     Graded ONLY on a selection whose preconditions held at the decision:
     exactly the two candidates are eligible for the subject, and each is
@@ -2105,9 +2188,12 @@ def chebyshev_ranking_phase(port):
         poll_until(5, lambda: mstate(port, subj) == "stable")
         near = spawn_acolyte(port, -15 + NINE_H_NEAR, 40 + NINE_H_NEAR)   # (a, a)
         far = spawn_acolyte(port, -15 + NINE_H_FAR, 40)                    # (b, 0)
+        snap_ok = snap_chebyshev_candidates(port, subj, near, far)
         stray = isolation_problem(port, subj, (near, far))
         geom = send_json(port, chebyshev_geometry_lua(subj, near, far))
-        problems = ([stray] if stray else []) + chebyshev_geometry_problems(geom)
+        problems = (([] if snap_ok else ["the candidates' teleport next to the subject never "
+                                         "took effect"])
+                    + ([stray] if stray else []) + chebyshev_geometry_problems(geom))
 
         def target():
             t = lash_target(port, subj)
@@ -4180,7 +4266,66 @@ def self_test():
 
     check("9h: the staged offsets separate the metrics and sit well inside the eight-tile range",
           NINE_H_NEAR < NINE_H_FAR < NINE_H_NEAR * 2 ** 0.5 and NINE_H_FAR <= 6.0
-          and NINE_H_NEAR * 2 ** 0.5 <= 6.5)
+          and NINE_H_NEAR * 2 ** 0.5 <= 7.1)
+    def fake_snap(base, pos):
+        """snap_chebyshev_candidates with fakes: the base read answers `base`,
+        later reads answer `pos` (None = never arrives)."""
+        g = globals()
+        saved = {k: g[k] for k in ("send_json", "poll_until")}
+        calls = []
+
+        def fsj(port, lua, **kw):
+            calls.append(lua)
+            return base if "unit.setPos" in lua else pos
+        g.update(send_json=fsj, poll_until=lambda sec, fn, interval=0.3: fn())
+        try:
+            return snap_chebyshev_candidates(1, 9, 10, 11), calls
+        finally:
+            g.update(saved)
+    base = {"ok": True, "x": 0.0, "y": 0.0}
+    arrived = {"ok": True, "nx": NINE_H_NEAR, "ny": NINE_H_NEAR, "fx": NINE_H_FAR, "fy": 0.0}
+    check("9h snap: both candidates arriving at their offsets -> True, after a stop+setPos chunk",
+          fake_snap(base, arrived)[0] is True and "unit.stop(N)" in fake_snap(base, arrived)[1][0])
+    check("9h snap: a candidate still 1 tile from its offset -> False",
+          fake_snap(base, dict(arrived, nx=arrived["nx"] + 1.0))[0] is False)
+    check("9h snap: an unreadable subject -> False", fake_snap({"ok": False}, arrived)[0] is False)
+    check("9h snap: positions unreadable after the snap -> False",
+          fake_snap(base, {"ok": False})[0] is False)
+    # retire_other_units / retirement_problem (#2976): 9g's cleanup is confirmed.
+    def fake_retire(lists, keep=(1,)):
+        """retire_other_units with fakes: live_unit_ids answers `lists` in turn
+        (the last repeats); records the destroyed uids. Answers
+        (victims, remaining, destroyed)."""
+        g = globals()
+        saved = {k: g[k] for k in ("live_unit_ids", "destroy_units", "poll_until")}
+        seq, destroyed = list(lists), []
+
+        def f_live(port):
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+        g.update(live_unit_ids=f_live, destroy_units=lambda port, *u: destroyed.extend(u),
+                 poll_until=lambda sec, fn, interval=0.3: next((v for _ in range(4) if (v := fn())), None))
+        try:
+            v, r = retire_other_units(1, keep)
+            return v, r, destroyed
+        finally:
+            g.update(saved)
+    v, r, d = fake_retire([[1, 19, 20, 50], [1]])
+    check("9g cleanup: every unit but the kept subject is destroyed and, once gone, confirmed",
+          v == [19, 20, 50] and d == [19, 20, 50] and r == [] and retirement_problem(v, r) is None)
+    v, r, d = fake_retire([[1, 19, 20], [1, 20], [1]])
+    check("9g cleanup: a DELAYED removal (one unit still listed on the first re-read) is waited for",
+          r == [] and retirement_problem(v, r) is None)
+    v, r, d = fake_retire([[1, 19, 20], [1, 20]])
+    check("9g cleanup: a unit that never leaves is a named setup problem",
+          r == [20] and "cleanup unconfirmed" in (retirement_problem(v, r) or ""))
+    v, r, d = fake_retire([None])
+    check("9g cleanup: an unreadable unit list is a problem, and nothing is destroyed",
+          r is None and d == [] and retirement_problem(v, r) is not None)
+    v, r, d = fake_retire([[1]])
+    check("9g cleanup: nothing to retire is clean", v == [] and r == [] and retirement_problem(v, r) is None)
+    check("9g cleanup: the kept subject is never destroyed even when listed",
+          1 not in fake_retire([[1, 2], [1]])[2])
+
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -6651,9 +6796,22 @@ def main():
         destroy_units(P, subjK, targetK, muleK)
 
         # 9g. No eligible target: agitated wander, keep searching.
+        # Every earlier phase's leftover unit is retired first, with the removal
+        # CONFIRMED (#2976): 9f's surviving subject wandered into this range,
+        # and nothing but a position, once, ever kept it out. The main subject
+        # stays for the final contamination guard.
+        victims9g, remaining9g = retire_other_units(P, keep=(uid,))
+        cleanup9g = retirement_problem(victims9g, remaining9g)
+        if cleanup9g:
+            ok = False
+            print(f"  [FAIL] setup: 9g's isolation not established ({cleanup9g})")
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles
         set_wellbeing(P, subj5, 1.0, 0.0)
         poll_until(5, lambda: mstate(P, subj5) == "stable")
+        stray9g = isolation_problem(P, subj5, ())
+        if stray9g and not cleanup9g:
+            ok = False
+            print(f"  [FAIL] setup: 9g's subject is not isolated ({stray9g})")
         wx0, wy0 = unit_pos(P, subj5)
         send(P, f"require('scripts.mental_state').forceBreak({subj5},'lash_out'); "
                 f"return 'ok'")
