@@ -1815,6 +1815,15 @@ def episode_end_verdict(samples, meander, target, tpos):
         allowed = pace * free + EPISODE_END_LEAK_FACTOR * meander * (dt - free) + 0.05
         closing = (math.hypot(u["x"] - tpos[0], u["y"] - tpos[1])
                    - math.hypot(v["x"] - tpos[0], v["y"] - tpos[1]))
+        # The locomotion speed READ on a post-grace sample is direct evidence
+        # of the leg then running, and no interval average can hide it: a
+        # leg still at pursuit pace past the grace, on an interval that moved
+        # toward the old target, was not cancelled.
+        if (_num(v.get("sp")) and v["sp"] > EPISODE_END_LEAK_FACTOR * meander
+                and closing >= 0.7 * step):
+            return "leaked", (f"read {v['sp']:.2f} tiles/s while still heading for the "
+                              f"old target {v['now'] - tb:.2f} s after the cleanup "
+                              f"(delirium's wander tops out at {meander:.2f})")
         if step > allowed and closing >= 0.7 * step:
             return "leaked", (f"still heading for the old target: {step:.2f} tiles "
                               f"{u['now'] - tb:.2f}-{v['now'] - tb:.2f} s after the "
@@ -3732,6 +3741,14 @@ def self_test():
                  clean(1.65, 9.88, 1.2), clean(2.30, 10.0, 0.0), clean(2.95, 10.0, 0.0)]
     check("episode end: a leg with a short way left that finishes between samples -> leaked",
           episode_end_verdict(short_leg, MEAN, TGT, TPOS)[0] == "leaked")
+    # round-2 review regression: a short leg that finishes between samples AFTER
+    # the grace (the arrival read comes a console round trip later, so no
+    # interval's distance gives it away), then ordinary sideways wander
+    short_fast = [es(0.0, 8.0, 1.2), es(0.5, 8.6, 1.2), clean(1.0, 9.4, 1.2),
+                  clean(1.35, 9.82, 1.2), clean(2.0, 10.0, 0.0)]
+    short_fast += [dict(clean(2.0 + 0.35 * i, 10.0, 0.3), y=0.2 * i) for i in range(1, 5)]
+    check("episode end: a short leg read at pursuit speed past the grace, then arrival -> leaked",
+          episode_end_verdict(short_fast, MEAN, TGT, TPOS)[0] == "leaked")
     check("episode end: the same short leg stopped at the cleanup passes",
           episode_end_verdict([es(0.0, 8.0, 1.2), es(0.5, 8.6, 1.2), clean(1.0, 9.1, 1.2),
                                clean(1.65, 9.15, 0.3), clean(2.30, 9.2, 0.3),
