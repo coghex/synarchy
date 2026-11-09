@@ -148,12 +148,13 @@ Each is a run of the probe as committed at the head named; none is the acceptanc
 | dev5 | `94f40015e` / `d810fc4a` | 3 (aborted) | 2 PASS | 9b landed once: the subject died before it could swing |
 | dev6 | `c9c90b849` / `8b5e4469` | 2 (aborted) | 1 PASS | 9k once (run 2): the technomule had drifted to 1.78 tiles from the subject, outside the 1.0 + 0.5 reach, so no retaliation opportunity was ever observed (the new observer called it ungradable); the observer was first installed after the break (a smoke run saw the target knocked out within half a second), then moved into the forcing chunk |
 | dev7 | `6222348c1` / `b3eefdf7` | 15 | 15 PASS | every listed check observed passing 15/15; superseded because review round 1 then required the 4a, 9h and 9k changes below (a 9c2 dead-subject restage and one 9j restage occurred in run 8) |
+| dev8 | `9d78abd55` / `d0764fee` | 15 | 14 PASS | every check listed in #2976 passed 15/15; **9j** failed once (run 12, the #2979-class leak below). After this batch review round 2 found two 9k false-pass paths (the opportunity was judged on snapshots, not the execute's own reads; a raised execute was not preserved), fixed in the head above |
 
 Round-1 review (Codex) found three false-pass gaps in that head, all fixed since: the pace-scaled 4a threshold
 could end the wait on a few early samples; 9h's geometry was a snapshot taken before the break rather than what
 the AI tick read; 9k passed on sampled target ids without proving a retaliation opportunity occurred.
 
-### After: head `9d78abd55`, probe sha `d0764fee` (15 runs)
+### After: head `c96354991`, probe sha `85767a3e` (15 runs)
 
 | run | overall | 4a wander | 4b flee | 9b dressing | 9b landed | 9c2 | 9g wander | 9h Chebyshev | 9j end pursuit | 9k technomule | other failing |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -168,12 +169,12 @@ the AI tick read; 9k passed on sampled target ids without proving a retaliation 
 | 9 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 10 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 11 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
-| 12 | FAIL | pass | pass | pass | pass | pass | pass | pass | FAIL | pass | - |
+| 12 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 13 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 14 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 15 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 
-runs=15 overall-fail=1
+runs=15 overall-fail=0
   4a wander: pass=15 FAIL=0 not-observed=0
   4b flee: pass=15 FAIL=0 not-observed=0
   9b dressing: pass=15 FAIL=0 not-observed=0
@@ -181,11 +182,15 @@ runs=15 overall-fail=1
   9c2: pass=15 FAIL=0 not-observed=0
   9g wander: pass=15 FAIL=0 not-observed=0
   9h Chebyshev: pass=15 FAIL=0 not-observed=0
-  9j end pursuit: pass=14 FAIL=1 not-observed=0
+  9j end pursuit: pass=15 FAIL=0 not-observed=0
   9k technomule: pass=15 FAIL=0 not-observed=0
 
-Every check listed in #2976 (4a, 4b, 9b dressing and landed attack, 9c2, 9g, 9h, 9k) was observed
-passing in all 15 runs. The one failing run is outside the listed checks:
+All 15 runs PASS and every listed check (4a, 4b, 9b dressing and landed attack, 9c2, 9g, 9h, 9k) plus
+9j was observed passing in every run (0 not observed). Observed restages: 9j once in runs 2 and 3
+(the existing #2975 restage, `27 never pursued 28`) and 9c2 once in run 15 (the subject died, a fresh
+cluster passed).
+
+### The 9j failure of development batch dev8 (out of scope, #2979)
 
 - **Run 12, 9j** (#2975's episode-end pursuit): after the lash-out episode ended with delirium
   overlapping, the unit kept walking toward the old target at 0.7099 tiles/s for at least 1.5 game s
@@ -200,10 +205,8 @@ passing in all 15 runs. The one failing run is outside the listed checks:
   Trace (game t, lash, brk, delir, tgt, speed, meander, comfort, x): (135.92,1,1,0,28,1.314,0.309,0.617,-23.33) (136.23,1,1,1,28,1.314,...,-22.97)
   then, with the episode over (lash 0, brk 0, tgt none): (136.87,0,0,1,False,0.7099,0.309,0.617,-22.39) (137.25,...,0.7099,...,-22.18)
   (137.59,...,-21.99) (137.97,...,-21.78) (138.31,...,-21.59) (138.68,...,-21.38): constant 0.7099 tiles/s toward the old target.
-  Evidence: `after3/transcript-12.txt` and `after3/kept-failures/`.
+  Evidence: `after3/transcript-12.txt` and `after3/kept-failures/` in the local evidence folder (the dev8 batch).
 
-Observed restages in this batch: 9k attempt 1 in runs 4 and 12 (no valid retaliation opportunity: discarded,
-the fresh cluster passed). No other check discarded a setup.
 
 ## Observations outside this issue's scope
 
