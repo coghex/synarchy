@@ -1680,6 +1680,424 @@ def wander_episode_verdict(samples):
     return "still", f"walked only {path:.2f} tiles while lash-out was active"
 
 
+#: 4a/4b (#2976): a forced wander or flee break is graded on what the unit
+#: does WHILE the break is active, in proportion to its own pace. The old
+#: checks asked for a fixed 0.9 tiles of net displacement (4a) and a fixed
+#: 2.0 tiles farther from the mule (4b). Both silently assumed a unit that
+#: walks at about 0.66 tiles/s; acolytes do not: endurance is drawn per unit
+#: (range 1.0) and the whole-band modifiers (exhaustion, hunger, injuries)
+#: scale ordered and meander speed together, so a slow unit covers about
+#: 0.85 x ordered x 6 s = 1.3-2.0 tiles of a six-second flee and 0.5-1.0 of a
+#: six-second wander, under both fixed thresholds, while doing exactly what
+#: the contract says (observed: the flee runs at its ordered speed, straight
+#: away from the mule). Pinning endurance at 0.4 reproduces both failures
+#: together. The predicates below keep the claim and drop the assumption.
+#:
+#: A wander break must WALK: at least WANDER_MIN_PATH tiles of path while
+#: the wander break is active (9g's walked-path predicate, 'wander_episode_
+#: verdict', on this break's own active flag rather than lash-out's). A flee
+#: break must run AWAY from the mule at the unit's ordered speed:
+FLEE_MIN_ACTIVE_S = 3.0        # game s of the active break that must be observed
+FLEE_MIN_WALK_SAMPLES = 3      # active samples in which the unit is walking
+FLEE_PACE_FRACTION = 0.8       # median walking speed >= this x ordered speed
+FLEE_GAIN_FRACTION = 0.6       # distance gained from the mule >= this x ordered x active s
+FLEE_PATH_FRACTION = 0.6       # path walked >= this x ordered x active s
+FLEE_DIRECT_FRACTION = 0.7     # gain >= this x path: away, not sideways
+
+
+def break_sample_lua(uid, mule=None):
+    """One console read of what 4a/4b judge (#2976): the clock, position,
+    locomotion speed (unit.getInfo's moveSpeed, 0 when not walking), whether
+    the unit is mid-break and WHICH behaviour it rolled, its activity, its
+    ordered speed now, and the mule's position (4b)."""
+    return " ".join((
+        f"local u = {uid};",
+        "local ms = require('scripts.mental_state');",
+        "local i = unit.getInfo(u);",
+        "local mi = " + (f"unit.getInfo({mule})" if mule is not None else "nil") + ";",
+        "local brk = ms.isBreaking(u) == true;",
+        "return { now = engine.gameTime(), x = i and i.gridX or nil, y = i and i.gridY or nil,",
+        " sp = i and i.moveSpeed or nil, brk = brk,",
+        " beh = brk and ms.breakBehavior(u) or false,",
+        " act = tostring(unit.getActivity(u)),",
+        " ord = require('scripts.movement_speed').ordered(u),",
+        " mean = require('scripts.movement_speed').meander(u),",
+        " mx = mi and mi.gridX or nil, my = mi and mi.gridY or nil }"))
+
+
+def _xy(x):
+    return (isinstance(x.get("x"), (int, float)) and not isinstance(x.get("x"), bool)
+            and isinstance(x.get("y"), (int, float)) and not isinstance(x.get("y"), bool)
+            and math.isfinite(x["x"]) and math.isfinite(x["y"]))
+
+
+def _active_run(samples, behavior):
+    """The samples on which the unit was mid-break with `behavior` and had a
+    readable position, plus the other behaviours seen mid-break."""
+    act = [x for x in samples if x.get("brk") and x.get("beh") == behavior and _xy(x)]
+    other = {x.get("beh") for x in samples if x.get("brk") and x.get("beh") != behavior}
+    return act, other
+
+
+def _break_ended(samples):
+    return bool(samples) and not samples[-1].get("brk") and any(x.get("brk") for x in samples)
+
+
+def _active_path(samples, behavior):
+    """Path length summed over CONSECUTIVE active samples (a jump across a
+    stretch where the break was not active is not a walk)."""
+    path, prev = 0.0, None
+    for x in samples:
+        on = bool(x.get("brk") and x.get("beh") == behavior and _xy(x))
+        if on and prev is not None:
+            path += math.hypot(x["x"] - prev["x"], x["y"] - prev["y"])
+        prev = x if on else None
+    return path
+
+
+#: 4a (#2976): a unit whose meander pace is so low that WANDER_MIN_PATH is
+#: more than it could walk in the observed break is asked for this fraction
+#: of what it could walk instead (meander x active game seconds). A normal
+#: acolyte (0.2-0.35 tiles/s over a six-second break) is still held to the
+#: full WANDER_MIN_PATH; a stationary unit never passes.
+WANDER_PACE_FRACTION = 0.4
+
+
+def wander_break_verdict(samples, capped=False):
+    """Grade phase 4a's samples (oldest first; see break_sample_lua).
+
+    Answers (verdict, detail): 'moved' (the unit walked at least
+    min(WANDER_MIN_PATH, WANDER_PACE_FRACTION x meander x active seconds)
+    tiles while its wander break was active), 'waiting' (not over, nothing
+    decided), 'still' (the break ended, or the wait capped, with less
+    walked), 'never_active' (it was never mid-break), 'wrong_behavior' (a
+    break of another behaviour ran). Movement outside the active break never
+    counts: the setup stops the unit first, so the only movement the break
+    can be credited with is its own, and once it ends the ordinary AI wanders
+    by itself."""
+    act, other = _active_run(samples, "wander")
+    path = _active_path(samples, "wander")
+    need = WANDER_MIN_PATH
+    means = [x["mean"] for x in act if isinstance(x.get("mean"), (int, float)) and x["mean"] > 0]
+    if means and len(act) > 1:
+        need = min(WANDER_MIN_PATH,
+                   WANDER_PACE_FRACTION * (sum(means) / len(means)) * (act[-1]["now"] - act[0]["now"]))
+    if path >= need and path > 0:
+        return "moved", f"walked {path:.2f} tiles (need {need:.2f}) while the wander break was active"
+    if not act:
+        if other:
+            return "wrong_behavior", f"the break rolled {sorted(map(str, other))}, not wander"
+        if _break_ended(samples) or capped:
+            return "never_active", "the wander break was never observed active"
+        return "waiting", "no active wander break yet"
+    if _break_ended(samples) or capped:
+        return "still", (f"walked only {path:.2f} tiles (need {need:.2f}) while the wander break "
+                         f"was active" + ("; wait capped" if capped and not _break_ended(samples) else ""))
+    return "waiting", f"walked {path:.2f} tiles (need {need:.2f}) so far"
+
+
+def flee_break_verdict(samples, capped=False):
+    """Grade phase 4b's samples (oldest first; see break_sample_lua with the
+    mule): while the flee break is active the unit must run AWAY from the
+    mule at its ordered speed, judged from the active samples alone, after
+    the break has ended (or the wait capped).
+
+    Answers (verdict, detail): 'ok'; 'waiting'; 'never_active'; 'wrong_
+    behavior'; 'uncovered' (fewer than FLEE_MIN_ACTIVE_S game s of the active
+    break observed, or the mule or ordered speed unreadable: nothing
+    attributable, a setup failure); 'no_run' (too few walking samples, or a
+    median walking speed under FLEE_PACE_FRACTION x ordered); 'not_away' (it
+    walked at pace but gained less than FLEE_GAIN_FRACTION x ordered x
+    seconds, or gained under FLEE_DIRECT_FRACTION of its path)."""
+    act, other = _active_run(samples, "flee")
+    if not _break_ended(samples) and not capped:
+        return "waiting", "the break is still running" if act else "no active flee break yet"
+    if not act:
+        if other:
+            return "wrong_behavior", f"the break rolled {sorted(map(str, other))}, not flee"
+        return "never_active", "the flee break was never observed active"
+    span = act[-1]["now"] - act[0]["now"] if all(
+        isinstance(x.get("now"), (int, float)) for x in (act[0], act[-1])) else 0.0
+    ords = [x["ord"] for x in act if isinstance(x.get("ord"), (int, float)) and x["ord"] > 0]
+    mules = [(x.get("mx"), x.get("my")) for x in act]
+    if (span < FLEE_MIN_ACTIVE_S or not ords
+            or not all(isinstance(v, (int, float)) and math.isfinite(v) for m in (mules[0], mules[-1]) for v in m)):
+        return "uncovered", (f"only {span:.1f} game s of the active break observed, or the "
+                             f"mule/ordered speed unreadable (need {FLEE_MIN_ACTIVE_S} s)")
+    ordered = sum(ords) / len(ords)
+    walking = sorted(x["sp"] for x in act if x.get("act") in ("walking", "running")
+                     and isinstance(x.get("sp"), (int, float)))
+    path = _active_path(samples, "flee")
+    gain = (math.hypot(act[-1]["x"] - mules[-1][0], act[-1]["y"] - mules[-1][1])
+            - math.hypot(act[0]["x"] - mules[0][0], act[0]["y"] - mules[0][1]))
+    note = (f"over {span:.1f} game s: gained {gain:.2f} tiles from the mule on {path:.2f} of path, "
+            f"{len(walking)} walking samples, ordered {ordered:.2f} tiles/s")
+    if len(walking) < FLEE_MIN_WALK_SAMPLES:
+        return "no_run", f"the unit was walking in only {len(walking)} active samples {note}"
+    median = walking[len(walking) // 2]
+    if median < FLEE_PACE_FRACTION * ordered:
+        return "no_run", f"median walking speed {median:.2f} is under {FLEE_PACE_FRACTION} x ordered; {note}"
+    if (gain < FLEE_GAIN_FRACTION * ordered * span or path < FLEE_PATH_FRACTION * ordered * span
+            or gain < FLEE_DIRECT_FRACTION * path):
+        return "not_away", note
+    return "ok", note + f", median speed {median:.2f}"
+
+
+def nearest_other_uid(port, uid):
+    """The uid unit_ai_mental.lua's nearestOtherUnit would flee from now: the
+    nearest live other unit strictly within 15 tiles (None when none)."""
+    r = send_json(port, " ".join((
+        f"local u = {uid}; local me = unit.getInfo(u); local best, bd = nil, 15 * 15;",
+        "for _, o in ipairs(unit.getAllIds() or {}) do",
+        " if o ~= u and unit.getPose(o) ~= 'dead' then local oi = unit.getInfo(o);",
+        "  if oi and me then local dx, dy = oi.gridX - me.gridX, oi.gridY - me.gridY;",
+        "   local d2 = dx * dx + dy * dy; if d2 < bd then best, bd = o, d2 end end end end;",
+        "return { uid = best or false }")))
+    uid_ = r.get("uid") if isinstance(r, dict) else None
+    return uid_ if isinstance(uid_, int) and not isinstance(uid_, bool) else None
+
+
+def run_break_phase(port, uid, behavior, verdict_fn, mule=None, cap_s=None):
+    """Force `behavior` on a STILL unit and sample until the break ends.
+
+    The unit is stopped in the same console chunk that forces the break, so
+    any movement while it is active is the break's own (the short-circuit
+    only issues a move when the unit is not already walking, so a unit
+    mid-leg would otherwise carry on at its meander pace until the leg ended,
+    and the break, six game seconds long here, could be over first).
+    Answers (samples, verdict, detail)."""
+    cap = WANDER_WAIT_CAP_S if cap_s is None else cap_s
+    send(port, f"unit.stop({uid}); require('scripts.mental_state').forceBreak({uid},'{behavior}'); "
+               f"return 'ok'")
+    samples, verdict, detail = [], "waiting", ""
+    deadline = time.time() + cap
+    while time.time() < deadline:
+        got = send_json(port, break_sample_lua(uid, mule))
+        if isinstance(got, dict):
+            samples.append(got)
+        verdict, detail = verdict_fn(samples)
+        if verdict != "waiting":
+            break
+        time.sleep(0.15)
+    else:
+        verdict, detail = verdict_fn(samples, capped=True)
+    return samples, verdict, detail
+
+
+def break_trace_line(samples):
+    return " ".join(
+        f"({x.get('now', float('nan')):.2f},{int(bool(x.get('brk')))},{x.get('beh')},"
+        f"{x.get('act')},{x.get('sp')},{x.get('x')},{x.get('y')})" for x in samples[-40:])
+
+
+def eligible_neighbours(port, subj):
+    """The uids the PRODUCTION lash-out eligibility predicate admits for
+    `subj` right now (scripts/unit_ai_mental.lua lashoutPolicy.eligible:
+    alive, standing-or-down-but-not-collapsed, not a technomule, within the
+    eight-tile Chebyshev range). Fixture isolation is observed with the
+    policy's own rule rather than assumed from where units were once put
+    (#2976: 9i's target, left alive, wandered into 9k's range)."""
+    r = send_json(port, " ".join((
+        f"local u = {subj}; local me = unit.getInfo(u); local out = {{}};",
+        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
+        "for _, o in ipairs(unit.getAllIds() or {}) do",
+        " if me and pol.eligible(u, me, o) then out[#out + 1] = o end end;",
+        "return { ids = out }")))
+    ids = r.get("ids") if isinstance(r, dict) else None
+    return sorted(i for i in ids if isinstance(i, int)) if isinstance(ids, list) else None
+
+
+def isolation_problem(port, subj, allowed):
+    """None when exactly the `allowed` uids are eligible lash-out targets for
+    `subj`; otherwise a sentence naming the strays (or the unreadable read)."""
+    got = eligible_neighbours(port, subj)
+    if got is None:
+        return f"the eligible-neighbour read for {subj} failed"
+    strays = sorted(set(got) - set(allowed))
+    missing = sorted(set(allowed) - set(got))
+    if not strays and not missing:
+        return None
+    return (f"unit(s) eligible for {subj}'s lash-out {got}: unrelated {strays}, "
+            f"intended-but-ineligible {missing}")
+
+
+def destroy_units(port, *uids):
+    """Remove finished fixture units so nothing of one scenario can walk into
+    a later one's range (the ordinary AI wanders every live unit)."""
+    for u in uids:
+        if u is not None:
+            send(port, f"unit.destroy({u}); return 'ok'")
+
+
+def neuter_fighters(port, *uids):
+    """Verified neuter (as 9a's staging): answers a problem sentence, or
+    None when every setter and the read-back took."""
+    snap = send_json(port, neuter_chunk(tuple(uids)), timeout=15.0)
+    problems = neuter_snapshot_problems(snap, tuple(uids))
+    return "neuter not established: " + "; ".join(problems) if problems else None
+
+
+def landed_poll_lua(lash, attacker):
+    """One console read for 9b: the attacker's record of who last hit it and
+    when, with the subject's lash-out episode window (mental_since to
+    mental_until, the episode that must own the hit)."""
+    return " ".join((
+        f"local a = unit.getLastAttacker({attacker});",
+        f"local m = require('scripts.mental_state').summary({lash});",
+        "return { uid = a and a.uid or false, at = a and a.at or false,",
+        " since = m.since, ends = m.endsAt, state = m.state, behavior = m.behavior or false,",
+        " now = engine.gameTime() }"))
+
+
+def landed_in_episode(rec, lash):
+    """True when `rec` (a landed_poll_lua reply) proves `lash` LANDED a hit
+    on the attacker during its current lash-out episode: the attacker's
+    last-attacker record names `lash` AND carries a game time inside the
+    episode (mental_since <= at <= mental_until). Identity alone is not
+    enough (#2976): the record is stamped by every landed hit, so one from
+    before the episode, or an ordinary swing after it expired, would satisfy
+    it, and an attack command or attempted swing never writes it at all."""
+    if not isinstance(rec, dict) or rec.get("uid") != lash:
+        return False
+    at, since, ends = rec.get("at"), rec.get("since"), rec.get("ends")
+    return (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in (at, since, ends))
+            and since <= at <= ends and rec.get("state") == "break")
+
+
+def nine_b_diag_lua(lash, attacker):
+    """What a 9b failure needs to be attributed: both fighters' pose,
+    activity, knockdown, stamina and position, the subject's lash-out target,
+    the clock."""
+    return " ".join((
+        f"local L, A = {lash}, {attacker}; local li, ai = unit.getInfo(L), unit.getInfo(A);",
+        "local s = require('scripts.unit_ai').getState(L);",
+        "return { now = engine.gameTime(), tgt = s and s.attackTargetUid or false,",
+        " lpose = tostring(unit.getPose(L)), lact = tostring(unit.getActivity(L)),",
+        " lkd = li and li.knockedDown == true or false, lstam = unit.getStat(L, 'stamina'),",
+        " apose = tostring(unit.getPose(A)), aact = tostring(unit.getActivity(A)),",
+        " akd = ai and ai.knockedDown == true or false,",
+        " lx = li and li.gridX, ly = li and li.gridY, ax = ai and ai.gridX, ay = ai and ai.gridY }"))
+
+
+def stage_nine_c2_units(port):
+    """9c2's three fixture units on their own cluster, both fighters
+    neutered with the neuter READ BACK (the old unverified setters let a
+    staged hit kill the subject: a traced run had the subject dead 1.5 s
+    after the hit, so 9c2 had no one to grade). Answers (lash, victim,
+    attacker, problem)."""
+    lashB = spawn_acolyte(port, 0, 20)
+    set_wellbeing(port, lashB, 1.0, 0.0)
+    poll_until(5, lambda: mstate(port, lashB) == "stable")
+    victimB = spawn_acolyte(port, 1, 20)     # eligible target, stays live
+    attackerB = spawn_acolyte(port, -1, 20)  # becomes the disqualified "recent attacker"
+    return lashB, victimB, attackerB, neuter_fighters(port, attackerB, lashB)
+
+
+def wounds_lua(uid):
+    """The unit's wounds as flat scalar records (up to 8), with its pose:
+    evidence of what a staged hit did to a subject that collapsed or died."""
+    return " ".join((
+        f"local w = unit.getWounds({uid}) or {{}}; local out = {{}};",
+        "for i = 1, math.min(#w, 8) do local r = {};",
+        " for k, v in pairs(w[i]) do local t = type(v);",
+        "  if t == 'number' or t == 'string' or t == 'boolean' then r[k] = v end end;",
+        " out[#out + 1] = r end;",
+        f"return {{ pose = tostring(unit.getPose({uid})), n = #w, wounds = out }}"))
+
+
+#: 9h (#2976): the candidates must be eligible and must distinguish the two
+#: metrics at the moment the break is forced, or the selection says nothing
+#: about Chebyshev ranking.
+NINE_H_ATTEMPTS = 3
+
+
+def chebyshev_geometry_lua(subj, near, far):
+    """ONE console chunk: read both candidates' offset from the subject,
+    pose and the production eligibility verdict, THEN force the lash-out
+    break, so the reading is the geometry the first decision sees."""
+    return " ".join((
+        f"local S, N, F = {subj}, {near}, {far};",
+        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
+        "local me = unit.getInfo(S);",
+        "local function rd(o) local i = unit.getInfo(o);",
+        " if not i or not me then return { ok = false } end;",
+        " return { ok = true, dx = i.gridX - me.gridX, dy = i.gridY - me.gridY,",
+        "  elig = pol.eligible(S, me, o) == true, pose = tostring(unit.getPose(o)) } end;",
+        "local g = { n = rd(N), f = rd(F), t = engine.gameTime() };",
+        "require('scripts.mental_state').forceBreak(S, 'lash_out');",
+        "return g"))
+
+
+def chebyshev_geometry_problems(geom):
+    """Why a 9h selection is not gradable (empty list: it is). Both
+    candidates must read back, be eligible, and rank differently under the
+    two metrics: the intended one Chebyshev-nearer and Euclidean-farther."""
+    if not isinstance(geom, dict) or not all(
+            isinstance(geom.get(k), dict) and geom[k].get("ok") is True for k in ("n", "f")):
+        return ["a candidate's position could not be read at the decision"]
+    out = []
+    for k, name in (("n", "the Chebyshev-nearer candidate"), ("f", "the Euclidean-nearer candidate")):
+        c = geom[k]
+        if c.get("elig") is not True:
+            out.append(f"{name} was not eligible at the decision (pose {c.get('pose')})")
+    try:
+        ch = {k: max(abs(geom[k]["dx"]), abs(geom[k]["dy"])) for k in ("n", "f")}
+        eu = {k: geom[k]["dx"] ** 2 + geom[k]["dy"] ** 2 for k in ("n", "f")}
+    except (KeyError, TypeError):
+        return out + ["a candidate's offset is unreadable"]
+    if not ch["n"] < ch["f"]:
+        out.append(f"the intended candidate is not Chebyshev-nearer ({ch['n']:.2f} vs {ch['f']:.2f})")
+    if not eu["n"] > eu["f"]:
+        out.append(f"the intended candidate is not Euclidean-farther ({eu['n']:.2f} vs {eu['f']:.2f})")
+    return out
+
+
+def chebyshev_ranking_phase(port):
+    """Phase 9h (#717, #2976): nearest-target ranking uses Chebyshev distance
+    (matching eligibility's metric), not squared Euclidean. (6,6) is nearer
+    than (8,0) under Chebyshev (6 vs 8) despite (8,0) being nearer under
+    squared Euclidean (64 vs 72).
+
+    Graded ONLY on a selection whose preconditions held at the decision:
+    exactly the two candidates are eligible for the subject, and each is
+    eligible with the ranking distinguishing the metrics. A setup that
+    missed them is discarded, named and restaged (bounded); a wrong target
+    on a held setup is a policy failure and is never restaged. Answers
+    (ok, line)."""
+    reasons = []
+    for attempt in range(1, NINE_H_ATTEMPTS + 1):
+        subj = spawn_acolyte(port, -15, 40)
+        set_wellbeing(port, subj, 1.0, 0.0)
+        poll_until(5, lambda: mstate(port, subj) == "stable")
+        near = spawn_acolyte(port, -9, 46)      # +6,+6
+        far = spawn_acolyte(port, -7, 40)       # +8,0
+        stray = isolation_problem(port, subj, (near, far))
+        geom = send_json(port, chebyshev_geometry_lua(subj, near, far))
+        problems = ([stray] if stray else []) + chebyshev_geometry_problems(geom)
+
+        def target():
+            t = lash_target(port, subj)
+            return t if t != "nil" else None
+        picked = poll_until(10, target)
+        send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(port, subj) != "break")
+        destroy_units(port, subj, near, far)
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            if attempt < NINE_H_ATTEMPTS:
+                print(f"  [setup] 9h attempt {attempt} discarded before grading "
+                      f"({'; '.join(problems)}); restaging")
+                continue
+            return False, (f"  [FAIL] setup: 9h never staged a gradable ranking in "
+                           f"{NINE_H_ATTEMPTS} attempts ({' | '.join(reasons)}); geometry {geom}")
+        if picked == str(near):
+            return True, (f"  [pass] nearest-target ranking uses Chebyshev distance "
+                          f"({near} over the Euclidean-nearer {far})")
+        return False, (f"  [FAIL] expected Chebyshev-nearer {near}, got {picked} "
+                       f"(Euclidean-nearer would be {far}); geometry at the decision {geom}")
+
+
 #: 9j (#2975), episode end while delirious. Meander (delirium's aimless
 #: wander) is the slowest gait; the in-flight pursuit runs at the combat
 #: attack's sprint/ordered/comfort pace. Measured over 20 trials the
@@ -2490,31 +2908,32 @@ def flee_break_check(port, uid):
 
     The technomule's spawn is queued, and the flee only runs from units
     unit.getAllIds lists (with nobody in range it wanders instead), so the
-    break is forced only once the mule is PROVEN registered; if it never
-    registers, 4b is a named setup failure and no break is forced. The
-    baseline distance d0 is read BEFORE the break. The pass condition is
-    unchanged: farther than d0 + 2 tiles within the poll (#2773)."""
+    break is forced only once the mule is PROVEN registered AND is the unit
+    the production search would flee from (nearest other live unit within 15
+    tiles); otherwise 4b is a named setup failure and no break is forced.
+    The break is graded by flee_break_verdict (#2976): while it is active the
+    unit must run away from the mule at its ordered speed, in proportion to
+    that speed, from a unit that was stopped when the break began."""
     mule = spawn_acolyte(port, 6, 0, unit="technomule", clear_water=False)
     mpos = poll_until(FLEE_MULE_REGISTER_WAIT_S, lambda: unit_registered(port, mule))
     if not mpos:
         return False, (f"  [FAIL] setup: the technomule {mule} never registered within "
                        f"{FLEE_MULE_REGISTER_WAIT_S:.0f} s; flee break not tested")
+    near = nearest_other_uid(port, uid)
+    if near != mule:
+        return False, (f"  [FAIL] setup: the nearest unit to flee from is {near}, not the "
+                       f"registered technomule {mule}; flee break not tested")
     mx, my = mpos
     x0, y0 = unit_pos(port, uid)
     d0 = ((x0 - mx) ** 2 + (y0 - my) ** 2) ** 0.5
-    send(port, f"require('scripts.mental_state').forceBreak({uid},'flee'); "
-               f"return 'ok'")
-    s = msummary(port, uid)
-
-    def fled():
-        x, y = unit_pos(port, uid)
-        return ((x - mx) ** 2 + (y - my) ** 2) ** 0.5 > d0 + 2.0
-    away = poll_until(25, fled)
-    if s.get("state") == "break" and s.get("behavior") == "flee" and away:
+    samples, verdict, detail = run_break_phase(port, uid, "flee", flee_break_verdict, mule=mule)
+    if verdict == "ok":
         return True, (f"  [pass] forced flee break runs from the technomule "
-                      f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}))")
-    return False, (f"  [FAIL] flee break didn't flee: state={s} d0={d0:.1f} "
-                   f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}")
+                      f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}); {detail})")
+    return False, (f"  [FAIL] flee break didn't flee: {verdict} \u2014 {detail} d0={d0:.1f} "
+                   f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}\n"
+                   f"         trace (game t, brk, behavior, activity, speed, x, y): "
+                   f"{break_trace_line(samples)}")
 
 
 #: The activities unit_ai.lua's tick returns on before shortCircuit
@@ -3692,6 +4111,56 @@ def self_test():
           wander_episode_verdict([ws(None, None), ws(None, None),
                                   ws(None, None, brk=False, lash=False)])[0] == "still")
 
+    # landed_in_episode (#2976): 9b needs a hit ATTRIBUTABLE to the active
+    # lash-out episode, not just the attacker record naming the subject.
+    LR = {"uid": 3, "at": 105.0, "since": 100.0, "ends": 130.0, "state": "break"}
+    check("9b: a record naming the subject inside the episode passes", landed_in_episode(LR, 3) is True)
+    check("9b: the record naming the subject at the episode START boundary passes",
+          landed_in_episode(dict(LR, at=100.0), 3) is True)
+    check("9b: a record from BEFORE the episode (the staged fight) fails",
+          landed_in_episode(dict(LR, at=99.9), 3) is False)
+    check("9b: a hit AFTER the episode expired fails",
+          landed_in_episode(dict(LR, at=130.5), 3) is False)
+    check("9b: the record names someone else -> fails", landed_in_episode(dict(LR, uid=7), 3) is False)
+    check("9b: no record at all (attempted swings write none) -> fails",
+          landed_in_episode(dict(LR, uid=False, at=False), 3) is False)
+    check("9b: the episode already over (state not break) fails",
+          landed_in_episode(dict(LR, state="stressed"), 3) is False)
+    check("9b: an unreadable episode window fails",
+          landed_in_episode(dict(LR, since=None), 3) is False and landed_in_episode("x", 3) is False)
+
+    # 9h geometry (#2976): graded only on a setup whose preconditions held.
+    GOOD = {"n": {"ok": True, "dx": 6.0, "dy": 6.0, "elig": True, "pose": "standing"},
+            "f": {"ok": True, "dx": 8.0, "dy": 0.0, "elig": True, "pose": "standing"}}
+    check("9h: the staged geometry (6,6 vs 8,0) distinguishes the metrics -> gradable",
+          chebyshev_geometry_problems(GOOD) == [])
+    check("9h: the Chebyshev-nearer candidate collapsed -> not gradable",
+          chebyshev_geometry_problems(dict(GOOD, n=dict(GOOD["n"], elig=False, pose="collapsed"))) != [])
+    check("9h: the Euclidean-nearer candidate ineligible -> not gradable",
+          chebyshev_geometry_problems(dict(GOOD, f=dict(GOOD["f"], elig=False))) != [])
+    check("9h: positions that no longer separate the metrics -> not gradable",
+          chebyshev_geometry_problems(dict(GOOD, n=dict(GOOD["n"], dx=8.0, dy=8.0))) != []
+          and chebyshev_geometry_problems(dict(GOOD, f=dict(GOOD["f"], dx=5.0, dy=0.0))) != [])
+    check("9h: an unreadable candidate -> not gradable",
+          chebyshev_geometry_problems(dict(GOOD, n={"ok": False})) != []
+          and chebyshev_geometry_problems(None) != [])
+
+    # isolation_problem (#2976): exactly the intended units may be eligible.
+    def iso(got, allowed):
+        g = globals()
+        saved = g["eligible_neighbours"]
+        g["eligible_neighbours"] = lambda port, subj: got
+        try:
+            return isolation_problem(1, 9, allowed)
+        finally:
+            g["eligible_neighbours"] = saved
+    check("isolation: exactly the intended unit eligible -> no problem", iso([30], (30,)) is None)
+    check("isolation: a leftover unit eligible (9i's target) -> named",
+          "unrelated [26]" in (iso([26, 30], (30,)) or ""))
+    check("isolation: the intended unit not eligible -> named",
+          "intended-but-ineligible [30]" in (iso([], (30,)) or ""))
+    check("isolation: an unreadable read -> a problem", iso(None, (30,)) is not None)
+
     # episode_end_verdict (#2975): 9j grades from the OBSERVED cleanup tick.
     MEAN = 0.30                      # delirium's meander speed for these traces
     TGT = 7
@@ -3775,6 +4244,12 @@ def self_test():
         chunks = {"episode_end_sample_lua": episode_end_sample_lua(1),
                   "episode_end_sample_lua(pin)": episode_end_sample_lua(1, True),
                   "wander_sample_lua": wander_sample_lua(1),
+                  "break_sample_lua": break_sample_lua(1),
+                  "landed_poll_lua": landed_poll_lua(1, 2),
+                  "nine_b_diag_lua": nine_b_diag_lua(1, 2),
+                  "wounds_lua": wounds_lua(1),
+                  "chebyshev_geometry_lua": chebyshev_geometry_lua(1, 2, 3),
+                  "break_sample_lua(mule)": break_sample_lua(1, 50),
                   "dressing_read_lua": dressing_read_lua(1),
                   "dressing_exclude_lua": dressing_exclude_lua(1),
                   "DRESSING_RESTORE_LUA": DRESSING_RESTORE_LUA}
@@ -4895,64 +5370,143 @@ def self_test():
             ("an error reply", "error: x", None)):
         check(f"4b registration: {name} -> {want}", registered_position(r) == want)
 
-    def fake_flee(register_after, end_dist, state=None):
-        """Drive flee_break_check with fakes: the mule (uid 50) at (6, 0)
-        registers on read number `register_after` (None = never); the
-        subject (uid 1) stands at (2, 0) (d0 = 4) until the break, then at
-        `end_dist` from the mule. Answers (ok, line, log)."""
+    def fake_flee(mule_pos, nearest, verdict):
+        """Drive flee_break_check with fakes: the mule (uid 50) registers at
+        `mule_pos` (None = never), the production nearest-unit search answers
+        `nearest`, and the break phase answers (verdict, detail). Answers
+        (ok, line, log)."""
         g = globals()
-        saved = {k: g[k] for k in ("spawn_acolyte", "send", "send_json", "unit_pos",
-                                   "msummary", "poll_until")}
-        log, reads, broke = [], [0], [False]
-
-        def f_send_json(port, lua, **kw):
-            reads[0] += 1
-            log.append("registration-read")
-            if register_after is not None and reads[0] >= register_after:
-                return {"listed": True, "x": 6.0, "y": 0.0}
-            return {"listed": False, "x": "nil", "y": "nil"}
-
-        def f_send(port, lua, **kw):
-            if "forceBreak" in lua:
-                broke[0] = True
-                log.append("forceBreak")
-            return "ok"
-
-        def f_unit_pos(port, u):
-            log.append(f"pos-{u}")
-            return (2.0, 0.0) if not broke[0] else (6.0 - end_dist, 0.0)
-
-        def f_poll(seconds, fn, interval=0.3):
-            for _ in range(int(seconds)):
-                v = fn()
-                if v:
-                    return v
-            return None
+        saved = {k: g[k] for k in ("spawn_acolyte", "unit_registered", "nearest_other_uid",
+                                   "unit_pos", "run_break_phase", "poll_until")}
+        log = []
         g.update(spawn_acolyte=lambda *a, **k: (log.append("spawn-mule"), 50)[1],
-                 send=f_send, send_json=f_send_json, unit_pos=f_unit_pos,
-                 msummary=lambda port, u: state or {"state": "break", "behavior": "flee"},
-                 poll_until=f_poll)
+                 unit_registered=lambda port, u: mule_pos,
+                 nearest_other_uid=lambda port, u: nearest,
+                 unit_pos=lambda port, u: (2.0, 0.0),
+                 poll_until=lambda seconds, fn, interval=0.3: fn(),
+                 run_break_phase=lambda *a, **k: (log.append("break"),
+                                                  ([], verdict[0], verdict[1]))[1])
         try:
             ok_, line = flee_break_check(7, 1)
         finally:
             g.update(saved)
         return ok_, line, log
-    ok4, line4, log4 = fake_flee(3, 6.5)
-    check("4b: a mule that registers on the 3rd read -> 4b WAITS for it, then forces the break",
-          log4[:4] == ["spawn-mule", "registration-read", "registration-read", "registration-read"]
-          and "forceBreak" in log4)
-    check("4b: ... the baseline d0 is read BEFORE the break (subject position read precedes "
-          "forceBreak)", log4.index("pos-1") < log4.index("forceBreak") and "d0=4.0" in line4)
-    check("4b: ... a subject ending 6.5 from the mule (> d0 + 2 = 6) passes", ok4 is True)
-    ok4, line4, log4 = fake_flee(1, 5.9)
-    check("4b: the pass condition is unchanged: 5.9 from the mule (<= d0 + 2) FAILS",
-          ok4 is False and "flee break didn't flee" in line4 and "from=(2.0,0.0)" in line4)
-    ok4, line4, log4 = fake_flee(1, 6.5, state={"state": "stable"})
-    check("4b: no flee break in the summary still FAILS", ok4 is False)
-    ok4, line4, log4 = fake_flee(None, 9.0)
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 50, ("ok", "gained 2.6"))
+    check("4b: a registered mule that is the nearest unit, a passing verdict -> pass, d0 "
+          "read before the break", ok4 is True and "d0=4.0" in line4 and log4 == ["spawn-mule", "break"])
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 50, ("not_away", "gained 0.5"))
+    check("4b: a failing verdict FAILS, naming the verdict",
+          ok4 is False and "flee break didn't flee: not_away" in line4 and "from=(2.0,0.0)" in line4)
+    ok4, line4, log4 = fake_flee((6.0, 0.0), 51, ("ok", "x"))
+    check("4b: the mule not the nearest unit -> a named setup FAIL and NO break is forced",
+          ok4 is False and "[FAIL] setup: the nearest unit to flee from is 51" in line4
+          and "break" not in log4)
+    ok4, line4, log4 = fake_flee(None, 50, ("ok", "x"))
     check("4b: a mule that NEVER registers -> a named setup FAIL, and NO break is forced",
           ok4 is False and "[FAIL] setup: the technomule 50 never registered" in line4
-          and "forceBreak" not in log4 and "pos-1" not in log4)
+          and "break" not in log4)
+
+    # wander_break_verdict / flee_break_verdict (#2976): 4a and 4b grade the
+    # unit's own pace WHILE the break is active, from a unit stopped at the
+    # break's start. Slow acolytes (endurance 0.4) failed the old fixed 0.9 /
+    # 2.0 tile thresholds while doing what the contract says.
+    def bs(now, x, y, brk=True, beh="wander", act="walking", sp=0.3, ordr=0.5, mx=6.0, my=0.0):
+        return {"now": now, "x": x, "y": y, "brk": brk, "beh": beh if brk else False,
+                "act": act, "sp": sp, "ord": ordr, "mx": mx, "my": my}
+    wend = bs(6.5, 1.0, 0.0, brk=False)
+    check("4a: walking while the wander break is active -> moved",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.1, 0), bs(2, 0.25, 0.05), bs(3, 0.4, 0.1)])[0] == "moved")
+    check("4a: a slow walker that goes out and back (net ~0) still moved",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.2, 0), bs(2, 0.4, 0), bs(3, 0.2, 0), bs(4, 0, 0)])[0] == "moved")
+    check("4a: still but the break not over -> waiting",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0.01)])[0] == "waiting")
+    check("4a: stationary until the break ended -> still",
+          wander_break_verdict([bs(0, 0, 0, act="idle", sp=0), bs(1, 0, 0, act="idle", sp=0), wend])[0] == "still")
+    check("4a: movement only AFTER the break ended does not count",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0), bs(6.5, 0, 0, brk=False),
+                                bs(7, 2, 2, brk=False)])[0] == "still")
+    slow = [dict(bs(t, 0.04 * t, 0), mean=0.06) for t in (0, 1, 2, 3, 4, 5)]
+    check("4a: a very slow unit (meander 0.06) that walks what it can in 5 s passes the scaled path",
+          wander_break_verdict(slow)[0] == "moved")
+    check("4a: a normal unit (meander 0.25) that walks only 0.2 tiles in 5 s still FAILS the full "
+          "WANDER_MIN_PATH once the break is over",
+          wander_break_verdict([dict(bs(t, 0.04 * t, 0), mean=0.25) for t in (0, 1, 2, 3, 4, 5)]
+                               + [bs(6.5, 0.2, 0, brk=False)])[0] == "still")
+    check("4a: a very slow unit that does not move at all still FAILS",
+          wander_break_verdict([dict(bs(t, 0, 0, act="idle", sp=0), mean=0.06) for t in range(6)]
+                               + [bs(6.5, 0, 0, brk=False)])[0] == "still")
+    check("4a: a break that never ran -> waiting, then never_active once capped",
+          wander_break_verdict([bs(0, 0, 0, brk=False)])[0] == "waiting"
+          and wander_break_verdict([bs(0, 0, 0, brk=False)], capped=True)[0] == "never_active")
+    check("4a: walking under a FLEE break is not a wander break -> wrong_behavior",
+          wander_break_verdict([bs(0, 0, 0, beh="flee"), bs(1, 2, 0, beh="flee")])[0] == "wrong_behavior")
+    check("4a: a jump between two ACTIVE stretches is not one walk",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0, 0, brk=False), bs(2, 5, 5), bs(3, 5, 5),
+                                bs(4, 5, 5, brk=False)])[0] == "still")
+    check("4a: unreadable positions are not walking",
+          wander_break_verdict([bs(0, None, None), bs(1, None, None), bs(6.5, 0, 0, brk=False)])[0]
+          == "never_active")
+    check("4a: a capped wait with too little walked -> still",
+          wander_break_verdict([bs(0, 0, 0), bs(1, 0.05, 0)], capped=True)[0] == "still")
+
+    def fleeing(ordr, gain_frac=0.9, n=13, sp=None, span=6.0, **kw):
+        """A flee at fraction `gain_frac` of ordered pace, straight away from a mule at x=6."""
+        out = []
+        for k in range(n):
+            t = span * k / (n - 1)
+            x = 2.0 - gain_frac * ordr * t
+            out.append(bs(t, x, 0.0, beh="flee", sp=ordr if sp is None else sp, ordr=ordr, **kw))
+        return out
+    fend = bs(6.5, -2.0, 0.0, brk=False)
+    check("4b: a normal flee (ordered 0.66, 6 s, ~3.6 tiles away) passes",
+          flee_break_verdict(fleeing(0.66) + [fend])[0] == "ok")
+    check("4b: a SLOW unit fleeing exactly per contract (ordered 0.36) passes although it gains "
+          "under the old fixed 2.0 tiles",
+          flee_break_verdict(fleeing(0.36) + [fend])[0] == "ok"
+          and 0.9 * 0.36 * 6.0 < 2.0)
+    check("4b: the same slow unit standing still -> no_run",
+          flee_break_verdict(fleeing(0.36, gain_frac=0.0, sp=0.0) + [fend])[0] == "no_run")
+    check("4b: walking at the meander pace (0.3 of ordered) -> no_run",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.3, sp=0.2) + [fend])[0] == "no_run")
+    check("4b: running at pace but TOWARD the mule -> not_away",
+          flee_break_verdict([dict(x, x=-x["x"] + 4.0) for x in fleeing(0.66)] + [fend])[0] == "not_away")
+    sideways = [dict(x, x=2.0, y=0.9 * 0.66 * x["now"]) for x in fleeing(0.66)]
+    check("4b: running at pace but SIDEWAYS (distance from the mule barely grows) -> not_away",
+          flee_break_verdict(sideways + [fend])[0] == "not_away")
+    check("4b: a unit that fled only a little (gain well under 0.6 x ordered x s) -> not_away",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.35) + [fend])[0] == "not_away")
+    check("4b: movement only AFTER the break ended does not count -> no_run",
+          flee_break_verdict(fleeing(0.66, gain_frac=0.0, sp=0.0)
+                             + [fend, bs(7, -3, 0, brk=False, sp=0.66)])[0] == "no_run")
+    check("4b: a break that never ran -> waiting, then never_active once capped",
+          flee_break_verdict([bs(0, 2, 0, brk=False)])[0] == "waiting"
+          and flee_break_verdict([bs(0, 2, 0, brk=False)], capped=True)[0] == "never_active")
+    check("4b: still running -> waiting; capped before it ended -> graded on what was seen",
+          flee_break_verdict(fleeing(0.66))[0] == "waiting"
+          and flee_break_verdict(fleeing(0.66), capped=True)[0] == "ok")
+    check("4b: fewer than FLEE_MIN_ACTIVE_S active game seconds -> uncovered",
+          flee_break_verdict(fleeing(0.66, span=2.0) + [fend])[0] == "uncovered")
+    check("4b: an unreadable mule -> uncovered",
+          flee_break_verdict(fleeing(0.66, mx=None, my=None) + [fend])[0] == "uncovered")
+    zig = [dict(x, y=(1.0 if k % 2 else -1.0)) for k, x in enumerate(fleeing(0.66, gain_frac=0.7))]
+    check("4b: running at pace and gaining distance, but on a zigzag far longer than the gain "
+          "(gain < 0.7 x path) -> not_away",
+          flee_break_verdict(zig + [fend])[0] == "not_away")
+    far_mule = [dict(x, x=2.0, mx=6.0 + 0.9 * 0.66 * x["now"]) for x in fleeing(0.66)]
+    check("4b: the unit stays put while the MULE walks away (distance grows, its own path ~0) "
+          "-> not_away",
+          flee_break_verdict(far_mule + [fend])[0] == "not_away")
+    chase = [dict(x, mx=6.0 - 0.07 * 0.66 * x["now"]) for x in fleeing(0.66, gain_frac=0.62)]
+    check("4b: a unit at pace and nearly straight away whose gain still falls under 0.6 x ordered x s "
+          "(the mule closes in) -> not_away",
+          flee_break_verdict(chase + [fend])[0] == "not_away")
+    check("4b: a wander break is not a flee break -> wrong_behavior",
+          flee_break_verdict([dict(x, beh="wander") for x in fleeing(0.66)] + [fend])[0] == "wrong_behavior")
+    check("4b: too few walking samples -> no_run",
+          flee_break_verdict([dict(x, act="idle") for x in fleeing(0.66)] + [fend])[0] == "no_run")
+    check("4b/4a: the sample chunk reads the mule only when given one",
+          "unit.getInfo(50)" in break_sample_lua(1, 50) and "unit.getInfo(50)" not in break_sample_lua(1)
+          and "local mi = nil" in break_sample_lua(1))
     import shutil as _sh, subprocess as _sp
     if _sh.which("lua"):
         harness = ("unit = { getAllIds = function() return LISTED and {1, 50} or {1} end, "
@@ -5147,17 +5701,18 @@ def main():
         # ---- 4a. Forced wander break moves the unit. ----
         set_wellbeing(P, uid, 1.0, 0.0)   # heal the ladder back up
         poll_until(5, lambda: mstate(P, uid) == "stable")
-        send(P, f"require('scripts.mental_state').forceBreak({uid},'wander'); "
-                f"return 'ok'")
-        s = msummary(P, uid)
         x0, y0 = unit_pos(P, uid)
-        moved = poll_until(12, lambda: (lambda x, y:
-                (x - x0) ** 2 + (y - y0) ** 2 > 0.8)(*unit_pos(P, uid)))
-        if s.get("state") == "break" and s.get("behavior") == "wander" and moved:
-            print(f"  [pass] forced wander break moves the unit (from {x0:.1f},{y0:.1f})")
+        wsamples, wverdict, wdetail = run_break_phase(
+            P, uid, "wander", wander_break_verdict)
+        if wverdict == "moved":
+            print(f"  [pass] forced wander break moves the unit (from {x0:.1f},{y0:.1f}; "
+                  f"{wdetail})")
         else:
             ok = False
-            print(f"  [FAIL] wander break didn't move: state={s} moved={bool(moved)}")
+            print(f"  [FAIL] wander break didn't move: {wverdict} \u2014 {wdetail} "
+                  f"(from {x0:.1f},{y0:.1f}, {len(wsamples)} samples)")
+            print("         trace (game t, brk, behavior, activity, speed, x, y): "
+                  + break_trace_line(wsamples))
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, uid) != "break")
 
@@ -5404,15 +5959,23 @@ def main():
 
             # 9b. Produces real attack behavior through the short-circuit —
             # confirm lash actually lands a swing on its chosen target.
-            landed = poll_until(20, lambda: send(
-                P, f"local a=unit.getLastAttacker({attacker}); "
-                   f"return a and a.uid or 'nil'"
-            ) == str(lash))
+            lastB = {}
+
+            def landed_b():
+                lastB.clear()
+                got = send_json(P, landed_poll_lua(lash, attacker))
+                if isinstance(got, dict):
+                    lastB.update(got)
+                return True if landed_in_episode(got, lash) else None
+            landed = poll_until(20, landed_b)
             if landed:
-                print(f"  [pass] lash-out produced a real landed attack on {attacker}")
+                print(f"  [pass] lash-out produced a real landed attack on {attacker} "
+                      f"(hit at game t={lastB.get('at')}, episode {lastB.get('since')}.."
+                      f"{lastB.get('ends')})")
             else:
                 ok = False
-                print(f"  [FAIL] lash-out never landed an attack on {attacker}")
+                print(f"  [FAIL] lash-out never landed an attack on {attacker} during its "
+                      f"episode: last record {lastB}; {send_json(P, nine_b_diag_lua(lash, attacker))}")
 
             # Narration distinguishable from wander/flee (#717 requirement 7).
             evs = send(P, "return engine.getEventLog()")
@@ -5501,23 +6064,10 @@ def main():
         # so a collapsed unit that hit us moments ago and stands in
         # melee range could otherwise bypass lash-out's own eligibility
         # policy via that shared path.
-        lashB = spawn_acolyte(P, 0, 20)
-        set_wellbeing(P, lashB, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, lashB) == "stable")
-        victimB = spawn_acolyte(P, 1, 20)     # eligible target, stays live
-        attackerB = spawn_acolyte(P, -1, 20)  # becomes the disqualified
-                                               # "recent attacker"
-        # See the neutered-strength note in the 9a setup above — same
-        # one-shot-kill risk applies here, in both directions, and the
-        # same fix (#2773): strength_base + unit.recomputeBody, because a
-        # 'strength' write is re-derived away before the hit (a traced run
-        # had this staged hit bleed lashB out before the break).
-        send(P, f"unit.setStat({attackerB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-                f"unit.setStat({attackerB},'toughness',100); "
-                f"unit.recomputeBody({attackerB}); "
-                f"unit.setStat({lashB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-                f"unit.setStat({lashB},'toughness',100); "
-                f"unit.recomputeBody({lashB}); return 'ok'")
+        # Both fighters are neutered with the neuter read back (see
+        # stage_nine_c2_units, and the neutered-strength note in the 9a setup
+        # above: the same one-shot-kill risk applies in both directions).
+        lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
         # 9c2 runs as a BOUNDED re-stage loop (#2773). Its FAIR-TEST
         # precondition: the subject must be able to act on a tick at the
         # break (standing, no tick-blocking activity, not knockedDown, not
@@ -5534,7 +6084,13 @@ def main():
         # attempts, 9c2 is a named SETUP failure.
         prevHitAtB = -1.0
         gradedB = abortedB = False
+        if neuterB:
+            ok = False
+            abortedB = True
+            print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
         for attemptB in range(1, NINE_C2_ATTEMPTS + 1):
+            if abortedB:
+                break
             # Committed, like stage_lashout_cluster's order (#2973).
             send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB},true); "
                     f"return 'ok'")
@@ -5543,7 +6099,8 @@ def main():
             if not hitB:
                 ok = False
                 print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
-                      f"— can't test the retaliation-swap exclusion (attempt {attemptB})")
+                      f"— can't test the retaliation-swap exclusion (attempt {attemptB}); "
+                      f"{send_json(P, nine_b_diag_lua(lashB, attackerB))}")
                 abortedB = True
                 break
 
@@ -5679,6 +6236,23 @@ def main():
                         f"unit.setStat({attackerB}, 'stamina', st.get({attackerB}, 'max_stamina')); "
                         f"return 'ok'")
                 poll_until(5, lambda: mstate(P, lashB) != "break")
+                if send(P, f"return unit.getPose({lashB})") == "dead":
+                    # A dead subject never acts again: waiting for it is
+                    # pointless, so this setup is discarded whole and the
+                    # next attempt stages on fresh units (#2976). The death
+                    # is ungradable setup; no decision was observed.
+                    print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before "
+                          f"the break (wounds: {send_json(P, wounds_lua(lashB))}); discarding "
+                          f"the cluster, restaging on fresh units")
+                    destroy_units(P, lashB, victimB, attackerB)
+                    lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
+                    prevHitAtB = -1.0
+                    if neuterB:
+                        ok = False
+                        abortedB = True
+                        print(f"  [FAIL] setup: 9c2 fixture not staged ({neuterB})")
+                        break
+                    continue
                 readyB = poll_until(NINE_C2_READY_WAIT_S, lambda: _ready_ok(
                     subject_ready(P, lashB)) is True)
                 if not readyB:
@@ -5847,31 +6421,12 @@ def main():
                 f"return 'ok'")
         poll_until(5, lambda: mstate(P, subj4) != "break")
 
-        # 9h. Nearest-target ranking uses Chebyshev distance — matching
-        # eligibility's own metric — not squared Euclidean. (6,6) is
-        # nearer than (8,0) under Chebyshev (6 vs 8) despite (8,0) being
-        # nearer under squared Euclidean (64 vs 72).
-        subjH = spawn_acolyte(P, -15, 40)
-        set_wellbeing(P, subjH, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, subjH) == "stable")
-        nearChebyshev = spawn_acolyte(P, -9, 46)   # +6,+6
-        nearEuclidean = spawn_acolyte(P, -7, 40)   # +8,0
-        send(P, f"require('scripts.mental_state').forceBreak({subjH},'lash_out'); "
-                f"return 'ok'")
-
-        def h_target():
-            t = lash_target(P, subjH)
-            return t if t != "nil" else None
-        targetH = poll_until(10, h_target)
-        if targetH == str(nearChebyshev):
-            print(f"  [pass] nearest-target ranking uses Chebyshev distance "
-                  f"({nearChebyshev} over the Euclidean-nearer {nearEuclidean})")
-        else:
+        # 9h. Nearest-target ranking uses Chebyshev distance — see
+        # chebyshev_ranking_phase (graded on a held setup, units removed after).
+        okH, lineH = chebyshev_ranking_phase(P)
+        print(lineH)
+        if not okH:
             ok = False
-            print(f"  [FAIL] expected Chebyshev-nearer {nearChebyshev}, got "
-                  f"{targetH} (Euclidean-nearer would be {nearEuclidean})")
-        send(P, f"unit.setStat({subjH},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, subjH) != "break")
 
         # 9i. A lost target with no replacement stops the stale pursuit
         # immediately rather than walking out the old leg toward the
@@ -5926,6 +6481,9 @@ def main():
                   f"position: closed_gap={closed_gap:.2f} cleared={cleared_i}")
         send(P, f"unit.setStat({subjI},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, subjI) != "break")
+        # Left alive, targetI (teleported to (-19, 25)) wanders into 9k's
+        # range, 6 tiles from where 9k stages its subject (#2976).
+        destroy_units(P, subjI, targetI)
 
         # 9j. Delirium overlapping episode expiry must not skip
         # episode-end cleanup. Cleanup is tracked via s.mentalLashoutActive
@@ -5962,6 +6520,7 @@ def main():
         poll_until(10, lambda: not json.loads(send(P,
             f"local b=require('scripts.brain'); "
             f"return {{d=b.isDelirious({subjJ})}}"))["d"])
+        destroy_units(P, subjJ, targetJ)
 
         # 9k. The shared retaliation-swap must not redirect lash-out onto
         # a technomule either — mirrors the collapsed-attacker test, but
@@ -5976,6 +6535,18 @@ def main():
         poll_until(5, lambda: mstate(P, subjK) == "stable")
         targetK = spawn_acolyte(P, -24, 25)   # eligible, adjacent
         muleK = spawn_acolyte(P, -26, 25, unit="technomule", clear_water=False)
+        # The subject strikes the adjacent target for real, and a full-strength
+        # acolyte swing can take it out of the fight (collapsed units are not
+        # eligible), after which lash-out would legitimately re-pick someone
+        # else. Neutered like 9a/9c2's fighters, with the neuter READ BACK, so
+        # the target stays the eligible unit this check is about (#2976).
+        neuterK = neuter_fighters(P, subjK, targetK)
+        # Fixture isolation, observed with the production eligibility rule:
+        # exactly targetK may be eligible for subjK (the technomule never is).
+        strayK = isolation_problem(P, subjK, (targetK,))
+        if neuterK or strayK:
+            ok = False
+            print(f"  [FAIL] setup: 9k not staged ({neuterK or strayK})")
         send(P, f"require('scripts.mental_state').forceBreak({subjK},'lash_out'); "
                 f"return 'ok'")
 
@@ -6008,10 +6579,13 @@ def main():
                   f"onto the technomule {muleK}: {samplesK[:4]}...")
         else:
             ok = False
-            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}")
+            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}; eligible for {subjK} now: "
+                  f"{eligible_neighbours(P, subjK)}, {targetK} pose "
+                  f"{send(P, f'return unit.getPose({targetK})')}")
 
         send(P, f"unit.setStat({subjK},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, subjK) != "break")
+        destroy_units(P, subjK, targetK, muleK)
 
         # 9g. No eligible target: agitated wander, keep searching.
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles
