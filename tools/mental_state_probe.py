@@ -2346,12 +2346,14 @@ local orig = atk.attackTargetExecute
 local calls = {}
 _G.__probe_mule_calls = calls
 _G.__probe_mule_restore = function() atk.attackTargetExecute = orig; _G.__probe_mule_restore = nil end
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
 local function pos(i) if type(i) ~= 'table' then return { invalid = true } end return { gridX = i.gridX, gridY = i.gridY } end
+local function rangeOf(r) if r == nil then return 1.0 end if fin(r) then return r end return 'invalid' end
 local function reading()
   local ok, r = pcall(function()
     local me, mi, gla = unit.getInfo(L), unit.getInfo(M), unit.getLastAttacker(L)
     return { now = engine.gameTime(), lpos = pos(me), mpos = pos(mi), mdef = mi and mi.defName or false,
-      range = unit.getAttackRange(L) or 1.0, mexists = unit.exists(M) == true, mpose = unit.getPose(M),
+      range = rangeOf(unit.getAttackRange(L)), mexists = unit.exists(M) == true, mpose = unit.getPose(M),
       glaUid = gla and gla.uid or false, glaAt = gla and gla.at or false, window = WINDOW,
       victimElig = ((me ~= nil) and pol.eligible(L, me, V) == true) or false }
   end)
@@ -2361,9 +2363,46 @@ end
 atk.attackTargetExecute = function(u, s, params)
   if u ~= L or not s or #calls >= 200 then return orig(u, s, params) end
   local c = { pre = s.attackTargetUid or -1, before = reading() }
+  local sGI, sGP, sGLA, sEx = unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists
+  local sGAR, sGT = unit.getAttackRange, engine.gameTime
+  local ex = { samples = {}, mpose = {}, mdef = {}, mexists = {}, gla = {} }
+  local function sample()
+    if #ex.samples >= 40 then return end
+    local ok, r = pcall(function()
+      return { m = pos(sGI(M)), l = pos(sGI(L)), range = rangeOf(sGAR(L)), now = sGT() }
+    end)
+    ex.samples[#ex.samples + 1] = ok and r or { err = tostring(r) }
+  end
+  unit.getInfo = function(x)
+    local v = sGI(x)
+    if x == M then ex.mdef[#ex.mdef + 1] = (type(v) == 'table' and v.defName) or false; sample() end
+    return v
+  end
+  unit.getPose = function(x)
+    local v = sGP(x)
+    if x == M then ex.mpose[#ex.mpose + 1] = (type(v) == 'string') and v or 'invalid'; sample() end
+    return v
+  end
+  unit.exists = function(x)
+    local v = sEx(x)
+    if x == M then ex.mexists[#ex.mexists + 1] = (v == true) end
+    return v
+  end
+  unit.getLastAttacker = function(x)
+    local v = sGLA(x)
+    if x == L then
+      ex.gla[#ex.gla + 1] = (type(v) == 'table') and { uid = v.uid, at = v.at } or false
+      sample()
+    end
+    return v
+  end
   local ok, err = pcall(orig, u, s, params)
+  unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists = sGI, sGP, sGLA, sEx
   c.after = reading()
   c.post = s.attackTargetUid or -1
+  c.ex = ex
+  c.ok = ok
+  c.err = (not ok) and tostring(err) or false
   calls[#calls + 1] = c
   if not ok then error(err, 0) end
 end
@@ -2389,7 +2428,17 @@ def mule_observer_chunk(subj, victim, mule, force=False):
     thread runs a chunk whole, so every lash-out execute from the very first
     tick is recorded, while the intended target is still standing (a target
     that is knocked out within half a second would otherwise leave the
-    window with no opportunity to grade)."""
+    window with no opportunity to grade).
+
+    Inside the wrapped execute (for the duration of the original call only)
+    pass-through recorders keep what its retaliation block reads about the
+    attacker (record, pose, existence, info); each time it reads the
+    attacker the recorder ALSO samples the subject's position and range and
+    the clock right there, so the reach and window are judged on the reads of
+    THIS decision rather than on the snapshots around it (the clock and
+    positions move while the Lua thread runs). The call's pcall result is
+    kept: an execute that raises is recorded, not just rethrown, because
+    engine update callbacks swallow Lua errors."""
     pin = (f"if not _G.__probe_orig_getLastAttacker then "
            f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
            f"unit.getLastAttacker = function(u) "
@@ -2409,24 +2458,49 @@ MULE_UNPIN_LUA = ("if _G.__probe_orig_getLastAttacker then "
                   "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
 
 
+def _lua_list(v):
+    """A Lua array as a Python list: the console encodes one as a JSON array,
+    the self-test harness's encoder as an object keyed by index; an empty
+    table may also arrive as {}. Anything else is not a list (None)."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict):
+        try:
+            return [v[k] for k in sorted(v, key=int)]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def technomule_call_status(c, victim, mule):
     """('valid', []) when one recorded lash-out execute was a REAL retaliation
-    opportunity that only the technomule exclusion could have refused, on
-    both its BEFORE and AFTER readings (the clock and positions move while
-    the execute runs); else ('invalid', misses) or ('malformed', why).
+    opportunity that only the technomule exclusion could have refused;
+    ('invalid', misses) when it was not; ('malformed', why) when the record
+    cannot be judged; ('raised', why) when the execute itself raised.
 
     The swap (scripts/unit_ai_combat_attack.lua:196-226) fires on a recent
     attacker that is not the current target, exists, is neither dead nor
     collapsed, is not a technomule, hit within RETALIATE_WINDOW_SEC, and is
-    within (attack range or 1.0) + 0.5 Chebyshev tiles. So a valid call has
-    the intended victim as its target, the mule recorded as the attacker
-    within the window, alive and in reach, and the victim still eligible:
-    only 'defName == technomule' stands between it and the swap."""
+    within (attack range or 1.0) + 0.5 Chebyshev tiles. The technomule check
+    comes BEFORE the clock and distance tests, so with the exclusion in place
+    the execute never reads them; the observer therefore samples the
+    subject's position, range and the clock next to EACH read the execute
+    makes of the attacker (`ex`), and the opportunity must hold on every
+    such sample (and on the readings before and after the call, which only
+    bracket it). So a valid call has the intended victim as its target, the
+    mule recorded as the attacker, alive, within the window and in reach on
+    every sample, the victim eligible, and only 'defName == technomule' in
+    the way."""
     if not isinstance(c, dict):
         return "malformed", ["the call record is not an object"]
+    if c.get("ok") is not True:
+        return "raised", f"the execute raised: {c.get('err')!r}"
     misses = []
     if c.get("pre") != victim:
         misses.append(f"the target before the call was {c.get('pre')!r}, not {victim}")
+    ex = c.get("ex")
+    if not isinstance(ex, dict):
+        return "malformed", ["no record of the execute's own reads"]
     for side in ("before", "after"):
         r = c.get(side)
         if not isinstance(r, dict) or "err" in r:
@@ -2454,17 +2528,57 @@ def technomule_call_status(c, victim, mule):
             misses.append(f"{side}: the mule was {dist:.2f} tiles away (reach {r['range']} + 0.5)")
         if r.get("victimElig") is not True:
             misses.append(f"{side}: the intended target was not eligible")
+    # The execute's OWN reads of the attacker.
+    glas = _lua_list(ex.get("gla"))
+    samples = _lua_list(ex.get("samples"))
+    if not glas or not samples:
+        return "malformed", ["the execute read the attacker record zero times, so nothing it saw is recorded"]
+    window = c["before"]["window"]
+    hit_at = []
+    for g in glas:
+        if not isinstance(g, dict) or not _finite_num(g.get("at")):
+            return "malformed", ["the execute's own last-attacker read is not a record"]
+        if g.get("uid") != mule:
+            misses.append(f"execute: the recorded attacker was {g.get('uid')!r}")
+        hit_at.append(g["at"])
+    for q in samples:
+        if not isinstance(q, dict) or "err" in q:
+            return "malformed", [f"an execute-time sample raised or is not an object ({q!r})"]
+        if not (_finite_num(q.get("now")) and _finite_num(q.get("range"))
+                and all(isinstance(q.get(k), dict) and _finite_num(q[k].get("gridX"))
+                        and _finite_num(q[k].get("gridY")) for k in ("m", "l"))):
+            return "malformed", ["an execute-time sample has an unreadable clock, range or position"]
+        d = max(abs(q["m"]["gridX"] - q["l"]["gridX"]), abs(q["m"]["gridY"] - q["l"]["gridY"]))
+        if d > q["range"] + 0.5:
+            misses.append(f"execute: the mule was {d:.2f} tiles away on one of the execute's own reads "
+                          f"(reach {q['range']} + 0.5)")
+        a = q["now"] - min(hit_at)
+        if not 0 <= a <= window:
+            misses.append(f"execute: the hit was {a:.2f} s old on one of the execute's own reads "
+                          f"(window {window})")
+    for what, vals, ok_fn in (
+            ("pose", _lua_list(ex.get("mpose")), lambda v: isinstance(v, str) and v not in ("dead", "collapsed")),
+            ("defName", _lua_list(ex.get("mdef")), lambda v: v == "technomule"),
+            ("existence", _lua_list(ex.get("mexists")), lambda v: v is True)):
+        if vals is not None and not all(ok_fn(v) for v in vals):
+            misses.append(f"execute: the mule's {what} read {vals!r}")
     return ("valid", []) if not misses else ("invalid", misses)
 
 
 def technomule_swap_verdict(calls, victim, mule):
     """9k's gate on the recorded executes (#2976). Answers (verdict, detail):
+    'raised' (an execute raised: engine update callbacks swallow Lua errors,
+    so the record is the only evidence, and no later call may erase it),
     'setup' (no execute, or none was a valid opportunity: the exclusion was
     never exercised, so nothing is proven), 'policy' (a VALID opportunity
     left a target other than the victim: the technomule exclusion failed) or
     'pass' (at least one valid opportunity and every one kept the victim)."""
     if not isinstance(calls, list) or not calls:
         return "setup", "no lash-out attackTargetExecute call on the subject during the window"
+    for c in calls:
+        status, why = technomule_call_status(c, victim, mule)
+        if status == "raised":
+            return "raised", why
     valid, closest, counts = [], None, {}
     for c in calls:
         status, misses = technomule_call_status(c, victim, mule)
@@ -2481,91 +2595,6 @@ def technomule_swap_verdict(calls, victim, mule):
         if c["post"] != victim:
             return "policy", f"target {c['pre']} -> {c['post']} on a valid retaliation opportunity"
     return "pass", f"{len(valid)} valid opportunity call(s) of {len(calls)} ({summary}), all kept {victim}"
-
-
-_MULE_HARNESS_LUA = r"""
--- arg: 'excl' (production technomule exclusion) or 'noexcl' (mutated), then k=v overrides
-local MODE = arg[1]
-local OV = {}
-for i = 2, #arg do local k, v = arg[i]:match('^(%w+)=(.*)$'); OV[k] = v end
-local L, V, M = 1, 2, 3
-local pos = { [L] = { 0, 0 }, [V] = { 1, 0 }, [M] = { -1, 0 } }
-if OV.mx then pos[M] = { tonumber(OV.mx), 0 } end
-local pose = { [L] = 'standing', [V] = OV.vpose or 'standing', [M] = OV.mpose or 'standing' }
-local def = { [L] = 'acolyte', [V] = 'acolyte', [M] = 'technomule' }
-unit = {}
-unit.getInfo = function(u) local p = pos[u]; return p and { gridX = p[1], gridY = p[2], defName = def[u] } end
-unit.exists = function(u) return pos[u] ~= nil end
-unit.getPose = function(u) return pose[u] end
-unit.getAttackRange = function(u) return 0.9 end
-unit.getLastAttacker = function(u) if u == L then return { uid = M, at = engine.gameTime() } end end
-engine = { gameTime = function() return 10.0 end }
-local policy = { eligible = function(uid, me, oid)
-  if oid == uid or not unit.exists(oid) then return false end
-  local ps = unit.getPose(oid)
-  if ps == 'dead' or ps == 'collapsed' then return false end
-  local i = unit.getInfo(oid)
-  if not i or i.defName == 'technomule' then return false end
-  return math.max(math.abs(me.gridX - i.gridX), math.abs(me.gridY - i.gridY)) <= 8
-end }
--- the production retaliation swap (unit_ai_combat_attack.lua:196-226), with the technomule exclusion optional
-local atk = { attackTargetExecute = function(uid, s, params)
-  local att = unit.getLastAttacker(uid)
-  local ap = att and unit.getPose(att.uid)
-  local ai = att and unit.getInfo(att.uid)
-  if att and att.uid ~= s.attackTargetUid and unit.exists(att.uid) and ap ~= 'dead' and ap ~= 'collapsed'
-     and ai and (MODE == 'noexcl' or ai.defName ~= 'technomule')
-     and (engine.gameTime() - (att.at or 0)) <= 3.0 then
-    local m = unit.getInfo(uid)
-    local d = math.max(math.abs(m.gridX - ai.gridX), math.abs(m.gridY - ai.gridY))
-    if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then s.attackTargetUid = att.uid end
-  end
-end }
-package.preload['scripts.unit_ai_mental'] = function() return { lashoutPolicy = policy } end
-package.preload['scripts.unit_ai_combat_attack'] = function() return atk end
-package.preload['scripts.unit_ai_combat'] = function() return { RETALIATE_WINDOW_SEC = 3.0 } end
-local function ser(v)
-  local t = type(v)
-  if t == 'table' then
-    local parts, n = {}, #v
-    if n > 0 and next(v, n) == nil then
-      for i = 1, n do parts[#parts + 1] = ser(v[i]) end
-      return '[' .. table.concat(parts, ',') .. ']'
-    end
-    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), ser(x)) end
-    return '{' .. table.concat(parts, ',') .. '}'
-  elseif t == 'string' then return string.format('%q', v)
-  elseif t == 'number' or t == 'boolean' then return tostring(v) end
-  return 'null'
-end
-local ATE0 = atk.attackTargetExecute
-assert(load(io.read('a')))()
-if not OV.noexec then
-  for _ = 1, 3 do local s = { attackTargetUid = V }; atk.attackTargetExecute(L, s, {}) end
-end
-local calls = _G.__probe_mule_calls
-_G.__probe_mule_restore()
-print(ser({ calls = calls, restored = (atk.attackTargetExecute == ATE0) }))
-"""
-
-
-def run_mule_harness(mode, **overrides):
-    """The 9k observer chunk run under `lua` against the production swap rule
-    (with or without the technomule exclusion), the mule and victim placed or
-    posed by `overrides`. Answers {calls, restored}, or None without lua."""
-    import shutil as _sh, subprocess as _sp
-    lua_bin = _sh.which("lua")
-    if lua_bin is None:
-        return None
-    chunk = mule_observer_chunk(1, 2, 3)
-    pin_end = chunk.index("local L, V, M")
-    out = _sp.run([lua_bin, "-e", "arg = {" + ", ".join(
-        repr(a) for a in [mode] + [f"{k}={v}" for k, v in overrides.items()]) + "}",
-        "-e", _MULE_HARNESS_LUA.replace("io.read('a')", repr(chunk[pin_end:]))],
-        capture_output=True, text=True, timeout=30)
-    if out.returncode != 0:
-        raise RuntimeError(out.stderr)
-    return json.loads(out.stdout.strip().splitlines()[-1])
 
 
 #: 9k (#2976): bounded re-stages when the retaliation opportunity was never
@@ -2649,6 +2678,9 @@ def technomule_retaliation_phase(port):
         send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(port, subj) != "break")
         destroy_units(port, subj, target, mule)
+        if verdict == "raised":
+            return False, (f"  [FAIL] the lash-out execute raised during 9k's window: {why}; a raised "
+                           f"execute is never restaged (attempt {attempt})")
         if str(mule) in samples or verdict == "policy":
             return False, (f"  [FAIL] lash-out swapped onto the technomule {mule}: saw {samples}; "
                            f"{verdict}: {why}")
@@ -2667,6 +2699,40 @@ def technomule_retaliation_phase(port):
                            f"eligible for the subject {eligible_now}, target pose {pose}")
         return True, (f"  [pass] lash-out stayed on {target} and never swapped onto the "
                       f"technomule {mule}: {samples[:4]}... ({why})")
+
+
+def _mule_harness_src():
+    """The 9c2 production-execute harness, with unit 3 a TECHNOMULE standing
+    at the attacker positions (its info answers defName 'technomule'; every
+    pose answers 'standing', no collapsed pin) and the 9k observer's own
+    reading function recognised as the probe's (so it gets the BEFORE/AFTER
+    clock and its positions come from attacker_x). The execute's reads, and
+    the observer's samples next to them, get the EXECUTE clock and answer
+    from attacker_seq / subject_seq / range_seq."""
+    h = _SWAP_HARNESS_LUA
+    old = "      if x == 'missing' then return nil end\n      return { gridX = x, gridY = 0.0, defName = 'acolyte' }"
+    assert h.count(old) == 1
+    h = h.replace(old, "      if x == 'missing' then return nil end\n      return { gridX = x, gridY = 0.0, defName = 'technomule' }")
+    assert h.count("i.name == 'swapReading'") == 1
+    h = h.replace("i.name == 'swapReading'", "i.name == 'reading'")
+    assert h.count("_G.__probe_swap_calls") == 1
+    return h.replace("_G.__probe_swap_calls", "_G.__probe_mule_calls")
+
+
+def mule_policy_harness(before=1.0, execute=1.01, after=1.02, attacker_x=1.0, attacker_seq=None,
+                        attack_patch=None, subject_seq=None, range_seq=None):
+    """Run the PRODUCTION attack execute once on subject 1 (target victim 2,
+    technomule 3 recorded as its attacker at game time 0) with the 9k observer
+    and no engine (needs `lua`); `attack_patch=(old, new)` runs a copy of
+    unit_ai_combat_attack.lua with that one substitution. Answers the same
+    dict as swap_policy_harness (calls, post, restored, clock, ok, err), or
+    None without lua."""
+    chunk = mule_observer_chunk(1, 2, 3)
+    return swap_policy_harness(before, execute, after, attacker_x=attacker_x,
+                               attacker_seq=attacker_seq, attack_patch=attack_patch,
+                               subject_seq=subject_seq, range_seq=range_seq,
+                               harness_src=_mule_harness_src(),
+                               observer_text=chunk[chunk.index("local L, V, M"):])
 
 
 def snap_chebyshev_candidates(port, subj, near, far):
@@ -4225,7 +4291,8 @@ io.write(enc({ calls = calls, post = s.attackTargetUid, restored = restored,
 
 def swap_policy_harness(before, execute, after, attacker_x=1.0,
                         attacker_seq=None, attack_patch=None,
-                        subject_seq=None, range_seq=None, missing_pose=None):
+                        subject_seq=None, range_seq=None, missing_pose=None,
+                        harness_src=None, observer_text=None):
     """Run the production attack execute once on lashB (1, target victim
     2, attacker 3 whose hit is stamped at game time 0) with the probe's
     swap observer and the 9c2 pose pin, and no engine (needs `lua`).
@@ -4260,8 +4327,8 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
     pin = ("if not _G.__probe_orig_getPose then _G.__probe_orig_getPose = unit.getPose end; "
            "unit.getPose = function(u) if u == 3 then return 'collapsed' end "
            "return _G.__probe_orig_getPose(u) end;")
-    observer = " ".join(line.strip() for line in
-                        swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
+    observer = observer_text if observer_text is not None else " ".join(
+        line.strip() for line in swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
     seq = attacker_seq if attacker_seq is not None else [attacker_x]
 
     def lua_list(v, default):
@@ -4269,7 +4336,7 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
     # missing_pose=(uid, reading): that unit's REAL pose answers nil in the
     # observer's BEFORE (1) or AFTER (2) reading.
     mp = "{}" if missing_pose is None else "{[%d] = %d}" % missing_pose
-    src = _SWAP_HARNESS_LUA % {
+    src = (harness_src or _SWAP_HARNESS_LUA) % {
         "missing_pose": mp,
         "subject_seq": lua_list(subject_seq, 0.0),
         "range_seq": lua_list(range_seq, 1.0),
@@ -5027,29 +5094,43 @@ def self_test():
               dict(base, me=False))))
     check("9h verdict: a candidate the decision never read -> setup",
           chebyshev_decision_verdict(dict(base, info={"n": base["info"]["n"]}), 2, 3)[0] == "setup")
-    # 9k retaliation opportunity (#2976, review round 1): the technomule exclusion must be
-    # EXERCISED, not merely never observed to fail.
-    mh = run_mule_harness("excl")
+    # 9k retaliation opportunity (#2976, review rounds 1-2): the PRODUCTION execute, run under
+    # lua, with the technomule exclusion present, removed, or replaced by a raise.
+    EXCL = 'and attInfo and attInfo.defName ~= "technomule"'
+    NOEXCL = (EXCL, 'and attInfo and true')
+    RAISES = (EXCL, 'and attInfo and (function() if attInfo.defName == "technomule" then '
+                    'error("boom") end return true end)()')
+    mh = mule_policy_harness()
     if mh is None:
-        print("  skip 9k observer harness: no lua interpreter")
+        print("  skip 9k production-execute harness: no lua interpreter")
     else:
         kv = lambda h: technomule_swap_verdict(h["calls"], 2, 3)
-        check("9k observer: a mule in reach, in window, alive, the victim eligible; production rule "
-              "keeps the victim -> pass, wrappers restored",
-              kv(mh)[0] == "pass" and mh["restored"] is True and len(mh["calls"]) == 3)
-        check("9k observer: the technomule exclusion REMOVED (production swap otherwise) -> the swap "
-              "fires on a valid opportunity -> policy failure",
-              kv(run_mule_harness("noexcl"))[0] == "policy")
-        check("9k observer: a mule four tiles away is no opportunity: even with the exclusion removed "
-              "the victim stays, which must read as setup, never as a pass",
-              kv(run_mule_harness("noexcl", mx=-4))[0] == "setup"
-              and kv(run_mule_harness("excl", mx=-4))[0] == "setup")
-        check("9k observer: no execute at all -> setup",
-              technomule_swap_verdict(run_mule_harness("excl", noexec=1)["calls"], 2, 3)[0] == "setup")
-        check("9k observer: the intended target collapsed (ineligible) -> setup",
-              kv(run_mule_harness("excl", vpose="collapsed"))[0] == "setup")
-        check("9k observer: a dead mule is no opportunity -> setup",
-              kv(run_mule_harness("noexcl", mpose="dead"))[0] == "setup")
+        check("9k production: a mule in reach, in window, alive, the victim eligible; the real "
+              "exclusion keeps the victim -> pass; wrappers restored",
+              kv(mh)[0] == "pass" and mh["post"] == 2 and mh["restored"] is True and mh["ok"] is True)
+        h = mule_policy_harness(attack_patch=NOEXCL)
+        check("9k production: the technomule exclusion REMOVED -> the swap fires on a valid "
+              "opportunity -> policy failure", kv(h)[0] == "policy" and h["post"] == 3)
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.49, attacker_seq=[1.51])
+        check("9k production: reach 1.49 on the snapshots but 1.51 on the execute's OWN reads "
+              "(review round 2): no swap happens, and the verdict must be setup, never a pass",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attacker_x=1.49, attacker_seq=[1.51])
+        check("9k production: the same drift with the REAL exclusion -> setup, not a pass",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(attacker_x=4.0)
+        check("9k production: a mule four tiles away is no opportunity -> setup",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(before=1.0, execute=5.0, after=5.1)
+        check("9k production: the hit already outside the window when the execute read the clock "
+              "(snapshots inside it) -> setup",
+              kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=RAISES)
+        check("9k production: an execute that RAISES on the technomule (review round 2): the record "
+              "carries ok=false, the verdict is 'raised', never a pass",
+              h["ok"] is False and h["calls"][0]["ok"] is False and kv(h)[0] == "raised")
+        check("9k production: a raised call cannot be erased by a later valid one",
+              technomule_swap_verdict(h["calls"] + mh["calls"], 2, 3)[0] == "raised")
     check("9k observer chunk: the break is forced inside the SAME chunk (after the wrap) only when asked",
           "forceBreak(1, 'lash_out')" in mule_observer_chunk(1, 2, 3, force=True)
           and mule_observer_chunk(1, 2, 3, force=True).index("attackTargetExecute = function")
@@ -5058,7 +5139,10 @@ def self_test():
     good_side = {"now": 10.0, "glaAt": 10.0, "range": 0.9, "window": 3.0, "mexists": True,
                  "mpose": "standing", "mdef": "technomule", "glaUid": 3, "victimElig": True,
                  "lpos": {"gridX": 0, "gridY": 0}, "mpos": {"gridX": -1, "gridY": 0}}
-    good_call = {"pre": 2, "post": 2, "before": dict(good_side), "after": dict(good_side)}
+    good_ex = {"samples": [{"m": {"gridX": -1, "gridY": 0}, "l": {"gridX": 0, "gridY": 0}, "range": 0.9, "now": 10.0}],
+               "mpose": ["standing"], "mdef": ["technomule"], "mexists": [True], "gla": [{"uid": 3, "at": 10.0}]}
+    good_call = {"pre": 2, "post": 2, "ok": True, "err": False, "ex": good_ex,
+                 "before": dict(good_side), "after": dict(good_side)}
     check("9k call status: a complete valid opportunity", technomule_call_status(good_call, 2, 3)[0] == "valid")
     for what, mutate, want in (
             ("a stale hit (4 s old)", lambda c: c["after"].update(glaAt=6.0), "invalid"),
@@ -5069,8 +5153,20 @@ def self_test():
             ("a target other than the victim before the call", lambda c: c.update(pre=3), "invalid"),
             ("an ineligible victim after the call", lambda c: c["after"].update(victimElig=False), "invalid"),
             ("a reading that raised", lambda c: c.update(before={"err": "boom"}), "malformed"),
-            ("an unreadable mule position", lambda c: c["before"].update(mpos={"invalid": True}), "malformed")):
-        c = {k: (dict(v) if isinstance(v, dict) else v) for k, v in good_call.items()}
+            ("an unreadable mule position", lambda c: c["before"].update(mpos={"invalid": True}), "malformed"),
+            ("the mule out of reach on one of the EXECUTE's own samples (snapshots fine)",
+             lambda c: c["ex"]["samples"].append({"m": {"gridX": -1.51, "gridY": 0}, "l": {"gridX": 0, "gridY": 0},
+                                                  "range": 1.0, "now": 10.0}), "invalid"),
+            ("the hit outside the window on one of the execute's own clock reads",
+             lambda c: c["ex"]["samples"].append({"m": {"gridX": -1, "gridY": 0}, "l": {"gridX": 0, "gridY": 0},
+                                                  "range": 1.0, "now": 14.5}), "invalid"),
+            ("the attacker the execute itself read was someone else",
+             lambda c: c["ex"]["gla"].append({"uid": 9, "at": 10.0}), "invalid"),
+            ("the execute read the mule as collapsed", lambda c: c["ex"]["mpose"].append("collapsed"), "invalid"),
+            ("no record of the execute's own reads", lambda c: c.pop("ex"), "malformed"),
+            ("no sample at all next to the execute's attacker reads", lambda c: c["ex"].update(samples=[]), "malformed"),
+            ("an execute that raised", lambda c: c.update(ok=False, err="boom"), "raised")):
+        c = __import__("copy").deepcopy(good_call)
         mutate(c)
         check(f"9k call status: {what} -> {want}", technomule_call_status(c, 2, 3)[0] == want)
     check("9k verdict: a valid opportunity that left the mule as the target -> policy",
@@ -5151,6 +5247,10 @@ def self_test():
     okk, line, n, d = fake_phase_k([("policy", "target 30 -> 31")])
     check("9k phase: a swap on a valid opportunity is a policy failure, never restaged",
           okk is False and n == 1 and "swapped onto the technomule" in line)
+    okk, line, n, d = fake_phase_k([("raised", "the execute raised: 'boom'"), ("pass", "ok")])
+    check("9k phase: a raised execute fails the phase at once and is never restaged away "
+          "(a later passing attempt cannot erase it)",
+          okk is False and n == 1 and "execute raised" in line)
     okk, line, n, d = fake_phase_k([("pass", "ok")], samples=("103",))
     check("9k phase: the mule seen as the subject's target fails even when the observer passed, "
           "and never restages", okk is False and n == 1)
