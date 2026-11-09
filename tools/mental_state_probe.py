@@ -1696,13 +1696,16 @@ EPISODE_END_WINDOW_S = 1.5         # game s observed after the grace
 EPISODE_END_WAIT_CAP_S = 60.0
 
 
-def episode_end_sample_lua(uid):
+def episode_end_sample_lua(uid, pin=False):
     """One console read of what 9j judges (#2975): the clock, position,
     locomotion speed (unit.getInfo's moveSpeed, 0 when not walking), the
     episode flag, break and delirium state, and the episode-owned combat
-    state (target, goal, committed)."""
+    state (target, goal, committed). With `pin`, the same chunk first
+    re-pins blood_oxygen into the delirious band, so holding delirium costs
+    no console round trip of its own (each costs ~0.3 s of pursuit)."""
     return " ".join((
         f"local u = {uid};",
+        f"unit.setStat(u, 'blood_oxygen', 0.59);" if pin else "",
         "local s = require('scripts.unit_ai').getState(u); local i = unit.getInfo(u);",
         "return { now = engine.gameTime(), x = i and i.gridX or nil, y = i and i.gridY or nil,",
         " sp = i and i.moveSpeed or nil,",
@@ -1831,6 +1834,76 @@ def episode_end_verdict(samples, meander, target, tpos):
     return "ok", (f"cleanup at game t={tb:.2f}; no pursuit-pace movement after "
                   f"{EPISODE_END_GRACE_S:g} s grace over "
                   f"{judged[-1]['now'] - tb:.2f} s")
+
+
+#: 9j stages the pair at this separation (tiles): within LASHOUT_RANGE (8) and
+#: long enough that the pursuit outlasts the setup's console round trips; at 6
+#: tiles one run's unit had already arrived and fallen before the episode was
+#: ended, leaving no leg in flight to cancel.
+EPISODE_END_GAP = 7
+#: How many fresh stagings 9j may use to get a live pursuit under delirium at
+#: the cleanup; a verdict that says the setup did not hold restages.
+EPISODE_END_ATTEMPTS = 3
+EPISODE_END_RESTAGE = ("no_pursuit", "no_overlap", "setup")
+
+
+def episode_end_attempt(port, sx, sy):
+    """Stage one 9j pair, drive it to the episode end under delirium, and
+    answer (verdict, detail, samples, subject, target). `verdict` is
+    episode_end_verdict's, or 'setup' when the pursuit or the delirium never
+    took hold (#2975)."""
+    subj = spawn_acolyte(port, sx, sy)
+    set_wellbeing(port, subj, 1.0, 0.0)
+    poll_until(5, lambda: mstate(port, subj) == "stable")
+    target = spawn_acolyte(port, sx + EPISODE_END_GAP, sy)
+    # Read BEFORE the break: neither depends on it, and each console round
+    # trip after it is pursuit time spent. The unit's own gaits: delirium's
+    # wander is the slowest thing it does, the pursuit the fastest.
+    meander = send_json(port, f"return require('scripts.movement_speed')"
+                              f".meander({subj})")
+    tpos = unit_pos(port, target)
+    samples = []
+
+    def sample(pin):
+        got = send_json(port, episode_end_sample_lua(subj, pin))
+        if isinstance(got, dict):
+            samples.append(got)
+        return samples[-1] if samples else {}
+
+    send(port, f"require('scripts.mental_state').forceBreak({subj},'lash_out'); "
+               f"return 'ok'")
+
+    def pursuing():
+        x = sample(False)
+        return (x.get("tgt") == target and x.get("act") in ("walking", "running")) or None
+    if not poll_until(10, pursuing, interval=0.05):
+        return "setup", f"{subj} never pursued {target}", samples, subj, target
+
+    # Drive consciousness into the delirious band (brain.lua: 0.15..0.40)
+    # via blood_oxygen — the same technique collapse_crawl_probe.py uses.
+    # brain.tick recomputes consciousness from blood_oxygen every physiology
+    # tick and blood_oxygen itself drifts back on its own, so it is RE-pinned
+    # on every sample to hold the unit delirious through the whole window.
+    if not poll_until(10, lambda: sample(True).get("delir") or None, interval=0.05):
+        return "setup", f"{subj} never became delirious", samples, subj, target
+
+    # End the episode while the pursuit is live and delirium holds, and grade
+    # from the OBSERVED cleanup tick (#2975) — never from a baseline taken
+    # before delirium began, which charged the unit for the pursuit it was
+    # entitled to run until the episode ended.
+    send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
+    verdict, detail = "waiting", ""
+    deadline = time.time() + EPISODE_END_WAIT_CAP_S
+    while time.time() < deadline:
+        sample(True)
+        verdict, detail = episode_end_verdict(samples, meander, target, tpos)
+        if verdict != "waiting":
+            break
+        time.sleep(0.05)
+    else:
+        verdict = verdict if verdict != "waiting" else "no_boundary"
+        detail = "wait capped; " + detail
+    return verdict, detail, samples, subj, target
 
 
 def dressing_exclude_lua(lash):
@@ -3670,6 +3743,30 @@ def self_test():
           episode_end_verdict([es(0.0, 0.0, 1.2), es(0.3, 0.4, 0.0, delir=False),
                                es(0.6, 0.8, 0.0, delir=False)] + good_post,
                               MEAN, TGT, TPOS)[0] == "no_pursuit")
+    check("episode end: only setup verdicts restage, a real failure never does",
+          all(v in EPISODE_END_RESTAGE for v in ("no_pursuit", "no_overlap", "setup"))
+          and not any(v in EPISODE_END_RESTAGE for v in
+                      ("ok", "leaked", "not_cleaned", "no_boundary", "waiting")))
+    check("episode end: the sample chunk pins blood_oxygen only when asked",
+          "blood_oxygen" in episode_end_sample_lua(1, True)
+          and "blood_oxygen" not in episode_end_sample_lua(1))
+    lua_bin = __import__("shutil").which("lua")
+    if lua_bin is None:
+        print("  skip console chunk syntax: no lua interpreter")
+    else:
+        import subprocess
+        chunks = {"episode_end_sample_lua": episode_end_sample_lua(1),
+                  "episode_end_sample_lua(pin)": episode_end_sample_lua(1, True),
+                  "wander_sample_lua": wander_sample_lua(1),
+                  "dressing_read_lua": dressing_read_lua(1),
+                  "dressing_exclude_lua": dressing_exclude_lua(1),
+                  "DRESSING_RESTORE_LUA": DRESSING_RESTORE_LUA}
+        for name, chunk in chunks.items():
+            res = subprocess.run(
+                [lua_bin, "-e", "local f, err = load(" + repr(chunk) + "); "
+                 "if not f then io.stderr:write(tostring(err)); os.exit(1) end"],
+                capture_output=True, text=True, timeout=30)
+            check(f"console chunk compiles: {name}", res.returncode == 0)
     check("episode end: a unit never seen pursuing is not gradable -> no_pursuit",
           episode_end_verdict([es(0.0, 0.0, 0.0), es(0.6, 0.0, 0.0)] + good_post,
                               MEAN, TGT, TPOS)[0] == "no_pursuit")
@@ -5817,69 +5914,16 @@ def main():
         # episode-end cleanup. Cleanup is tracked via s.mentalLashoutActive
         # rather than inferred from s.currentAction, which delirium
         # preempts to "delirious" the instant it overlaps a break.
-        subjJ = spawn_acolyte(P, -25, -10)
-        set_wellbeing(P, subjJ, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, subjJ) == "stable")
-        targetJ = spawn_acolyte(P, -19, -10)   # 6 tiles off — a real pursuit,
-                                                # not already-in-melee-range
-        send(P, f"require('scripts.mental_state').forceBreak({subjJ},'lash_out'); "
-                f"return 'ok'")
-
-        def j_pursuing():
-            t = lash_target(P, subjJ)
-            act = send(P, f"return unit.getActivity({subjJ})")
-            return True if (t == str(targetJ) and act in ("walking", "running")) else None
-        if not poll_until(10, j_pursuing):
-            ok = False
-            print(f"  [FAIL] setup: {subjJ} never pursued {targetJ}")
-
-        # The unit's own gaits, read once: delirium's wander is the slowest
-        # thing it does, the pursuit the fastest (see episode_end_verdict).
-        meander_j = send_json(P, f"return require('scripts.movement_speed')"
-                                 f".meander({subjJ})")
-        tpos_j = unit_pos(P, targetJ)
-        jsamples = []
-
-        def j_sample():
-            got = send_json(P, episode_end_sample_lua(subjJ))
-            if isinstance(got, dict):
-                jsamples.append(got)
-            return jsamples[-1] if jsamples else {}
-
-        # Drive consciousness into the delirious band (brain.lua:
-        # 0.15..0.40) via blood_oxygen — the same technique
-        # collapse_crawl_probe.py uses. brain.tick recomputes
-        # consciousness from blood_oxygen every physiology tick and
-        # blood_oxygen itself drifts back on its own, so this needs
-        # RE-pinning on every poll (like set_wellbeing's own dead-band
-        # samples elsewhere in this file) to actually hold the unit
-        # delirious through the whole window this test needs, rather
-        # than recovering before the overlap it's testing occurs.
-        def j_pin_and_check_delirious():
-            send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
-            return bool(j_sample().get("delir"))
-        if not poll_until(10, j_pin_and_check_delirious, interval=0.1):
-            ok = False
-            print(f"  [FAIL] setup: {subjJ} never became delirious")
-
-        # End the episode while the pursuit is live and delirium holds, and
-        # grade from the OBSERVED cleanup tick (#2975) — never from a
-        # baseline taken before delirium began, which charged the unit for
-        # the pursuit it was entitled to run until the episode ended.
-        send(P, f"unit.setStat({subjJ},'mental_until',0); return 'ok'")
-        jverdict, jdetail = "waiting", ""
-        jdeadline = time.time() + EPISODE_END_WAIT_CAP_S
-        while time.time() < jdeadline:
-            send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
-            j_sample()
-            jverdict, jdetail = episode_end_verdict(
-                jsamples, meander_j, targetJ, tpos_j)
-            if jverdict != "waiting":
-                break
-            time.sleep(0.05)
-        else:
-            jverdict = jverdict if jverdict != "waiting" else "no_boundary"
-            jdetail = "wait capped; " + jdetail
+        for jattempt in range(1, EPISODE_END_ATTEMPTS + 1):
+            jverdict, jdetail, jsamples, subjJ, targetJ = episode_end_attempt(
+                P, -25, -10)
+            if jverdict in EPISODE_END_RESTAGE and jattempt < EPISODE_END_ATTEMPTS:
+                print(f"  [setup] 9j attempt {jattempt} discarded before grading "
+                      f"({jverdict}): {jdetail}; restaging")
+                for u in (subjJ, targetJ):
+                    send(P, f"unit.destroy({u}); return 'ok'")
+                continue
+            break
 
         if jverdict == "ok":
             print(f"  [pass] episode-end cleanup fires even while still "
