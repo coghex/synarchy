@@ -68,8 +68,10 @@ pursuing the target at more than twice the meander speed under an active episode
 delirium active, and delirium also on the boundary sample; no target, attack goal or
 committed order from the boundary on; and, judging every interval from the boundary
 sample on (so a leg that finishes between two samples is seen), no movement toward the old
-target beyond the pursuit pace for the 0.3 s grace plus 1.5x the meander afterwards, and no
-closing on it beyond what a meander explains over 1.5 s. Fast movement that is not toward
+target beyond the pursuit pace for the 0.3 s grace plus 1.5x the meander afterwards, no
+post-grace sample that reads a pace above 1.5x the meander on an interval that moved toward
+the old target (an interval average cannot hide it), and no closing on it beyond what a
+meander explains over 1.5 s. Fast movement that is not toward
 the old target is not a leaked leg. Pre-end travel is never counted. A pair whose pursuit
 had already ended when the episode was ended (the unit arrived and fell in one run) is not
 gradable: 9j stages at 7 tiles, reads the gaits and target position before the break,
@@ -140,10 +142,11 @@ The three targeted checks passed wherever they were observed in this batch (9g a
 not observed in run 4, which stopped at the 9c2 setup). Across the two before batches the dressing
 guard failed in 2 of 30 runs; 4a/4b and 9c2 failed in 5 of 30 and 2 of 30.
 
-### After: final probe (sha `f6482e75`, 15 runs then 2 extra)
+### After: the approved head (probe sha `71053997`, 15 runs)
 
-Run 15 stopped at the out-of-scope 9c2 setup before 9g and 9j, and the first extra run
-reached them, so there are 15 fully observed runs among the 17.
+Every one of the 15 runs reached and passed all three targeted checks; the three overall
+failures are in the out-of-scope checks (#2976: the 4a wander and 4b flee pair twice, the 9c2
+fair-test setup once). The probe still exits nonzero for them.
 
 | run | overall | 9b dressing guard | 9g final wander | 9j episode-end pursuit | other failing checks |
 |---|---|---|---|---|---|
@@ -154,33 +157,24 @@ reached them, so there are 15 fully observed runs among the 17.
 | 5 | PASS | pass | pass | pass | - |
 | 6 | PASS | pass | pass | pass | - |
 | 7 | PASS | pass | pass | pass | - |
-| 8 | FAIL | pass | pass | pass | [FAIL] expected only 30, saw: ['26', '26', '26', '26', '26', '26', '26']; [FAIL] setup: 29 never targeted 30 |
-| 9 | FAIL | pass | pass | pass | [FAIL] lash-out never landed an attack on 7 |
+| 8 | FAIL | pass | pass | pass | [FAIL] flee break didn't flee: state={'since': 45.013996124268, 'behavior': 'flee', 'state; [FAIL] wander break didn't move: state={'since': 29.899942398071, 'behavior': 'wander', 's |
+| 9 | PASS | pass | pass | pass | - |
 | 10 | PASS | pass | pass | pass | - |
-| 11 | PASS | pass | pass | pass | - |
-| 12 | FAIL | pass | pass | pass | [FAIL] expected Chebyshev-nearer 26, got 27 (Euclidean-nearer would be 27) |
+| 11 | FAIL | pass | pass | pass | [FAIL] flee break didn't flee: state={'endsAt': 51.218250274658, 'since': 45.218250274658,; [FAIL] wander break didn't move: state={'endsAt': 36.020862579346, 'since': 30.02086257934 |
+| 12 | PASS | pass | pass | pass | - |
 | 13 | PASS | pass | pass | pass | - |
 | 14 | PASS | pass | pass | pass | - |
-| 15 | FAIL | pass | NOT OBSERVED | NOT OBSERVED | [FAIL] setup: 10 never landed a hit on 8 — can't test the retaliation-swap exclusion (atte; [FAIL] wander break didn't move: state={'state': 'break', 'endsAt': 36.150032043457, 'stat |
+| 15 | FAIL | pass | pass | pass | [FAIL] setup: 9c2 fair-test precondition never met — the subject could not act in any of 1 |
 
-runs=15 overall-fail=4 9b dressing guard: not-pass=0 9g final wander: not-pass=1 9j episode-end pursuit: not-pass=1
+runs=15 overall-fail=3 9b dressing guard: not-pass=0 9g final wander: not-pass=0 9j episode-end pursuit: not-pass=0
 
-| run | overall | 9b dressing guard | 9g final wander | 9j episode-end pursuit | other failing checks |
-|---|---|---|---|---|---|
-| 1 | FAIL | pass | pass | pass | [FAIL] lash-out never landed an attack on 4 |
-| 2 | PASS | pass | pass | pass | - |
-
-runs=2 overall-fail=1 9b dressing guard: not-pass=0 9g final wander: not-pass=0 9j episode-end pursuit: not-pass=0
-
-Result on the final probe: 17 runs; 9b, 9g and 9j were each observed passing in 16 and
-never failed (run 15 did not reach 9g/9j). The overall probe still exits nonzero when an
-excluded check fails, as before. Failures at other checks, reported and not touched (#2976):
-the 9c2 staged-hit setup (run 15), 9k `expected only 30, saw 26` (run 8; unit 26 appears to be
-9i's target, teleported to 6 tiles from the 9k subject and left alive), 9b's separate
-landed-attack check `lash-out never landed an attack on 7`/`4` (run 9 and extra run 1; the
-dressing guard had excluded 0 strikes in both), 9h `expected Chebyshev-nearer 26, got 27`
-(run 12) and the 4a wander break (run 15). The overall failure rate, 5 of 17, matches the
-before batches (8 of 30).
+An earlier batch on the probe one commit before the last (sha `f6482e75`, 17 runs: 9b, 9g and
+9j each observed passing in 16 and failing in 0; run 15 stopped at the 9c2 setup before 9g/9j)
+had failures only in other checks too: 9c2 setup, 9k `expected only 30, saw 26` (unit 26
+appears to be 9i's target, teleported to 6 tiles from the 9k subject and left alive), 9b's
+separate landed-attack check (twice; the dressing guard had excluded 0 strikes in both), 9h
+`expected Chebyshev-nearer 26, got 27` and the 4a wander break. Across the work the overall
+failure rate stayed at the before batches' level (8 of 30 before; 3 of 15 here).
 
 ### History of the fix (every targeted-check failure seen while building it)
 
@@ -207,3 +201,7 @@ before batches (8 of 30).
   episode was ended, so nothing was in flight. That is the staging race the restaging above
   closes; the final probe's 17 runs carry one restage (run 9 printed
   `9j attempt 1 discarded ... restaging`, then passed) and no 9j failure.
+- Review round 2: the interval allowance still admitted a short old leg whose arrival read
+  came a console round trip later; a post-grace sample reading a pursuit pace on an interval
+  moving toward the old target is now a leak (regression case; the previous verdict returned
+  `ok`). The head was approved after round 3.
