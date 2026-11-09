@@ -2365,7 +2365,7 @@ atk.attackTargetExecute = function(u, s, params)
   local c = { pre = s.attackTargetUid or -1, before = reading() }
   local sGI, sGP, sGLA, sEx = unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists
   local sGAR, sGT = unit.getAttackRange, engine.gameTime
-  local ex = { samples = {}, mpose = {}, mdef = {}, mexists = {}, gla = {} }
+  local ex = { samples = {}, mpose = {}, mdef = {}, mexists = {}, gla = {}, mexec = {}, lexec = {}, rexec = {}, texec = {} }
   local function sample()
     if #ex.samples >= 40 then return end
     local ok, r = pcall(function()
@@ -2375,7 +2375,23 @@ atk.attackTargetExecute = function(u, s, params)
   end
   unit.getInfo = function(x)
     local v = sGI(x)
-    if x == M then ex.mdef[#ex.mdef + 1] = (type(v) == 'table' and v.defName) or false; sample() end
+    if x == M then
+      ex.mdef[#ex.mdef + 1] = (type(v) == 'table' and v.defName) or false
+      ex.mexec[#ex.mexec + 1] = pos(v)
+      sample()
+    elseif x == L then
+      ex.lexec[#ex.lexec + 1] = pos(v)
+    end
+    return v
+  end
+  unit.getAttackRange = function(x)
+    local v = sGAR(x)
+    if x == L then ex.rexec[#ex.rexec + 1] = rangeOf(v) end
+    return v
+  end
+  engine.gameTime = function()
+    local v = sGT()
+    ex.texec[#ex.texec + 1] = v
     return v
   end
   unit.getPose = function(x)
@@ -2398,6 +2414,7 @@ atk.attackTargetExecute = function(u, s, params)
   end
   local ok, err = pcall(orig, u, s, params)
   unit.getInfo, unit.getPose, unit.getLastAttacker, unit.exists = sGI, sGP, sGLA, sEx
+  unit.getAttackRange, engine.gameTime = sGAR, sGT
   c.after = reading()
   c.post = s.attackTargetUid or -1
   c.ex = ex
@@ -2541,6 +2558,12 @@ def technomule_call_status(c, victim, mule):
         if g.get("uid") != mule:
             misses.append(f"execute: the recorded attacker was {g.get('uid')!r}")
         hit_at.append(g["at"])
+    # Everything the execute was ACTUALLY handed (the values its own reads returned)
+    # plus the observer's samples next to its attacker reads (the technomule check
+    # short-circuits the clock, subject-position and range reads, so those are
+    # sampled): the reach must hold for EVERY mule position against EVERY subject
+    # position within the SMALLEST range seen + 0.5, and the window on every clock.
+    mps, lps, rgs, nows = [], [], [], []
     for q in samples:
         if not isinstance(q, dict) or "err" in q:
             return "malformed", [f"an execute-time sample raised or is not an object ({q!r})"]
@@ -2548,14 +2571,27 @@ def technomule_call_status(c, victim, mule):
                 and all(isinstance(q.get(k), dict) and _finite_num(q[k].get("gridX"))
                         and _finite_num(q[k].get("gridY")) for k in ("m", "l"))):
             return "malformed", ["an execute-time sample has an unreadable clock, range or position"]
-        d = max(abs(q["m"]["gridX"] - q["l"]["gridX"]), abs(q["m"]["gridY"] - q["l"]["gridY"]))
-        if d > q["range"] + 0.5:
-            misses.append(f"execute: the mule was {d:.2f} tiles away on one of the execute's own reads "
-                          f"(reach {q['range']} + 0.5)")
-        a = q["now"] - min(hit_at)
-        if not 0 <= a <= window:
-            misses.append(f"execute: the hit was {a:.2f} s old on one of the execute's own reads "
-                          f"(window {window})")
+        mps.append(q["m"]); lps.append(q["l"]); rgs.append(q["range"]); nows.append(q["now"])
+    for key, sink, kind in (("mexec", mps, "pos"), ("lexec", lps, "pos"),
+                            ("rexec", rgs, "num"), ("texec", nows, "num")):
+        got = _lua_list(ex.get(key))
+        if got is None:
+            return "malformed", [f"the execute's own {key} reads are not a list"]
+        for v in got:
+            if kind == "pos":
+                if not (isinstance(v, dict) and _finite_num(v.get("gridX")) and _finite_num(v.get("gridY"))):
+                    return "malformed", [f"the execute was handed an unreadable position ({v!r})"]
+            elif not _finite_num(v):
+                return "malformed", [f"the execute was handed a non-numeric {key} value ({v!r})"]
+            sink.append(v)
+    dmax = max(max(abs(m["gridX"] - l["gridX"]), abs(m["gridY"] - l["gridY"])) for m in mps for l in lps)
+    if dmax > min(rgs) + 0.5:
+        misses.append(f"execute: the mule was {dmax:.2f} tiles from the subject on the reads the execute "
+                      f"saw and the samples next to them (smallest range {min(rgs)} + 0.5)")
+    age = max(nows) - min(hit_at)
+    if not 0 <= age <= window:
+        misses.append(f"execute: the hit was {age:.2f} s old on the latest clock the execute read "
+                      f"(window {window})")
     for what, vals, ok_fn in (
             ("pose", _lua_list(ex.get("mpose")), lambda v: isinstance(v, str) and v not in ("dead", "collapsed")),
             ("defName", _lua_list(ex.get("mdef")), lambda v: v == "technomule"),
@@ -5118,6 +5154,20 @@ def self_test():
         h = mule_policy_harness(attacker_x=1.49, attacker_seq=[1.51])
         check("9k production: the same drift with the REAL exclusion -> setup, not a pass",
               kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.49, attacker_seq=[1.49, 1.49, 1.51, 1.49])
+        check("9k production (review round 3): the mule is 1.51 away on the position the execute itself "
+              "READ (the observer's adjacent reads say 1.49): no swap, verdict setup, never a pass",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, subject_seq=[0.0, 0.0, 0.0, -0.6])
+        check("9k production (round 3): only the execute's OWN read of the subject position moved it "
+              "out of reach -> no swap, verdict setup",
+              h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, range_seq=[1.0, 1.0, 1.0, 0.4])
+        check("9k production (round 3): only the execute's OWN read of the attack range shrank -> "
+              "no swap, verdict setup", h["post"] == 2 and kv(h)[0] == "setup")
+        h = mule_policy_harness(attack_patch=NOEXCL, attacker_x=1.0, subject_seq=[0.0, 0.0, 0.0, 0.2])
+        check("9k production (round 3): the same decision-only subject change that KEEPS the mule in "
+              "reach still swaps -> policy", h["post"] == 3 and kv(h)[0] == "policy")
         h = mule_policy_harness(attacker_x=4.0)
         check("9k production: a mule four tiles away is no opportunity -> setup",
               kv(h)[0] == "setup")
@@ -5140,7 +5190,8 @@ def self_test():
                  "mpose": "standing", "mdef": "technomule", "glaUid": 3, "victimElig": True,
                  "lpos": {"gridX": 0, "gridY": 0}, "mpos": {"gridX": -1, "gridY": 0}}
     good_ex = {"samples": [{"m": {"gridX": -1, "gridY": 0}, "l": {"gridX": 0, "gridY": 0}, "range": 0.9, "now": 10.0}],
-               "mpose": ["standing"], "mdef": ["technomule"], "mexists": [True], "gla": [{"uid": 3, "at": 10.0}]}
+               "mpose": ["standing"], "mdef": ["technomule"], "mexists": [True], "gla": [{"uid": 3, "at": 10.0}],
+               "mexec": [{"gridX": -1, "gridY": 0}], "lexec": [], "rexec": [], "texec": []}
     good_call = {"pre": 2, "post": 2, "ok": True, "err": False, "ex": good_ex,
                  "before": dict(good_side), "after": dict(good_side)}
     check("9k call status: a complete valid opportunity", technomule_call_status(good_call, 2, 3)[0] == "valid")
@@ -5165,6 +5216,14 @@ def self_test():
             ("the execute read the mule as collapsed", lambda c: c["ex"]["mpose"].append("collapsed"), "invalid"),
             ("no record of the execute's own reads", lambda c: c.pop("ex"), "malformed"),
             ("no sample at all next to the execute's attacker reads", lambda c: c["ex"].update(samples=[]), "malformed"),
+            ("the position the execute was HANDED for the mule is out of reach (1.51 vs 0.9 + 0.5)",
+             lambda c: c["ex"]["mexec"].append({"gridX": -1.51, "gridY": 0}), "invalid"),
+            ("the subject position the execute was handed moved it out of reach",
+             lambda c: c["ex"]["lexec"].append({"gridX": 0.6, "gridY": 0}), "invalid"),
+            ("the attack range the execute was handed shrank (0.4 + 0.5 < 1.0)",
+             lambda c: c["ex"]["rexec"].append(0.4), "invalid"),
+            ("the clock the execute read is past the window", lambda c: c["ex"]["texec"].append(14.5), "invalid"),
+            ("an unreadable value handed to the execute", lambda c: c["ex"]["rexec"].append("x"), "malformed"),
             ("an execute that raised", lambda c: c.update(ok=False, err="boom"), "raised")):
         c = __import__("copy").deepcopy(good_call)
         mutate(c)
