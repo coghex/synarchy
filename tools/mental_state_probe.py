@@ -1700,9 +1700,8 @@ def wander_episode_verdict(samples):
 FLEE_MIN_ACTIVE_S = 3.0        # game s of the active break that must be observed
 FLEE_MIN_WALK_SAMPLES = 3      # active samples in which the unit is walking
 FLEE_PACE_FRACTION = 0.8       # median walking speed >= this x ordered speed
-FLEE_GAIN_FRACTION = 0.6       # distance gained from the mule >= this x ordered x active s
-FLEE_PATH_FRACTION = 0.6       # path walked >= this x ordered x active s
-FLEE_DIRECT_FRACTION = 0.7     # gain >= this x path: away, not sideways
+FLEE_GAIN_FRACTION = 0.6       # path run directly away from the mule >= this x ordered x active s
+FLEE_DIRECT_FRACTION = 0.7     # away-path >= this x path: away, not sideways
 
 
 def break_sample_lua(uid, mule=None):
@@ -1796,6 +1795,27 @@ def wander_break_verdict(samples, capped=False):
     return "waiting", f"walked {path:.2f} tiles (need {need:.2f}) so far"
 
 
+def _away_path(samples):
+    """How far the unit moved AWAY from the mule it flees, summed step by step
+    over consecutive active flee samples: each step's displacement projected
+    on the unit vector from the mule's position at the START of that step
+    (the nearest-unit search is re-run on every re-issue, so the direction it
+    runs is judged against where the mule was then, not where it was when the
+    break began: the technomule walks by itself, and a mule drifting toward
+    the unit must not hide a unit that ran straight away)."""
+    away, prev = 0.0, None
+    for x in samples:
+        on = bool(x.get("brk") and x.get("beh") == "flee" and _xy(x)
+                  and isinstance(x.get("mx"), (int, float)) and isinstance(x.get("my"), (int, float)))
+        if on and prev is not None:
+            ux, uy = prev["x"] - prev["mx"], prev["y"] - prev["my"]
+            norm = math.hypot(ux, uy)
+            if norm > 1e-9:
+                away += ((x["x"] - prev["x"]) * ux + (x["y"] - prev["y"]) * uy) / norm
+        prev = x if on else None
+    return away
+
+
 def flee_break_verdict(samples, capped=False):
     """Grade phase 4b's samples (oldest first; see break_sample_lua with the
     mule): while the flee break is active the unit must run AWAY from the
@@ -1807,8 +1827,9 @@ def flee_break_verdict(samples, capped=False):
     break observed, or the mule or ordered speed unreadable: nothing
     attributable, a setup failure); 'no_run' (too few walking samples, or a
     median walking speed under FLEE_PACE_FRACTION x ordered); 'not_away' (it
-    walked at pace but gained less than FLEE_GAIN_FRACTION x ordered x
-    seconds, or gained under FLEE_DIRECT_FRACTION of its path)."""
+    walked at pace but moved away from the mule (_away_path) by less than
+    FLEE_GAIN_FRACTION x ordered x seconds, or by under FLEE_DIRECT_FRACTION
+    of its path)."""
     act, other = _active_run(samples, "flee")
     if not _break_ended(samples) and not capped:
         return "waiting", "the break is still running" if act else "no active flee break yet"
@@ -1821,24 +1842,25 @@ def flee_break_verdict(samples, capped=False):
     ords = [x["ord"] for x in act if isinstance(x.get("ord"), (int, float)) and x["ord"] > 0]
     mules = [(x.get("mx"), x.get("my")) for x in act]
     if (span < FLEE_MIN_ACTIVE_S or not ords
-            or not all(isinstance(v, (int, float)) and math.isfinite(v) for m in (mules[0], mules[-1]) for v in m)):
+            or not all(isinstance(v, (int, float)) and math.isfinite(v) for m in mules for v in m)):
         return "uncovered", (f"only {span:.1f} game s of the active break observed, or the "
                              f"mule/ordered speed unreadable (need {FLEE_MIN_ACTIVE_S} s)")
     ordered = sum(ords) / len(ords)
     walking = sorted(x["sp"] for x in act if x.get("act") in ("walking", "running")
                      and isinstance(x.get("sp"), (int, float)))
     path = _active_path(samples, "flee")
+    away = _away_path(samples)
     gain = (math.hypot(act[-1]["x"] - mules[-1][0], act[-1]["y"] - mules[-1][1])
             - math.hypot(act[0]["x"] - mules[0][0], act[0]["y"] - mules[0][1]))
-    note = (f"over {span:.1f} game s: gained {gain:.2f} tiles from the mule on {path:.2f} of path, "
-            f"{len(walking)} walking samples, ordered {ordered:.2f} tiles/s")
+    note = (f"over {span:.1f} game s: ran {away:.2f} tiles directly away from the mule on "
+            f"{path:.2f} of path (distance to it grew {gain:.2f}), {len(walking)} walking "
+            f"samples, ordered {ordered:.2f} tiles/s")
     if len(walking) < FLEE_MIN_WALK_SAMPLES:
         return "no_run", f"the unit was walking in only {len(walking)} active samples {note}"
     median = walking[len(walking) // 2]
     if median < FLEE_PACE_FRACTION * ordered:
         return "no_run", f"median walking speed {median:.2f} is under {FLEE_PACE_FRACTION} x ordered; {note}"
-    if (gain < FLEE_GAIN_FRACTION * ordered * span or path < FLEE_PATH_FRACTION * ordered * span
-            or gain < FLEE_DIRECT_FRACTION * path):
+    if away < FLEE_GAIN_FRACTION * ordered * span or away < FLEE_DIRECT_FRACTION * path:
         return "not_away", note
     return "ok", note + f", median speed {median:.2f}"
 
@@ -1887,7 +1909,8 @@ def run_break_phase(port, uid, behavior, verdict_fn, mule=None, cap_s=None):
 def break_trace_line(samples):
     return " ".join(
         f"({x.get('now', float('nan')):.2f},{int(bool(x.get('brk')))},{x.get('beh')},"
-        f"{x.get('act')},{x.get('sp')},{x.get('x')},{x.get('y')})" for x in samples[-40:])
+        f"{x.get('act')},{x.get('sp')},{x.get('x')},{x.get('y')},mule={x.get('mx')},{x.get('my')})"
+        for x in samples[-40:])
 
 
 def eligible_neighbours(port, subj):
@@ -2010,6 +2033,16 @@ def wounds_lua(uid):
 #: metrics at the moment the break is forced, or the selection says nothing
 #: about Chebyshev ranking.
 NINE_H_ATTEMPTS = 3
+#: 9h geometry, relative to the subject: the intended candidate at (a, a) and
+#: the decoy at (b, 0), with a < b < a*sqrt(2) so the intended one is
+#: Chebyshev-nearer (a vs b) and the decoy Euclidean-nearer (b^2 vs 2a^2).
+#: The old (6, 6) / (8, 0) put the decoy ON the eight-tile eligibility
+#: boundary, and the units meander ~0.3 tiles/s from the moment they spawn:
+#: a traced run read it at dx 8.96 (ineligible), which leaves one candidate
+#: and no ranking to grade (and, with the intended one drifting out instead,
+#: picks the decoy). Both candidates now sit well inside the range.
+NINE_H_NEAR = 4.5
+NINE_H_FAR = 5.8
 
 
 def chebyshev_geometry_lua(subj, near, far):
@@ -2055,9 +2088,9 @@ def chebyshev_geometry_problems(geom):
 
 def chebyshev_ranking_phase(port):
     """Phase 9h (#717, #2976): nearest-target ranking uses Chebyshev distance
-    (matching eligibility's metric), not squared Euclidean. (6,6) is nearer
-    than (8,0) under Chebyshev (6 vs 8) despite (8,0) being nearer under
-    squared Euclidean (64 vs 72).
+    (matching eligibility's metric), not squared Euclidean. (4.5,4.5) is
+    nearer than (5.8,0) under Chebyshev (4.5 vs 5.8) despite (5.8,0) being
+    nearer under squared Euclidean (33.6 vs 40.5).
 
     Graded ONLY on a selection whose preconditions held at the decision:
     exactly the two candidates are eligible for the subject, and each is
@@ -2070,8 +2103,8 @@ def chebyshev_ranking_phase(port):
         subj = spawn_acolyte(port, -15, 40)
         set_wellbeing(port, subj, 1.0, 0.0)
         poll_until(5, lambda: mstate(port, subj) == "stable")
-        near = spawn_acolyte(port, -9, 46)      # +6,+6
-        far = spawn_acolyte(port, -7, 40)       # +8,0
+        near = spawn_acolyte(port, -15 + NINE_H_NEAR, 40 + NINE_H_NEAR)   # (a, a)
+        far = spawn_acolyte(port, -15 + NINE_H_FAR, 40)                    # (b, 0)
         stray = isolation_problem(port, subj, (near, far))
         geom = send_json(port, chebyshev_geometry_lua(subj, near, far))
         problems = ([stray] if stray else []) + chebyshev_geometry_problems(geom)
@@ -2932,7 +2965,7 @@ def flee_break_check(port, uid):
                       f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}); {detail})")
     return False, (f"  [FAIL] flee break didn't flee: {verdict} \u2014 {detail} d0={d0:.1f} "
                    f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}\n"
-                   f"         trace (game t, brk, behavior, activity, speed, x, y): "
+                   f"         trace (game t, brk, behavior, activity, speed, x, y, mule x, y): "
                    f"{break_trace_line(samples)}")
 
 
@@ -4145,6 +4178,9 @@ def self_test():
           chebyshev_geometry_problems(dict(GOOD, n={"ok": False})) != []
           and chebyshev_geometry_problems(None) != [])
 
+    check("9h: the staged offsets separate the metrics and sit well inside the eight-tile range",
+          NINE_H_NEAR < NINE_H_FAR < NINE_H_NEAR * 2 ** 0.5 and NINE_H_FAR <= 6.0
+          and NINE_H_NEAR * 2 ** 0.5 <= 6.5)
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -5496,10 +5532,37 @@ def self_test():
     check("4b: the unit stays put while the MULE walks away (distance grows, its own path ~0) "
           "-> not_away",
           flee_break_verdict(far_mule + [fend])[0] == "not_away")
-    chase = [dict(x, mx=6.0 - 0.07 * 0.66 * x["now"]) for x in fleeing(0.66, gain_frac=0.62)]
-    check("4b: a unit at pace and nearly straight away whose gain still falls under 0.6 x ordered x s "
-          "(the mule closes in) -> not_away",
-          flee_break_verdict(chase + [fend])[0] == "not_away")
+    drift = [dict(x, mx=6.0 - 0.5 * x["now"]) for x in fleeing(0.66)]
+    check("4b: the unit runs straight away while the mule walks TOWARD it (the distance grows "
+          "less than the old fixed threshold) -> still ok: direction is judged per step",
+          flee_break_verdict(drift + [fend])[0] == "ok")
+    flee_then_back = ([dict(x) for x in fleeing(0.66, n=7, span=3.0)]
+                      + [dict(x, x=2.0 - 0.9 * 0.66 * 3.0 + 0.9 * 0.66 * (x["now"] - 3.0))
+                         for x in fleeing(0.66, n=7, span=6.0)[4:]])
+    check("4b: a unit that runs away then turns back toward the mule nets ~0 away-path -> not_away",
+          flee_break_verdict(flee_then_back + [fend])[0] == "not_away")
+    def heading(ordr, frac, theta, n=13, span=6.0):
+        """Walks `frac` x ordered x t along a heading `theta` rad off straight-away from a
+        mule at (6, 0), the sampled speed reading ordered."""
+        out = []
+        for k in range(n):
+            t = span * k / (n - 1)
+            out.append(bs(t, 2.0 - frac * ordr * t * math.cos(theta), frac * ordr * t * math.sin(theta),
+                          beh="flee", sp=ordr, ordr=ordr))
+        return out
+    check("4b: the same heading helper passes when it runs nearly straight away at near full pace",
+          flee_break_verdict(heading(0.66, 0.9, 0.1) + [fend])[0] == "ok")
+    check("4b: path and pace fine, enough of it away for the gain fraction, but under 0.7 of the "
+          "path (a 63-degree heading) -> not_away",
+          flee_break_verdict(heading(0.66, 0.95, 1.1) + [fend])[0] == "not_away")
+    check("4b: a straight run too short for the gain fraction (0.66 of an ordered run, 30 degrees "
+          "off: away 0.57 x ordered x s, path fine) -> not_away",
+          flee_break_verdict(heading(0.66, 0.65, 0.52) + [fend])[0] == "not_away")
+    ahead = [dict(x, x=2.0, y=6.0 + 0.9 * 0.66 * x["now"], mx=2.0, my=9.0 + 0.9 * 0.66 * x["now"])
+             for x in fleeing(0.66)]
+    check("4b: the unit walks at pace TOWARD a mule that stays 3 tiles ahead of it (judged against "
+          "the mule's CURRENT position each step) -> not_away",
+          flee_break_verdict(ahead + [fend])[0] == "not_away")
     check("4b: a wander break is not a flee break -> wrong_behavior",
           flee_break_verdict([dict(x, beh="wander") for x in fleeing(0.66)] + [fend])[0] == "wrong_behavior")
     check("4b: too few walking samples -> no_run",
@@ -5711,7 +5774,7 @@ def main():
             ok = False
             print(f"  [FAIL] wander break didn't move: {wverdict} \u2014 {wdetail} "
                   f"(from {x0:.1f},{y0:.1f}, {len(wsamples)} samples)")
-            print("         trace (game t, brk, behavior, activity, speed, x, y): "
+            print("         trace (game t, brk, behavior, activity, speed, x, y, mule x, y): "
                   + break_trace_line(wsamples))
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, uid) != "break")
