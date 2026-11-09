@@ -1913,6 +1913,20 @@ def break_trace_line(samples):
         for x in samples[-40:])
 
 
+def _id_list(ids):
+    """A console reply's uid list as a sorted list of ints. The console
+    encodes an EMPTY Lua table as {} (a JSON object), not [], so an empty
+    object is an empty list; anything else that is not a list is unreadable
+    (None), and a non-integer entry makes the whole read unreadable."""
+    if isinstance(ids, dict) and not ids:
+        return []
+    if not isinstance(ids, list):
+        return None
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return None
+    return sorted(ids)
+
+
 def eligible_neighbours(port, subj):
     """The uids the PRODUCTION lash-out eligibility predicate admits for
     `subj` right now (scripts/unit_ai_mental.lua lashoutPolicy.eligible:
@@ -1926,8 +1940,7 @@ def eligible_neighbours(port, subj):
         "for _, o in ipairs(unit.getAllIds() or {}) do",
         " if me and pol.eligible(u, me, o) then out[#out + 1] = o end end;",
         "return { ids = out }")))
-    ids = r.get("ids") if isinstance(r, dict) else None
-    return sorted(i for i in ids if isinstance(i, int)) if isinstance(ids, list) else None
+    return _id_list(r.get("ids") if isinstance(r, dict) else None)
 
 
 def isolation_problem(port, subj, allowed):
@@ -2093,10 +2106,7 @@ def chebyshev_geometry_problems(geom):
 def live_unit_ids(port):
     """Every uid unit.getAllIds lists right now (None when unreadable)."""
     r = send_json(port, "return { ids = unit.getAllIds() or {} }")
-    ids = r.get("ids") if isinstance(r, dict) else None
-    if not isinstance(ids, list):
-        return None
-    return sorted(i for i in ids if isinstance(i, int) and not isinstance(i, bool))
+    return _id_list(r.get("ids") if isinstance(r, dict) else None)
 
 
 #: How long retire_other_units waits for the queued destroys to take effect.
@@ -4325,6 +4335,11 @@ def self_test():
     check("9g cleanup: nothing to retire is clean", v == [] and r == [] and retirement_problem(v, r) is None)
     check("9g cleanup: the kept subject is never destroyed even when listed",
           1 not in fake_retire([[1, 2], [1]])[2])
+
+    check("uid lists: an empty Lua table arrives as {} and reads as []", _id_list({}) == [])
+    check("uid lists: a list sorts; non-integers, bools and a missing list are unreadable",
+          _id_list([3, 1, 2]) == [1, 2, 3] and _id_list([1, "x"]) is None
+          and _id_list([True]) is None and _id_list(None) is None and _id_list({"a": 1}) is None)
 
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
