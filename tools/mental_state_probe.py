@@ -408,6 +408,48 @@ def stage_lashout_cluster(port, x, y):
     return lash, attacker, decoy, None
 
 
+#: 9c2's staged hit (#2976): how often the waiting loop tops the fighters up.
+NINE_C2_TOPUP_S = 1.0
+#: Fraction of max stamina the fighters are topped up to (never 0: stamina 0
+#: is the engine's universal death rule, and a full-set is avoided too).
+NINE_C2_TOPUP_FRACTION = 0.9
+
+
+def topup_stamina_lua(*uids):
+    """ONE console chunk raising every named unit's stamina to
+    NINE_C2_TOPUP_FRACTION of its own maximum."""
+    return " ".join(
+        ["local st = require('scripts.unit_stats');"]
+        + [f"unit.setStat({u}, 'stamina', st.get({u}, 'max_stamina') * {NINE_C2_TOPUP_FRACTION});"
+           for u in uids]
+        + ["return 'ok'"])
+
+
+def poll_new_hit(port, lash, attacker, prev_at, timeout_s=35.0):
+    """Wait for `attacker` to land a NEW hit on `lash` (a record later than
+    prev_at, by new_hit_poll_lua), keeping both fighters' stamina up while it
+    waits.
+
+    Neutering a fighter (strength_base 0.02) also shrinks its stamina pool to a
+    few points, so the committed chase exhausts the attacker within seconds;
+    an exhausted attacker collapses and only resumes after recovering, and in
+    45 staged trials the hit took 18-25 s nine times (a failed run's attacker
+    was still falling at 35 s). That is stamina bookkeeping of the fixture,
+    not a lash-out or combat question, so it is held off instead of waited
+    out. The hit itself is still a real landed hit from the committed attack
+    (new_hit_poll_lua), and nothing else about the staging changes."""
+    deadline = time.time() + timeout_s
+    last = 0.0
+    while time.time() < deadline:
+        if send(port, new_hit_poll_lua(lash, attacker, prev_at)) == "hit":
+            return True
+        if time.time() - last >= NINE_C2_TOPUP_S:
+            last = time.time()
+            send(port, topup_stamina_lua(lash, attacker))
+        time.sleep(0.3)
+    return False
+
+
 def stand_down_attacker(port, lash, attacker):
     """End the attacker's own fight and keep both fighters standing.
 
@@ -4341,6 +4383,41 @@ def self_test():
           _id_list([3, 1, 2]) == [1, 2, 3] and _id_list([1, "x"]) is None
           and _id_list([True]) is None and _id_list(None) is None and _id_list({"a": 1}) is None)
 
+    # poll_new_hit (#2976): 9c2's staged-hit wait keeps the fighters' stamina up.
+    def fake_poll(answers):
+        g = globals()
+        saved = {k: g[k] for k in ("send", "time")}
+        sent, clock = [], [0.0]
+
+        class FakeTime:
+            def time(self):
+                return clock[0]
+
+            def sleep(self, d):
+                clock[0] += d
+        seq = list(answers)
+
+        def fsend(port, lua, **kw):
+            sent.append(lua)
+            if "unit.getLastAttacker" in lua:
+                return seq.pop(0) if seq else "nil"
+            return "ok"
+        g.update(send=fsend, time=FakeTime())
+        try:
+            return poll_new_hit(1, 5, 6, -1.0, timeout_s=10.0), sent
+        finally:
+            g.update(saved)
+    got, sent = fake_poll(["nil"] * 12 + ["hit"])
+    check("9c2 hit wait: a hit that arrives after several polls is returned, with stamina topped up "
+          "meanwhile for BOTH fighters",
+          got is True and any("stamina" in x and "unit.setStat(5," in x and "unit.setStat(6," in x for x in sent))
+    got, sent = fake_poll([])
+    check("9c2 hit wait: no hit within the timeout -> False (a named setup failure upstream)",
+          got is False)
+    check("9c2 hit wait: the top-up never sets stamina to 0 or to the full maximum",
+          0.0 < NINE_C2_TOPUP_FRACTION < 1.0 and "* 0.9" in topup_stamina_lua(1))
+    check("9c2 hit wait: the hit is still judged by the unchanged new-hit read of the last-attacker "
+          "record", "unit.getLastAttacker(5)" in new_hit_poll_lua(5, 6, -1.0))
     # isolation_problem (#2976): exactly the intended units may be eligible.
     def iso(got, allowed):
         g = globals()
@@ -4444,6 +4521,7 @@ def self_test():
                   "landed_poll_lua": landed_poll_lua(1, 2),
                   "nine_b_diag_lua": nine_b_diag_lua(1, 2),
                   "wounds_lua": wounds_lua(1),
+                  "topup_stamina_lua": topup_stamina_lua(1, 2),
                   "chebyshev_geometry_lua": chebyshev_geometry_lua(1, 2, 3),
                   "break_sample_lua(mule)": break_sample_lua(1, 50),
                   "dressing_read_lua": dressing_read_lua(1),
@@ -6317,8 +6395,7 @@ def main():
             # Committed, like stage_lashout_cluster's order (#2973).
             send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB},true); "
                     f"return 'ok'")
-            hitB = poll_until(35, lambda: send(
-                P, new_hit_poll_lua(lashB, attackerB, prevHitAtB)) == "hit")
+            hitB = poll_new_hit(P, lashB, attackerB, prevHitAtB)
             if not hitB:
                 ok = False
                 print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
