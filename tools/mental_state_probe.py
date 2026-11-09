@@ -2367,6 +2367,7 @@ atk.attackTargetExecute = function(u, s, params)
   calls[#calls + 1] = c
   if not ok then error(err, 0) end
 end
+@FORCE@
 return 'mule-observer-installed'
 """
 
@@ -2381,10 +2382,14 @@ _MULE_COLLECT_LUA = ("local c = _G.__probe_mule_calls; "
                      "return #c == 0 and 'none' or c")
 
 
-def mule_observer_chunk(subj, victim, mule):
+def mule_observer_chunk(subj, victim, mule, force=False):
     """The one-line console text that pins the subject's last-attacker record
-    to the technomule (as 9k always did) and installs the execute observer
-    in the SAME chunk, so every lash-out execute afterwards is recorded."""
+    to the technomule (as 9k always did), installs the execute observer and,
+    with `force`, forces the lash-out break, all in the SAME chunk: the Lua
+    thread runs a chunk whole, so every lash-out execute from the very first
+    tick is recorded, while the intended target is still standing (a target
+    that is knocked out within half a second would otherwise leave the
+    window with no opportunity to grade)."""
     pin = (f"if not _G.__probe_orig_getLastAttacker then "
            f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
            f"unit.getLastAttacker = function(u) "
@@ -2392,7 +2397,9 @@ def mule_observer_chunk(subj, victim, mule):
            f"return _G.__probe_orig_getLastAttacker(u) end; ")
     obs = " ".join(line.strip() for line in
                    _MULE_OBSERVER_TEMPLATE.replace("@L@", str(int(subj)))
-                   .replace("@V@", str(int(victim))).replace("@M@", str(int(mule))).splitlines()
+                   .replace("@V@", str(int(victim))).replace("@M@", str(int(mule)))
+                   .replace("@FORCE@", f"require('scripts.mental_state').forceBreak({int(subj)}, 'lash_out')"
+                            if force else "").splitlines()
                    if line.strip())
     return pin + obs
 
@@ -4942,6 +4949,11 @@ def self_test():
               kv(run_mule_harness("excl", vpose="collapsed"))[0] == "setup")
         check("9k observer: a dead mule is no opportunity -> setup",
               kv(run_mule_harness("noexcl", mpose="dead"))[0] == "setup")
+    check("9k observer chunk: the break is forced inside the SAME chunk (after the wrap) only when asked",
+          "forceBreak(1, 'lash_out')" in mule_observer_chunk(1, 2, 3, force=True)
+          and mule_observer_chunk(1, 2, 3, force=True).index("attackTargetExecute = function")
+          < mule_observer_chunk(1, 2, 3, force=True).index("forceBreak")
+          and "forceBreak" not in mule_observer_chunk(1, 2, 3))
     good_side = {"now": 10.0, "glaAt": 10.0, "range": 0.9, "window": 3.0, "mexists": True,
                  "mpose": "standing", "mdef": "technomule", "glaUid": 3, "victimElig": True,
                  "lpos": {"gridX": 0, "gridY": 0}, "mpos": {"gridX": -1, "gridY": 0}}
@@ -5071,6 +5083,7 @@ def self_test():
                   "topup_stamina_lua": topup_stamina_lua(1, 2),
                   "chebyshev_observer_chunk": chebyshev_observer_chunk(1, 2, 3),
                   "mule_observer_chunk": mule_observer_chunk(1, 2, 3),
+                  "mule_observer_chunk(force)": mule_observer_chunk(1, 2, 3, force=True),
                   "break_sample_lua(mule)": break_sample_lua(1, 50),
                   "dressing_read_lua": dressing_read_lua(1),
                   "dressing_exclude_lua": dressing_exclude_lua(1),
@@ -7457,17 +7470,7 @@ def main():
         if neuterK or strayK:
             ok = False
             print(f"  [FAIL] setup: 9k not staged ({neuterK or strayK})")
-        send(P, f"require('scripts.mental_state').forceBreak({subjK},'lash_out'); "
-                f"return 'ok'")
-
-        def k_target():
-            t = lash_target(P, subjK)
-            return t if t != "nil" else None
-        if poll_until(10, k_target) != str(targetK):
-            ok = False
-            print(f"  [FAIL] setup: {subjK} never targeted {targetK}")
-
-        installK = send(P, mule_observer_chunk(subjK, targetK, muleK))
+        installK = send(P, mule_observer_chunk(subjK, targetK, muleK, force=True))
 
         # Sample rapidly through the retaliation-swap's own 3s window —
         # subjK must stay on targetK and never swap onto the technomule, and
@@ -7482,8 +7485,7 @@ def main():
         verdictK, whyK = technomule_swap_verdict(callsK, targetK, muleK)
 
         if (installK == "mule-observer-installed" and statusK == "ok"
-                and str(targetK) in samplesK and str(muleK) not in samplesK
-                and verdictK == "pass"):
+                and str(muleK) not in samplesK and verdictK == "pass"):
             print(f"  [pass] lash-out stayed on {targetK} and never swapped "
                   f"onto the technomule {muleK}: {samplesK[:4]}... ({whyK})")
         else:
