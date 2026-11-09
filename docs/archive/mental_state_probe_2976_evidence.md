@@ -13,7 +13,7 @@ and (owner ruling 2026-11-09, "Fix 9g too") 9g's fixture leak. Every change is i
 | 4b flee break | graded a fixed 2.0 tiles farther from the mule's REGISTRATION position; a slow unit cannot, and the technomule walks by itself so the stale reference also misjudges | probe pace assumption + stale reference |
 | 9c2 setup, "10 never landed a hit on 8" | the neutered attacker's stamina pool is tiny, the committed chase exhausts it, it collapses and recovers before it can swing; the hit latency has a 18-25 s tail in 9 of 45 trials against a 35 s wait | fixture stamina |
 | 9c2 setup, "subject could not act" | the subject was already dead at the break (before batch runs 3 and 6; once in the after batch's final-head run 8 and once in a 50-trial harness): one neutered head strike (strength_base 0.02, neuter read back) inflicted brain trauma 1.6 (and a jaw fracture 1.07 in another trace); the old code waited 15 s for a dead unit | ungradable setup (restage on fresh units) |
-| 9k "expected only 30, saw 26" | not reproduced in any measured batch. From the kept #2975 transcripts (`setup: 29 never targeted 30`, then seven samples all `26`) and the code: by uid order 26 is 9i's target, which 9i teleports to (-19, 25) and leaves alive, six tiles from 9k's subject spot (-25, 25), inside lash-out's eight-tile range; wandering it can become the nearest eligible unit, and a full-strength strike on the adjacent target can take it out of the fight | fixture isolation (from evidence; not reproduced) |
+| 9k "expected only 30, saw 26" | not reproduced in any measured batch (the later 9k failures seen were the new observer calling a drifted mule ungradable). From the kept #2975 transcripts (`setup: 29 never targeted 30`, then seven samples all `26`) and the code: by uid order 26 is 9i's target, which 9i teleports to (-19, 25) and leaves alive, six tiles from 9k's subject spot (-25, 25), inside lash-out's eight-tile range; wandering it can become the nearest eligible unit, and a full-strength strike on the adjacent target can take it out of the fight | fixture isolation (from evidence; not reproduced) |
 | 9h "expected Chebyshev-nearer 26, got 27" | the decoy was staged at exactly (+8, 0), ON the eight-tile eligibility boundary, and the units meander from spawn: a traced run read it at dx 8.96 (ineligible); later traces show 2-3 tiles of drift within seconds | fixture geometry |
 | 9b landed attack | seen once in the development batches (dev5 run 3): the SUBJECT was dead (`lpose: dead`, target still set, the attacker's record never named it) before it could swing, the same fatal neutered head hit as 9c2; not seen in the before batch. The predicate was also unattributable (it matched the attacker record's uid with no time check); it now requires a hit inside the lash-out episode, and a dead subject restages 9a/9b | ungradable setup (dead subject) + predicate hardened |
 | 9g "targeted — target 19" (item 6) | 19 is 9f's lash-out subject, left alive; it wandered into 9g's isolated subject's range | fixture isolation |
@@ -40,10 +40,12 @@ Replayed 18 trials of phases 1-4b with a 0.2 s sampler (`ENGINE_DEBUG=Lua`):
 ### What the probe now proves
 
 - **4a** `wander_break_verdict`: the unit is stopped in the same console chunk that forces
-  the break; while the wander break is active it walks at least
-  `min(0.3, 0.4 x meander x active seconds)` tiles of path (9g's walked-path predicate on
-  this break's own flag; a normal acolyte is held to the full 0.3 tiles). Movement after the
-  break ends never counts.
+  the break; while the wander break is active it walks at least 0.3 tiles of path (9g's
+  walked-path predicate on this break's own flag; that FIXED minimum may end the wait early). A
+  unit too slow to walk 0.3 tiles in the break is held to `0.4 x meander x active seconds`
+  instead, judged only after the break has ended (a capped wait is held to the fixed minimum).
+  Movement after the break ends never counts. The sampling loop is self-tested on successive
+  prefixes.
 - **4b** `flee_break_verdict`: the technomule is proven registered AND is the unit the
   production search would flee from; the unit is stopped at the break; while the break is
   active its median walking speed is at least 0.8 x ordered, it moves directly away from the
@@ -61,12 +63,21 @@ Replayed 18 trials of phases 1-4b with a 0.2 s sampler (`ENGINE_DEBUG=Lua`):
   readiness and the observer are unchanged.
 - **9h** `chebyshev_ranking_phase`: candidates at (5, 5) and (6, 0) (Chebyshev 5 vs 6,
   squared Euclidean 50 vs 36) inside the range, snapped next to the subject with arrival
-  confirmed; graded only when, at the decision, exactly the two candidates are eligible by
-  the production predicate and the geometry still separates the metrics; a setup that missed
-  that is discarded and restaged (3 attempts), a wrong target on a held setup is a policy
-  failure and never restaged.
-- **9k**: fighters neutered with the neuter read back; exactly the intended target eligible
-  by the production predicate (stray units are a named setup failure); 9h's, 9i's, 9j's and
+  confirmed. The FIRST selection is observed where it is made: wrappers on `shortCircuit` and
+  `attackTargetExecute`, installed in the chunk that forces the break, record the subject's own
+  position and the answers the decision got for each candidate and replay the production
+  eligibility predicate on them. It is graded only when both candidates were read and eligible
+  and, on the decision's own positions, the intended one is Chebyshev-nearer and
+  Euclidean-farther; otherwise the setup is discarded and restaged (3 attempts); a wrong target on a
+  held setup is a policy failure and never restaged. A candidate that drifts after setup is caught
+  (a Euclidean-mutated production picker would pass a pre-break snapshot).
+- **9k**: fighters neutered with the neuter read back; the technomule and target snapped into reach;
+  exactly the intended target eligible by the production predicate; the execute observer is installed
+  in the forcing chunk and must see at least one VALID retaliation opportunity (the mule recorded as a
+  recent attacker within the window, alive, in reach, the victim eligible and the current target, on both
+  the before and after readings) with only the technomule exclusion in the way. A valid opportunity that
+  swapped is a policy failure; none observed is ungradable and restaged (3 attempts). Negative cases:
+  out-of-reach mule, no execute, ineligible target, dead mule, exclusion removed. 9h's, 9i's, 9j's and
   9k's own units are destroyed after use.
 - **9g**: before 9g stages its subject every unit but the main subject is destroyed and
   the removal CONFIRMED by polling `unit.getAllIds` (a queued destroy proves nothing);
@@ -135,8 +146,14 @@ Each is a run of the probe as committed at the head named; none is the acceptanc
 | dev3 | `e1df148f5` / `47c4b6ab` | 1 (aborted) | 0 PASS | 9g isolation read: the console encodes an empty Lua table as `{}`, so "nothing eligible" read as unreadable |
 | dev4 | `0b6805b20` / `7f2df271` | 15 | 14 PASS | 9c2 once: "10 never landed a hit on 8", attacker `falling`/`transitioning` at 35 s; a 90-trial staging harness showed 9 of 45 hits taking 18-25 s because the neutered attacker exhausts its stamina pool and collapses |
 | dev5 | `94f40015e` / `d810fc4a` | 3 (aborted) | 2 PASS | 9b landed once: the subject died before it could swing |
+| dev6 | `c9c90b849` / `8b5e4469` | 2 (aborted) | 1 PASS | 9k once (run 2): the technomule had drifted to 1.78 tiles from the subject, outside the 1.0 + 0.5 reach, so no retaliation opportunity was ever observed (the new observer called it ungradable); the observer was first installed after the break (a smoke run saw the target knocked out within half a second), then moved into the forcing chunk |
+| dev7 | `6222348c1` / `b3eefdf7` | 15 | 15 PASS | every listed check observed passing 15/15; superseded because review round 1 then required the 4a, 9h and 9k changes below (a 9c2 dead-subject restage and one 9j restage occurred in run 8) |
 
-### After: head `6222348c1`, probe sha `b3eefdf7` (15 runs)
+Round-1 review (Codex) found three false-pass gaps in that head, all fixed since: the pace-scaled 4a threshold
+could end the wait on a few early samples; 9h's geometry was a snapshot taken before the break rather than what
+the AI tick read; 9k passed on sampled target ids without proving a retaliation opportunity occurred.
+
+### After: head `9d78abd55`, probe sha `d0764fee` (15 runs)
 
 | run | overall | 4a wander | 4b flee | 9b dressing | 9b landed | 9c2 | 9g wander | 9h Chebyshev | 9j end pursuit | 9k technomule | other failing |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -151,12 +168,12 @@ Each is a run of the probe as committed at the head named; none is the acceptanc
 | 9 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 10 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 11 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
-| 12 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
+| 12 | FAIL | pass | pass | pass | pass | pass | pass | pass | FAIL | pass | - |
 | 13 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 14 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 | 15 | PASS | pass | pass | pass | pass | pass | pass | pass | pass | pass | - |
 
-runs=15 overall-fail=0
+runs=15 overall-fail=1
   4a wander: pass=15 FAIL=0 not-observed=0
   4b flee: pass=15 FAIL=0 not-observed=0
   9b dressing: pass=15 FAIL=0 not-observed=0
@@ -164,12 +181,24 @@ runs=15 overall-fail=0
   9c2: pass=15 FAIL=0 not-observed=0
   9g wander: pass=15 FAIL=0 not-observed=0
   9h Chebyshev: pass=15 FAIL=0 not-observed=0
-  9j end pursuit: pass=15 FAIL=0 not-observed=0
+  9j end pursuit: pass=14 FAIL=1 not-observed=0
   9k technomule: pass=15 FAIL=0 not-observed=0
 
-Observed restages in this batch: 9c2 once (run 8: the subject died, brain trauma 1.6, a fresh
-cluster passed) and 9j once (run 8, the existing #2975 restage). No other check discarded
-a setup.
+Every check listed in #2976 (4a, 4b, 9b dressing and landed attack, 9c2, 9g, 9h, 9k) was observed
+passing in all 15 runs. The one failing run is outside the listed checks:
+
+- **Run 12, 9j** (#2975's episode-end pursuit): after the lash-out episode ended with delirium
+  overlapping, the unit kept walking toward the old target at 0.7099 tiles/s for at least 1.5 game s
+  (`leaked`). 0.7099 is exactly its ordered speed (1.15 x comfort 0.617), so it is the attack's in-flight
+  `moveTo`, not delirium's meander (0.31 tiles/s). The cleanup (`scripts/unit_ai_mental.lua` 223-241)
+  issues `unit.stop(uid)`, which did not cancel it. #2975's work recorded one such read (0.52 tiles/s,
+  cause unestablished). Rate: 1 of 15 here, 0 of 15 before, 0 of 45 development runs. This may be an
+  engine race between the stop and the previous tick's queued move rather than probe timing; it is
+  reported, not fixed here (the issue: a failure outside the listed checks is reported, not fixed).
+  Evidence: `after3/transcript-12.txt` and `after3/kept-failures/`.
+
+Observed restages in this batch: 9k attempt 1 in runs 4 and 12 (no valid retaliation opportunity: discarded,
+the fresh cluster passed). No other check discarded a setup.
 
 ## Observations outside this issue's scope
 
