@@ -2112,7 +2112,8 @@ def wounds_lua(uid):
         " for k, v in pairs(w[i]) do local t = type(v);",
         "  if t == 'number' or t == 'string' or t == 'boolean' then r[k] = v end end;",
         " out[#out + 1] = r end;",
-        f"return {{ pose = tostring(unit.getPose({uid})), n = #w, wounds = out }}"))
+        f"return {{ pose = tostring(unit.getPose({uid})), n = #w, wounds = out, "
+        f"stamina = unit.getStat({uid}, 'stamina'), blood = unit.getStat({uid}, 'blood_volume') }}"))
 
 
 #: 9h (#2976): the candidates must be eligible and must distinguish the two
@@ -2171,6 +2172,30 @@ def retire_other_units(port, keep, wait_s=RETIRE_WAIT_S):
         return True if not left["v"] else None
     poll_until(wait_s, settled)
     return victims, left["v"]
+
+
+def destroy_confirmed(port, *uids, wait_s=RETIRE_WAIT_S):
+    """destroy_units, then wait until unit.getAllIds no longer lists any of
+    them (the destroy only queues a UnitDestroy). A re-stage spawns its fresh
+    units on the SAME spots right away, and a spawn onto a spot whose old unit
+    is still there never produced an AI state in a traced run (the probe
+    exited on 'never got AI state'). Answers the uids still listed when the
+    wait ended ([] = clean; None = the list could not be read)."""
+    uids = [u for u in uids if u is not None]
+    destroy_units(port, *uids)
+    left = {"v": list(uids)}
+
+    def settled():
+        now = live_unit_ids(port)
+        if now is None:
+            left["v"] = None
+            return None
+        left["v"] = [u for u in uids if u in set(now)]
+        return True if not left["v"] else None
+    poll_until(wait_s, settled)
+    if left["v"]:
+        print(f"  [setup] destroyed units {left['v']} were still listed after {wait_s:.0f} s")
+    return left["v"]
 
 
 def retirement_problem(victims, remaining):
@@ -2721,7 +2746,7 @@ def technomule_retaliation_phase(port):
         eligible_now = eligible_neighbours(port, subj)
         send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(port, subj) != "break")
-        destroy_units(port, subj, target, mule)
+        destroy_confirmed(port, subj, target, mule)
         if verdict == "raised":
             return False, (f"  [FAIL] the lash-out execute raised during 9k's window: {why}; a raised "
                            f"execute is never restaged (attempt {attempt})")
@@ -2929,7 +2954,7 @@ def chebyshev_ranking_phase(port):
         rec = send_json(port, CHEB_COLLECT_LUA)
         send(port, f"unit.setStat({subj},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(port, subj) != "break")
-        destroy_units(port, subj, near, far)
+        destroy_confirmed(port, subj, near, far)
         kind, detail = chebyshev_decision_verdict(rec, near, far)
         problems = ([] if snap_ok else ["the candidates' teleport next to the subject never "
                                         "took effect"]) + ([stray] if stray else [])
@@ -5008,6 +5033,24 @@ def self_test():
     check("9h snap: an unreadable subject -> False", fake_snap({"ok": False}, arrived)[0] is False)
     check("9h snap: positions unreadable after the snap -> False",
           fake_snap(base, {"ok": False})[0] is False)
+    # destroy_confirmed (#2976): a re-stage waits for the old units to leave before spawning on their spots.
+    def fake_destroy_confirmed(lists):
+        g = globals()
+        saved = {k: g[k] for k in ("live_unit_ids", "destroy_units", "poll_until")}
+        seq, destroyed = list(lists), []
+        g.update(live_unit_ids=lambda port: seq.pop(0) if len(seq) > 1 else seq[0],
+                 destroy_units=lambda port, *u: destroyed.extend(u),
+                 poll_until=lambda sec, fn, interval=0.3: next((v for _ in range(4) if (v := fn())), None))
+        try:
+            return destroy_confirmed(1, 5, 6, 7), destroyed
+        finally:
+            g.update(saved)
+    check("re-stage cleanup: units that leave the live list are confirmed gone",
+          fake_destroy_confirmed([[1, 5, 6, 7], [1, 7], [1]]) == ([], [5, 6, 7]))
+    check("re-stage cleanup: a unit that never leaves is reported",
+          fake_destroy_confirmed([[1, 5, 6, 7], [1, 6]])[0] == [6])
+    check("re-stage cleanup: an unreadable list is reported as None",
+          fake_destroy_confirmed([None])[0] is None)
     # retire_other_units / retirement_problem (#2976): 9g's cleanup is confirmed.
     def fake_retire(lists, keep=(1,)):
         """retire_other_units with fakes: live_unit_ids answers `lists` in turn
@@ -7243,7 +7286,7 @@ def main():
                 print(f"  [setup] 9b attempt {attempt9}: the subject {lash} died before it could land "
                       f"a hit (wounds: {send_json(P, wounds_lua(lash))}); discarding the cluster and "
                       f"re-staging 9a/9b on fresh units")
-                destroy_units(P, lash, attacker, decoy)
+                destroy_confirmed(P, lash, attacker, decoy)
             if not graded_ok:
                 ok = False
             if not dressed_ok:
@@ -7384,7 +7427,7 @@ def main():
                 print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before a hit could "
                       f"be recorded (wounds: {send_json(P, wounds_lua(lashB))}); discarding the "
                       f"cluster, restaging on fresh units")
-                destroy_units(P, lashB, victimB, attackerB)
+                destroy_confirmed(P, lashB, victimB, attackerB)
                 lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
                 prevHitAtB = -1.0
                 if neuterB:
@@ -7541,7 +7584,7 @@ def main():
                     print(f"  [setup] 9c2 attempt {attemptB}: the subject {lashB} died before "
                           f"the break (wounds: {send_json(P, wounds_lua(lashB))}); discarding "
                           f"the cluster, restaging on fresh units")
-                    destroy_units(P, lashB, victimB, attackerB)
+                    destroy_confirmed(P, lashB, victimB, attackerB)
                     lashB, victimB, attackerB, neuterB = stage_nine_c2_units(P)
                     prevHitAtB = -1.0
                     if neuterB:
